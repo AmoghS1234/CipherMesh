@@ -18,51 +18,48 @@ VaultService::~VaultService() {
 }
 
 std::string VaultService::getDefaultVaultPath() {
-    // Try to use the same path as desktop app
-    // First check if HOME environment variable is set
     const char* home = getenv("HOME");
     if (!home) {
-        // Fallback to /tmp if HOME is not set
         home = "/tmp";
     }
     
-    // Check for vault in ~/.ciphermesh/ directory (standard location)
-    std::string standardPath = std::string(home) + "/Projects/CipherTest/build/ciphermesh.db";
+    std::string fullPath = std::string(home) + "/Projects/CipherMesh/build/ciphermesh.db";
+    std::ifstream fullFile(fullPath);
+    if (fullFile.good()) {
+        return fullPath;
+    }
+
+    std::string standardPath = std::string(home) + "/.ciphermesh/ciphermesh.db";
     std::ifstream standardFile(standardPath);
     if (standardFile.good()) {
         return standardPath;
     }
-    
-    // Check in build directory (common during development)
+
     std::string buildPath = "build/ciphermesh.db";
     std::ifstream buildFile(buildPath);
     if (buildFile.good()) {
         return buildPath;
     }
-    
-    // Check in ../build directory (when running from subdirectory)
+
     std::string parentBuildPath = "../build/ciphermesh.db";
     std::ifstream parentBuildFile(parentBuildPath);
     if (parentBuildFile.good()) {
         return parentBuildPath;
     }
-    
-    // Fallback to current directory (for backward compatibility)
+
     std::string currentDirPath = "ciphermesh.db";
     std::ifstream currentDirFile(currentDirPath);
     if (currentDirFile.good()) {
         return currentDirPath;
     }
-    
-    // Default to standard location even if file doesn't exist yet
-    return standardPath;
+
+    return fullPath;
 }
 
 json VaultService::handleRequest(const json& request) {
     json response;
     
     try {
-        // Support both "action" (original) and "type" (native-host protocol) fields
         std::string action = request.value("action", "");
         if (action.empty()) {
             action = request.value("type", "");
@@ -98,7 +95,6 @@ json VaultService::handleVerifyMasterPassword(const json& request) {
     json response;
     
     try {
-        // Support both "masterPassword" (original) and "password" (native-host protocol)
         std::string masterPassword = request.value("masterPassword", "");
         if (masterPassword.empty()) {
             masterPassword = request.value("password", "");
@@ -120,8 +116,7 @@ json VaultService::handleVerifyMasterPassword(const json& request) {
             std::cerr << "[Vault Service] Error: Could not determine vault path" << std::endl;
             return response;
         }
-        
-        // Check if vault file exists
+
         std::ifstream vaultFile(vaultPath);
         if (!vaultFile.good()) {
             response["status"] = "error";
@@ -131,24 +126,21 @@ json VaultService::handleVerifyMasterPassword(const json& request) {
         }
         
         std::cerr << "[Vault Service] Vault file found, attempting to load..." << std::endl;
-        
-        // Create new vault instance
+
         std::unique_ptr<Vault> vault = std::make_unique<Vault>();
-        
-        // Try to load vault with master password
+
         if (!vault->loadVault(vaultPath, masterPassword)) {
             response["status"] = "error";
             response["error"] = "Incorrect master password";
             std::cerr << "[Vault Service] Error: Incorrect master password" << std::endl;
             return response;
         }
-        
-        // Password is correct, keep vault unlocked for this session
+
         m_vault = std::move(vault);
         
         response["status"] = "success";
         response["message"] = "Master password verified";
-        response["verified"] = true;  // Add for native-host compatibility
+        response["verified"] = true;
         std::cerr << "[Vault Service] Password verified successfully" << std::endl;
         return response;
         
@@ -172,8 +164,7 @@ json VaultService::handleGetCredentials(const json& request) {
         
         std::string url = request["url"];
         std::string username = request.value("username", "");
-        
-        // Find entries matching the URL
+
         std::vector<VaultEntry> entries = m_vault->findEntriesByLocation(url);
         
         if (entries.empty()) {
@@ -181,8 +172,7 @@ json VaultService::handleGetCredentials(const json& request) {
             response["error"] = "No credentials found for: " + url;
             return response;
         }
-        
-        // If username is specified, filter by username
+
         if (!username.empty()) {
             auto it = std::find_if(entries.begin(), entries.end(),
                 [&username](const VaultEntry& e) { return e.username == username; });
@@ -192,8 +182,7 @@ json VaultService::handleGetCredentials(const json& request) {
                 response["error"] = "No credentials found for username: " + username;
                 return response;
             }
-            
-            // Found specific entry
+
             std::string password = m_vault->getDecryptedPassword(it->id);
             
             response["status"] = "success";
@@ -202,25 +191,22 @@ json VaultService::handleGetCredentials(const json& request) {
             response["title"] = it->title;
             return response;
         }
-        
-        // Multiple entries - return list with decrypted passwords for user to choose
+
         json credentials = json::array();
         for (const auto& entry : entries) {
-            // Decrypt password for each entry with error handling
             std::string decryptedPassword;
             try {
                 decryptedPassword = m_vault->getDecryptedPassword(entry.id);
             } catch (const std::exception& e) {
                 std::cerr << "[Vault Service] Failed to decrypt password for entry " 
                           << entry.id << ": " << e.what() << std::endl;
-                // Skip entries that can't be decrypted
                 continue;
             }
             
             json cred;
             cred["id"] = entry.id;
             cred["username"] = entry.username;
-            cred["password"] = decryptedPassword;  // Include decrypted password
+            cred["password"] = decryptedPassword;
             cred["title"] = entry.title;
             credentials.push_back(cred);
         }
@@ -249,8 +235,7 @@ json VaultService::handleGetCredentialById(const json& request) {
         int entryId = request["entryId"];
         
         std::string password = m_vault->getDecryptedPassword(entryId);
-        
-        // Get entry details - we need to find it in current group entries
+
         std::vector<VaultEntry> allEntries = m_vault->getEntries();
         auto it = std::find_if(allEntries.begin(), allEntries.end(),
             [entryId](const VaultEntry& e) { return e.id == entryId; });
@@ -289,17 +274,14 @@ json VaultService::handleSaveCredentials(const json& request) {
         std::string password = request["password"];
         std::string groupName = request.value("group", "Default");
         std::string title = request.value("title", url);
-        
-        // Check if entry already exists
+
         if (m_vault->entryExists(username, url)) {
             response["status"] = "error";
             response["error"] = "Entry already exists for this username and URL";
             return response;
         }
-        
-        // Set active group
+
         if (!m_vault->setActiveGroup(groupName)) {
-            // Group doesn't exist, create it
             if (!m_vault->addGroup(groupName)) {
                 response["status"] = "error";
                 response["error"] = "Failed to create group: " + groupName;
@@ -311,8 +293,7 @@ json VaultService::handleSaveCredentials(const json& request) {
                 return response;
             }
         }
-        
-        // Create entry
+
         VaultEntry entry;
         entry.title = title;
         entry.username = username;
