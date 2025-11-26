@@ -2,6 +2,8 @@
 #include "crypto.hpp"
 #include <stdexcept>
 #include <string> // for std::string
+#include <QCryptographicHash>
+#include <QByteArray>
 
 namespace CipherMesh {
 namespace Core {
@@ -133,6 +135,11 @@ std::string Crypto::generatePassword(const PasswordOptions& options) {
     }
 
     return password;
+}
+
+std::string Crypto::sha1(const std::string& input) {
+    QByteArray hash = QCryptographicHash::hash(QByteArray::fromStdString(input), QCryptographicHash::Sha1);
+    return hash.toHex().toUpper().toStdString();
 }
 
 } 

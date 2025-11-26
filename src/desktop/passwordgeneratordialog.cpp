@@ -41,8 +41,10 @@ void PasswordGeneratorDialog::setupUi() {
     m_passwordEdit = new QLineEdit(this);
     m_passwordEdit->setReadOnly(true);
     m_passwordEdit->setObjectName("PasswordPreview");
+    m_passwordEdit->setMinimumHeight(40);
     QPushButton* regenButton = new QPushButton("Regenerate");
     regenButton->setFixedWidth(120);
+    regenButton->setMinimumHeight(40);
     previewLayout->addWidget(m_passwordEdit, 1);
     previewLayout->addWidget(regenButton);
     mainLayout->addLayout(previewLayout);
@@ -97,6 +99,7 @@ void PasswordGeneratorDialog::setupUi() {
     m_symbolCheck->setChecked(true);
     m_symbolEdit = new QLineEdit(this);
     m_symbolEdit->setText(QString::fromStdString(CipherMesh::Core::Crypto::PasswordOptions().customSymbols));
+    m_symbolEdit->setMinimumHeight(40);
     optionsLayout->addRow(m_symbolCheck, m_symbolEdit);
     
     mainLayout->addLayout(optionsLayout);

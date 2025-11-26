@@ -25,11 +25,13 @@ struct VaultEntry {
     long long lastModified;     // Unix timestamp when entry was last modified
     long long lastAccessed;     // Unix timestamp when entry was last accessed
     long long passwordExpiry;   // Unix timestamp when password expires (0 = no expiry)
+    std::string totp_secret;    // TOTP secret key (Base32 encoded)
+    std::string entry_type;     // "password" or "secure_note"
 
-    VaultEntry() : id(-1), createdAt(0), lastModified(0), lastAccessed(0), passwordExpiry(0) {}
+    VaultEntry() : id(-1), createdAt(0), lastModified(0), lastAccessed(0), passwordExpiry(0), totp_secret(""), entry_type("password") {}
     VaultEntry(int id, std::string t, std::string u, std::string n) 
         : id(id), title(std::move(t)), username(std::move(u)), notes(std::move(n)), 
-          createdAt(0), lastModified(0), lastAccessed(0), passwordExpiry(0) {}
+          createdAt(0), lastModified(0), lastAccessed(0), passwordExpiry(0), totp_secret(""), entry_type("password") {}
 };
 
 struct PendingInvite {

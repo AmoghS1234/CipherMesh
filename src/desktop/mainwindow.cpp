@@ -12,6 +12,8 @@
 #include "toast.hpp"
 #include "webrtcservice.hpp" 
 #include "themes.hpp"
+#include "totp.hpp"
+#include "breach_checker.hpp"
 
 #include <QApplication>
 #include <QClipboard>
@@ -33,6 +35,7 @@
 #include <QKeySequence>
 #include <QDateTime>
 #include <QStringList>
+#include <QProgressBar>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -82,9 +85,14 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
       m_actionIconColor("#ffffff"),
       m_uiIconColor("#e0e0e0"),
       m_autoLockTimer(nullptr),
-      m_recentMenu(nullptr)
+      m_recentMenu(nullptr),
+      m_totpRefreshTimer(nullptr),
+      m_breachChecker(nullptr)
 {
     setWindowTitle("CipherMesh - (Locked) - " + m_currentUserId);
+    
+    // Initialize breach checker
+    m_breachChecker = new BreachChecker(this);
     
     // Set a more reasonable default size and make it resizable
     resize(1000, 650);
@@ -161,6 +169,11 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
     updateIcons();
     updateWindowTitle();
     m_detailsStack->setCurrentIndex(0);
+    
+    // Setup TOTP refresh timer (refresh every second)
+    m_totpRefreshTimer = new QTimer(this);
+    connect(m_totpRefreshTimer, &QTimer::timeout, this, &MainWindow::refreshTOTPCode);
+    m_totpRefreshTimer->start(1000); // Refresh every second
     
     // Install event filter to detect user activity
     qApp->installEventFilter(this);
@@ -575,6 +588,48 @@ void MainWindow::setupUi()
     passLayout->addWidget(m_copyPasswordButton);
     passLayout->addWidget(m_showPasswordButton);
     detailsLayout->addRow("Password:", passLayout);
+    
+    // TOTP Code display with timer
+    m_totpCodeLabel = new QLabel("------", this);
+    m_totpCodeLabel->setObjectName("TOTPCodeLabel");
+    m_totpCodeLabel->setFont(QFont("Monospace", 14, QFont::Bold));
+    m_totpCodeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_totpCodeLabel->setStyleSheet("color: #2196f3; padding: 4px;");
+    
+    // TOTP Timer Progress Bar
+    m_totpTimerBar = new QProgressBar(this);
+    m_totpTimerBar->setMaximum(30);
+    m_totpTimerBar->setValue(30);
+    m_totpTimerBar->setTextVisible(false);
+    m_totpTimerBar->setMaximumHeight(8);
+    m_totpTimerBar->setStyleSheet(R"(
+        QProgressBar {
+            border: 1px solid #555;
+            border-radius: 4px;
+            background-color: #333;
+        }
+        QProgressBar::chunk {
+            background-color: #2196f3;
+            border-radius: 3px;
+        }
+    )");
+    
+    m_totpTimerLabel = new QLabel("", this);
+    m_totpTimerLabel->setStyleSheet("color: #999; font-size: 11px;");
+    
+    m_copyTOTPButton = new QPushButton(this);
+    m_copyTOTPButton->setIcon(loadSvgIcon(g_copyIconSvg, m_actionIconColor));
+    m_copyTOTPButton->setToolTip("Copy 2FA Code");
+    m_copyTOTPButton->setFixedWidth(40);
+    
+    QHBoxLayout* totpLayout = new QHBoxLayout();
+    totpLayout->setSpacing(12);
+    totpLayout->addWidget(m_totpCodeLabel);
+    totpLayout->addWidget(m_totpTimerBar, 1);
+    totpLayout->addWidget(m_totpTimerLabel);
+    totpLayout->addWidget(m_copyTOTPButton);
+    
+    detailsLayout->addRow("2FA Code:", totpLayout);
 
     m_locationsList = new QListWidget(this);
     m_locationsList->setMinimumHeight(80);
@@ -595,26 +650,44 @@ void MainWindow::setupUi()
     m_timestampLabel->setWordWrap(true);
     detailsLayout->addRow("", m_timestampLabel);
     
+    // Breach check status label
+    m_breachStatusLabel = new QLabel("", this);
+    m_breachStatusLabel->setWordWrap(true);
+    m_breachStatusLabel->setTextFormat(Qt::RichText);
+    m_breachStatusLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    m_breachStatusLabel->setMaximumWidth(600); // Ensure it doesn't exceed reasonable width
+    m_breachStatusLabel->hide();
+    detailsLayout->addRow("", m_breachStatusLabel);
+    
     detailPageLayout->addLayout(detailsLayout, 1); 
 
-    m_editEntryButton = new QPushButton("Edit Entry");
+    m_editEntryButton = new QPushButton("Edit");
     m_editEntryButton->setObjectName("NewButton"); 
     m_editEntryButton->setEnabled(false); 
-    m_editEntryButton->setMinimumWidth(100);
+    m_editEntryButton->setMinimumWidth(70);
+    m_editEntryButton->setToolTip("Edit this entry (Ctrl+E)");
     
-    m_viewHistoryButton = new QPushButton("View History");
+    m_checkBreachButton = new QPushButton("Breach?");
+    m_checkBreachButton->setEnabled(false);
+    m_checkBreachButton->setMinimumWidth(70);
+    m_checkBreachButton->setToolTip("Check if this password has been compromised in data breaches");
+    
+    m_viewHistoryButton = new QPushButton("History");
     m_viewHistoryButton->setEnabled(false); 
-    m_viewHistoryButton->setMinimumWidth(110);
+    m_viewHistoryButton->setMinimumWidth(70);
     m_viewHistoryButton->setToolTip("View password history for this entry");
     
-    m_deleteEntryButton = new QPushButton("Delete Entry");
+    m_deleteEntryButton = new QPushButton("Delete");
     m_deleteEntryButton->setObjectName("DeleteButton"); 
     m_deleteEntryButton->setEnabled(false); 
-    m_deleteEntryButton->setMinimumWidth(100);
+    m_deleteEntryButton->setMinimumWidth(70);
+    m_deleteEntryButton->setToolTip("Delete this entry (Delete key)");
 
     QHBoxLayout* detailButtonLayout = new QHBoxLayout();
     detailButtonLayout->setContentsMargins(0, 12, 0, 0); 
-    detailButtonLayout->addStretch(1); 
+    detailButtonLayout->addStretch(1);
+    detailButtonLayout->addWidget(m_checkBreachButton);
+    detailButtonLayout->addSpacing(8);
     detailButtonLayout->addWidget(m_viewHistoryButton);
     detailButtonLayout->addSpacing(8);
     detailButtonLayout->addWidget(m_editEntryButton);
@@ -688,6 +761,7 @@ void MainWindow::setupUi()
     connect(m_entryListWidget, &QListWidget::currentItemChanged, this, &MainWindow::onEntrySelected);
     connect(m_copyUsernameButton, &QPushButton::clicked, this, &MainWindow::onCopyUsername);
     connect(m_copyPasswordButton, &QPushButton::clicked, this, &MainWindow::onCopyPassword);
+    connect(m_copyTOTPButton, &QPushButton::clicked, this, &MainWindow::onCopyTOTPCode);
     connect(m_showPasswordButton, &QPushButton::toggled, this, &MainWindow::onToggleShowPassword);
     
     connect(m_newGroupButton, &QPushButton::clicked, this, &MainWindow::onNewGroupClicked);
@@ -695,6 +769,7 @@ void MainWindow::setupUi()
     
     connect(m_editEntryButton, &QPushButton::clicked, this, &MainWindow::onEditEntryClicked);
     connect(m_deleteEntryButton, &QPushButton::clicked, this, &MainWindow::onDeleteEntryClicked);
+    connect(m_checkBreachButton, &QPushButton::clicked, this, &MainWindow::onCheckPasswordBreach);
     connect(m_viewHistoryButton, &QPushButton::clicked, this, &MainWindow::onViewPasswordHistoryClicked);
     
     connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged); 
@@ -709,6 +784,30 @@ void MainWindow::setupKeyboardShortcuts()
         m_searchEdit->setFocus();
         m_searchEdit->selectAll();
     });
+    
+    // Ctrl+N for new entry
+    QShortcut* newEntryShortcut = new QShortcut(QKeySequence("Ctrl+N"), this);
+    connect(newEntryShortcut, &QShortcut::activated, this, &MainWindow::onNewEntryClicked);
+    
+    // Ctrl+G for new group
+    QShortcut* newGroupShortcut = new QShortcut(QKeySequence("Ctrl+G"), this);
+    connect(newGroupShortcut, &QShortcut::activated, this, &MainWindow::onNewGroupClicked);
+    
+    // Ctrl+E to edit selected entry
+    QShortcut* editEntryShortcut = new QShortcut(QKeySequence("Ctrl+E"), this);
+    connect(editEntryShortcut, &QShortcut::activated, this, &MainWindow::onEditEntryClicked);
+    
+    // Delete key to delete selected entry
+    QShortcut* deleteEntryShortcut = new QShortcut(QKeySequence(Qt::Key_Delete), this);
+    connect(deleteEntryShortcut, &QShortcut::activated, this, [this]() {
+        if (m_deleteEntryButton->isEnabled()) {
+            onDeleteEntryClicked();
+        }
+    });
+    
+    // Ctrl+L to lock vault
+    QShortcut* lockShortcut = new QShortcut(QKeySequence("Ctrl+L"), this);
+    connect(lockShortcut, &QShortcut::activated, this, &MainWindow::onLockVault);
 }
 
 void MainWindow::updateWindowTitle()
@@ -900,12 +999,16 @@ void MainWindow::onEntrySelected(QListWidgetItem* current)
         m_editEntryButton->setEnabled(false);
         m_deleteEntryButton->setEnabled(false);
         m_viewHistoryButton->setEnabled(false);
+        m_checkBreachButton->setEnabled(false);
+        m_breachStatusLabel->hide();
         return;
     }
 
     m_editEntryButton->setEnabled(true);
     m_deleteEntryButton->setEnabled(true);
     m_viewHistoryButton->setEnabled(true);
+    m_checkBreachButton->setEnabled(true);
+    m_breachStatusLabel->hide(); // Hide previous breach status when selecting new entry
 
     auto it = m_entryMap.find(current);
     if (it == m_entryMap.end()) return; 
@@ -965,10 +1068,21 @@ void MainWindow::loadEntries(const std::vector<CipherMesh::Core::VaultEntry>& en
     m_entryMap.clear();
     m_detailsStack->setCurrentIndex(0);
     
-    QIcon entryIcon = loadSvgIcon(g_keyIconSvg, m_uiIconColor); 
+    QIcon entryIcon = loadSvgIcon(g_keyIconSvg, m_uiIconColor);
 
     for (const auto& entry : entries) {
-        QListWidgetItem* item = new QListWidgetItem(entryIcon, QString::fromStdString(entry.title));
+        QString displayText = QString::fromStdString(entry.title);
+        
+        // Add visual indicator for entry type
+        if (entry.entry_type == "secure_note") {
+            displayText = "📝 " + displayText;
+        } else if (!entry.totp_secret.empty()) {
+            displayText = "🔐 " + displayText; // Show lock with key for 2FA-enabled passwords
+        } else {
+            displayText = "🔑 " + displayText;
+        }
+        
+        QListWidgetItem* item = new QListWidgetItem(entryIcon, displayText);
         m_entryListWidget->addItem(item);
         m_entryMap[item] = entry;
     }
@@ -1053,6 +1167,83 @@ void MainWindow::onCopyPassword()
             if (clipboard) clipboard->clear();
         });
     } catch (const std::exception& e) {
+        using namespace CipherMesh::GUI;
+        Toast* toast = new Toast("Could not decrypt password", ToastType::Error, this);
+        toast->show();
+    }
+}
+
+void MainWindow::onCopyTOTPCode()
+{
+    QString code = m_totpCodeLabel->text();
+    
+    // Don't copy if no valid code is displayed
+    if (code == "------" || code == "INVALID" || code == "ERROR") {
+        return;
+    }
+    
+    QClipboard* clipboard = QApplication::clipboard();
+    clipboard->setText(code);
+    
+    // Show toast notification
+    using namespace CipherMesh::GUI;
+    Toast* toast = new Toast("2FA code copied to clipboard", ToastType::Success, this);
+    toast->show();
+}
+
+void MainWindow::onCheckPasswordBreach()
+{
+    if (!m_vault) return;
+    int entryId = getSelectedEntryId();
+    if (entryId == -1) return;
+    
+    // Disable button while checking
+    m_checkBreachButton->setEnabled(false);
+    m_checkBreachButton->setText("...");
+    m_breachStatusLabel->setText("🔍 Checking password against breach database...");
+    m_breachStatusLabel->setStyleSheet("color: #666;");
+    m_breachStatusLabel->show();
+    
+    try {
+        std::string password = m_vault->getDecryptedPassword(entryId);
+        
+        m_breachChecker->checkPassword(password, [this](bool isCompromised, int count) {
+            m_checkBreachButton->setEnabled(true);
+            m_checkBreachButton->setText("Breach?");
+            
+            if (count < 0) {
+                // API error occurred
+                m_breachStatusLabel->setText("<b>⚠️ Unable to check.</b> Try again.");
+                m_breachStatusLabel->setStyleSheet("color: #f57c00; font-weight: bold;");
+            } else if (isCompromised) {
+                m_breachStatusLabel->setText(QString("<b>⚠️ BREACHED:</b> Seen %1 times in breaches!").arg(QString::number(count)));
+                m_breachStatusLabel->setStyleSheet("color: #d32f2f; font-weight: bold;");
+                
+                // Show toast notification
+                using namespace CipherMesh::GUI;
+                Toast* toast = new Toast("Password compromised! Consider changing it.", ToastType::Error, this);
+                toast->show();
+            } else {
+                m_breachStatusLabel->setText("<b>✓ Safe:</b> Not found in known breaches.");
+                m_breachStatusLabel->setStyleSheet("color: #388e3c; font-weight: bold;");
+                
+                // Show toast notification
+                using namespace CipherMesh::GUI;
+                Toast* toast = new Toast("Password is safe!", ToastType::Success, this);
+                toast->show();
+            }
+            m_breachStatusLabel->show();
+        });
+        
+        // Securely wipe the password from memory
+        CipherMesh::Core::Crypto::secureWipe(password);
+    } catch (const std::exception& e) {
+        m_checkBreachButton->setEnabled(true);
+        m_checkBreachButton->setText("Breach?");
+        m_breachStatusLabel->setText("❌ Could not decrypt password");
+        m_breachStatusLabel->setStyleSheet("color: #d32f2f;");
+        m_breachStatusLabel->show();
+        
         using namespace CipherMesh::GUI;
         Toast* toast = new Toast("Could not decrypt password", ToastType::Error, this);
         toast->show();
@@ -1536,5 +1727,97 @@ void MainWindow::onRecentEntrySelected() {
             m_entryListWidget->setCurrentRow(j);
             break;
         }
+    }
+}
+
+void MainWindow::refreshTOTPCode() {
+    // Get the currently selected entry
+    QListWidgetItem* currentItem = m_entryListWidget->currentItem();
+    if (!currentItem || !m_vault) {
+        m_totpCodeLabel->setText("------");
+        m_totpTimerBar->hide();
+        m_totpTimerLabel->hide();
+        return;
+    }
+    
+    auto it = m_entryMap.find(currentItem);
+    if (it == m_entryMap.end()) {
+        m_totpCodeLabel->setText("------");
+        m_totpTimerBar->hide();
+        m_totpTimerLabel->hide();
+        return;
+    }
+    
+    const CipherMesh::Core::VaultEntry& entry = it.value();
+    
+    // Check if entry has a TOTP secret
+    if (entry.totp_secret.empty()) {
+        m_totpCodeLabel->setText("------");
+        m_totpCodeLabel->setStyleSheet("color: #666; padding: 4px;");
+        m_totpTimerBar->hide();
+        m_totpTimerLabel->hide();
+        return;
+    }
+    
+    // Generate TOTP code
+    try {
+        std::string code = CipherMesh::Utils::TOTP::generateCode(entry.totp_secret);
+        
+        // Check if code generation failed (empty string indicates error)
+        if (code.empty()) {
+            m_totpCodeLabel->setText("INVALID");
+            m_totpCodeLabel->setStyleSheet("color: #d32f2f; padding: 4px;");
+            m_totpTimerBar->hide();
+            m_totpTimerLabel->hide();
+            return;
+        }
+        
+        m_totpCodeLabel->setText(QString::fromStdString(code));
+        m_totpCodeLabel->setStyleSheet("color: #2196f3; padding: 4px;");
+        
+        // Calculate time remaining in current 30s window
+        long long currentTime = std::time(nullptr);
+        int timeRemaining = 30 - (currentTime % 30);
+        
+        // Update progress bar and label
+        m_totpTimerBar->setValue(timeRemaining);
+        m_totpTimerLabel->setText(QString("%1s").arg(timeRemaining));
+        m_totpTimerBar->show();
+        m_totpTimerLabel->show();
+        
+        // Change color to warning when less than 5 seconds remain
+        if (timeRemaining <= 5) {
+            m_totpCodeLabel->setStyleSheet("color: #ff9800; padding: 4px;");
+            m_totpTimerBar->setStyleSheet(R"(
+                QProgressBar {
+                    border: 1px solid #555;
+                    border-radius: 4px;
+                    background-color: #333;
+                }
+                QProgressBar::chunk {
+                    background-color: #ff9800;
+                    border-radius: 3px;
+                }
+            )");
+            m_totpTimerLabel->setStyleSheet("color: #ff9800; font-size: 11px;");
+        } else {
+            m_totpTimerBar->setStyleSheet(R"(
+                QProgressBar {
+                    border: 1px solid #555;
+                    border-radius: 4px;
+                    background-color: #333;
+                }
+                QProgressBar::chunk {
+                    background-color: #2196f3;
+                    border-radius: 3px;
+                }
+            )");
+            m_totpTimerLabel->setStyleSheet("color: #999; font-size: 11px;");
+        }
+    } catch (const std::exception& e) {
+        m_totpCodeLabel->setText("ERROR");
+        m_totpCodeLabel->setStyleSheet("color: #d32f2f; padding: 4px;");
+        m_totpTimerBar->hide();
+        m_totpTimerLabel->hide();
     }
 }

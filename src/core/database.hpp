@@ -18,6 +18,7 @@ public:
 
     void open(const std::string& path);
     void close();
+    bool isOpen() const { return m_db != nullptr; }
     void createTables();
 
     void storeMetadata(const std::string& key, const std::vector<unsigned char>& value);

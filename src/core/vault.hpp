@@ -25,9 +25,14 @@ public:
 
     bool createNewVault(const std::string& path, const std::string& masterPassword);
     bool loadVault(const std::string& path, const std::string& masterPassword);
+    
+    // Locks the vault by wiping encryption keys from memory
+    // NOTE: Database remains open to allow password verification
     void lock();
     bool isLocked() const;
 
+    // Verify master password - works even when vault is locked
+    // This allows browser extensions to authenticate before performing operations
     bool verifyMasterPassword(const std::string& password);
     bool changeMasterPassword(const std::string& newPassword);
 

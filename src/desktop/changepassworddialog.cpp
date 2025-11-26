@@ -30,12 +30,15 @@ ChangePasswordDialog::ChangePasswordDialog(CipherMesh::Core::Vault* vault, QWidg
     
     m_currentPasswordEdit = new QLineEdit(this);
     m_currentPasswordEdit->setEchoMode(QLineEdit::Password);
+    m_currentPasswordEdit->setMinimumHeight(40);
     
     m_newPasswordEdit = new QLineEdit(this);
     m_newPasswordEdit->setEchoMode(QLineEdit::Password);
+    m_newPasswordEdit->setMinimumHeight(40);
     
     m_confirmPasswordEdit = new QLineEdit(this);
     m_confirmPasswordEdit->setEchoMode(QLineEdit::Password);
+    m_confirmPasswordEdit->setMinimumHeight(40);
     
     m_messageLabel = new QLabel(this);
     m_messageLabel->setStyleSheet("color: #d32f2f;");
@@ -49,7 +52,9 @@ ChangePasswordDialog::ChangePasswordDialog(CipherMesh::Core::Vault* vault, QWidg
 
     QDialogButtonBox *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     buttonBox->button(QDialogButtonBox::Ok)->setMinimumWidth(100);
+    buttonBox->button(QDialogButtonBox::Ok)->setMinimumHeight(40);
     buttonBox->button(QDialogButtonBox::Cancel)->setMinimumWidth(100);
+    buttonBox->button(QDialogButtonBox::Cancel)->setMinimumHeight(40);
     mainLayout->addWidget(buttonBox);
 
     connect(buttonBox, &QDialogButtonBox::accepted, this, &ChangePasswordDialog::onOkClicked);

@@ -49,7 +49,7 @@ void NewGroupDialog::setupUI()
     
     m_groupNameEdit = new QLineEdit();
     m_groupNameEdit->setPlaceholderText("e.g., Work, Personal, Banking...");
-    m_groupNameEdit->setMinimumHeight(36);
+    m_groupNameEdit->setMinimumHeight(40);
     mainLayout->addWidget(m_groupNameEdit);
     
     mainLayout->addStretch();
@@ -62,13 +62,13 @@ void NewGroupDialog::setupUI()
     m_cancelButton = new QPushButton("Cancel");
     m_cancelButton->setObjectName("CancelButton");
     m_cancelButton->setMinimumWidth(100);
-    m_cancelButton->setMinimumHeight(36);
+    m_cancelButton->setMinimumHeight(40);
     buttonLayout->addWidget(m_cancelButton);
     
     m_createButton = new QPushButton("Create Group");
     m_createButton->setObjectName("NewButton");
     m_createButton->setMinimumWidth(120);
-    m_createButton->setMinimumHeight(36);
+    m_createButton->setMinimumHeight(40);
     m_createButton->setDefault(true);
     buttonLayout->addWidget(m_createButton);
     

@@ -20,10 +20,18 @@ Vault::Vault() : m_activeGroupId(-1) {
 
 Vault::~Vault() {
     lock();
+    // Close database on destruction
+    if (m_db) {
+        m_db->close();
+    }
 }
 
 bool Vault::createNewVault(const std::string& path, const std::string& masterPassword) {
     try {
+        // Close existing database if open
+        if (m_db) {
+            m_db->close();
+        }
         lock();
         m_dbPath = path; 
         m_db->open(path);
@@ -44,6 +52,10 @@ bool Vault::createNewVault(const std::string& path, const std::string& masterPas
 
 bool Vault::loadVault(const std::string& path, const std::string& masterPassword) {
     try {
+        // Close existing database if open
+        if (m_db) {
+            m_db->close();
+        }
         lock();
         m_dbPath = path; 
         m_db->open(path);
@@ -68,10 +80,9 @@ void Vault::lock() {
     m_crypto->secureWipe(m_activeGroupKey_RAM);
     m_activeGroupId = -1;
     m_activeGroupName = "";
-    m_dbPath = "";
-    if (m_db) {
-        m_db->close();
-    }
+    // NOTE: We keep m_dbPath and don't close the database
+    // This allows verifyMasterPassword() to work even when locked
+    // The database will be closed when a new vault is loaded or the Vault object is destroyed
 }
 
 bool Vault::isLocked() const {
@@ -85,7 +96,14 @@ void Vault::checkLocked() const {
 }
 
 bool Vault::verifyMasterPassword(const std::string& password) {
-    checkLocked(); 
+    // NOTE: Removed checkLocked() - this function should work even when locked
+    // to allow browser extensions to verify the master password
+    
+    // Check if database is available and open
+    if (!m_db || !m_db->isOpen() || m_dbPath.empty()) {
+        return false;
+    }
+    
     try {
         std::vector<unsigned char> salt = m_db->getMetadata("argon_salt");
         std::vector<unsigned char> tempKey = m_crypto->deriveKey(password, salt);

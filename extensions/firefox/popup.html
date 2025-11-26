@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>CipherMesh</title>
+    <style>
+        body {
+            width: 300px;
+            padding: 15px;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 14px;
+            margin: 0;
+            background: #f5f5f5;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 20px;
+            color: #333;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+        
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-icon {
+            margin-right: 8px;
+            font-size: 16px;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .section h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #555;
+        }
+        
+        .section p {
+            margin: 0;
+            color: #666;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        
+        button {
+            width: 100%;
+            padding: 10px;
+            background: #569cd6;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        button:hover {
+            background: #4a8bc2;
+        }
+        
+        button:active {
+            background: #3a7ab0;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 15px;
+            color: #999;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔐 CipherMesh</h1>
+    </div>
+    
+    <div id="status" class="status disconnected">
+        <span class="status-icon">⚠️</span>
+        <span>Checking connection...</span>
+    </div>
+    
+    <div class="section">
+        <h3>Auto-Fill</h3>
+        <p>Click the 🔐 button next to password fields to auto-fill your credentials.</p>
+    </div>
+    
+    <div class="section">
+        <h3>Save Passwords</h3>
+        <p>When you log in to a site, CipherMesh will ask if you want to save the password.</p>
+    </div>
+    
+    <button id="openApp">Open CipherMesh App</button>
+    
+    <div class="footer">
+        Version 1.0.0
+    </div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>

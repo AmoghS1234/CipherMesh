@@ -33,3 +33,11 @@ CLion
 Thumbs.db
 commit_message.txt
 _codeql_*
+
+# Extension icons (add your own)
+extensions/*/icons/*.png
+extensions/*/icons/*.jpg
+extensions/*/icons/*.svg
+
+# Native host build artifacts
+extensions/native-host/build/

@@ -33,6 +33,9 @@ public:
     static void secureWipe(std::string& str);
     
     static std::string generatePassword(const PasswordOptions& options);
+    
+    // SHA-1 hash for breach detection (Have I Been Pwned API)
+    static std::string sha1(const std::string& input);
 };
 
 }

@@ -6,6 +6,7 @@ project(CipherMesh VERSION 1.0.0 LANGUAGES CXX)
 include(FetchContent)
 
 # Fetch libdatachannel (libdatachannel already bundles its deps in-tree)
+# This also brings in nlohmann/json as a dependency
 FetchContent_Declare(
     LibDataChannel
     GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
@@ -13,9 +14,18 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(LibDataChannel)
 
+# Use the nlohmann_json that comes with libdatachannel instead of fetching separately
+# This avoids the target name conflict
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
+endif()
+
 # --- END FetchContent ---
 
 add_subdirectory(src)
+
+# Build vault-service for browser extensions (standalone, no desktop app required)
+add_subdirectory(extensions/vault-service)
 
 option(BUILD_TESTS "Build the CipherMesh test suite" OFF)
 

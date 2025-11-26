@@ -2,6 +2,7 @@
 #include "passwordgeneratordialog.hpp"
 #include "locationeditdialog.hpp"
 #include "passwordstrength.hpp"
+#include "breach_checker.hpp"
 #include "crypto.hpp" // <-- FIXED PATH
 #include "vault.hpp"  // <-- FIXED PATH
 #include <QVBoxLayout>
@@ -17,18 +18,21 @@
 
 NewEntryDialog::NewEntryDialog(CipherMesh::Core::Vault* vault, QWidget *parent)
     : QDialog(parent), m_vault(vault), m_isEditMode(false), m_editingEntryId(-1) {
+    m_breachChecker = new BreachChecker(this);
     setupUi();
     setWindowTitle("Create New Entry");
 }
 
 NewEntryDialog::NewEntryDialog(CipherMesh::Core::Vault* vault, const CipherMesh::Core::VaultEntry& entry, QWidget *parent)
     : QDialog(parent), m_vault(vault), m_isEditMode(true), m_editingEntryId(entry.id) {
+    m_breachChecker = new BreachChecker(this);
     setupUi();
     setWindowTitle("Edit Entry");
     m_titleLabel->setText("Edit Entry");
     m_titleEdit->setText(QString::fromStdString(entry.title));
     m_usernameEdit->setText(QString::fromStdString(entry.username));
     m_notesEdit->setText(QString::fromStdString(entry.notes));
+    m_totpSecretEdit->setText(QString::fromStdString(entry.totp_secret));
     
     m_locations = entry.locations; // Copy existing locations
     loadLocations(m_locations);
@@ -42,7 +46,7 @@ NewEntryDialog::~NewEntryDialog() {}
 
 void NewEntryDialog::setupUi() {
     setModal(true);
-    setMinimumWidth(500);
+    setMinimumWidth(550); // Increased from 500 to accommodate all buttons
     
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(20, 20, 20, 20);
@@ -91,10 +95,22 @@ void NewEntryDialog::setupUi() {
     QPushButton* generateButton = new QPushButton("Generate");
     generateButton->setFixedWidth(100);
     passLayout->addWidget(generateButton);
+    m_checkBreachButton = new QPushButton("Breach?");
+    m_checkBreachButton->setFixedWidth(80);
+    m_checkBreachButton->setToolTip("Check if password has been compromised in data breaches");
+    passLayout->addWidget(m_checkBreachButton);
     
     m_confirmEdit = new QLineEdit(this);
     m_confirmEdit->setEchoMode(QLineEdit::Password);
     m_confirmEdit->setPlaceholderText("Confirm password");
+    
+    // --- Breach Status Label ---
+    m_breachStatusLabel = new QLabel("", this);
+    m_breachStatusLabel->setWordWrap(true);
+    m_breachStatusLabel->setTextFormat(Qt::RichText);
+    m_breachStatusLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    m_breachStatusLabel->setMaximumWidth(500); // Ensure it doesn't exceed reasonable width
+    m_breachStatusLabel->hide();
     
     // --- Strength Meter ---
     m_strengthBar = new QProgressBar(this);
@@ -135,8 +151,17 @@ void NewEntryDialog::setupUi() {
     formLayout->addRow("", locationButtonLayout);
     formLayout->addRow("Notes:", m_notesEdit);
     formLayout->addRow(m_passwordLabel, passLayout);
+    formLayout->addRow("", m_breachStatusLabel);
     formLayout->addRow("Confirm:", m_confirmEdit);
     formLayout->addRow("Strength:", strengthLayout);
+    
+    // TOTP Secret field
+    m_totpSecretEdit = new QLineEdit(this);
+    m_totpSecretEdit->setPlaceholderText("e.g., JBSWY3DPEHPK3PXP (Base32 encoded)");
+    QLabel* totpHelpLabel = new QLabel("<small>Optional: Add 2FA secret key for TOTP codes</small>", this);
+    totpHelpLabel->setStyleSheet("color: #666;");
+    formLayout->addRow("2FA Secret:", m_totpSecretEdit);
+    formLayout->addRow("", totpHelpLabel);
     
     mainLayout->addLayout(formLayout);
     mainLayout->addWidget(m_messageLabel);
@@ -154,6 +179,7 @@ void NewEntryDialog::setupUi() {
     connect(m_passwordEdit, &QLineEdit::textChanged, this, &NewEntryDialog::onPasswordChanged);
     connect(m_confirmEdit, &QLineEdit::textChanged, this, &NewEntryDialog::onConfirmPasswordChanged);
     connect(generateButton, &QPushButton::clicked, this, &NewEntryDialog::onGeneratePassword);
+    connect(m_checkBreachButton, &QPushButton::clicked, this, &NewEntryDialog::onCheckBreach);
     
     // --- NEW CONNECTIONS ---
     connect(addLocationButton, &QPushButton::clicked, this, &NewEntryDialog::onAddLocation);
@@ -300,10 +326,45 @@ CipherMesh::Core::VaultEntry NewEntryDialog::getEntryData() const {
     entry.title = m_titleEdit->text().toStdString();
     entry.username = m_usernameEdit->text().toStdString();
     entry.notes = m_notesEdit->toPlainText().toStdString();
+    entry.totp_secret = m_totpSecretEdit->text().toStdString();
     entry.locations = m_locations;
     return entry;
 }
 
 std::string NewEntryDialog::getPassword() const {
     return m_passwordEdit->text().toStdString();
+}
+
+void NewEntryDialog::onCheckBreach() {
+    QString password = m_passwordEdit->text();
+    if (password.isEmpty()) {
+        m_breachStatusLabel->setText("⚠️ Please enter a password first");
+        m_breachStatusLabel->setStyleSheet("color: #f57c00;");
+        m_breachStatusLabel->show();
+        return;
+    }
+    
+    m_checkBreachButton->setEnabled(false);
+    m_checkBreachButton->setText("...");
+    m_breachStatusLabel->setText("🔍 Checking password against breach database...");
+    m_breachStatusLabel->setStyleSheet("color: #666;");
+    m_breachStatusLabel->show();
+    
+    m_breachChecker->checkPassword(password.toStdString(), [this](bool isCompromised, int count) {
+        m_checkBreachButton->setEnabled(true);
+        m_checkBreachButton->setText("Breach?");
+        
+        if (count < 0) {
+            // API error occurred
+            m_breachStatusLabel->setText("<b>⚠️ Unable to check.</b> Try again.");
+            m_breachStatusLabel->setStyleSheet("color: #f57c00;");
+        } else if (isCompromised) {
+            m_breachStatusLabel->setText(QString("<b>⚠️ BREACHED:</b> Seen %1 times in data breaches!").arg(QString::number(count)));
+            m_breachStatusLabel->setStyleSheet("color: #d32f2f; font-weight: bold;");
+        } else {
+            m_breachStatusLabel->setText("<b>✓ Safe:</b> Not found in known breaches.");
+            m_breachStatusLabel->setStyleSheet("color: #388e3c;");
+        }
+        m_breachStatusLabel->show();
+    });
 }

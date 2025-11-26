@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "CipherMesh Password Manager",
+  "version": "1.0.0",
+  "description": "Auto-fill and save passwords securely with CipherMesh",
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  },
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "48": "icons/icon-48.png"
+    },
+    "default_title": "CipherMesh",
+    "default_popup": "popup.html"
+  }
+}
