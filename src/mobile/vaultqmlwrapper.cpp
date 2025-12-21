@@ -191,9 +191,11 @@ bool VaultQmlWrapper::deleteGroup(const QString& groupName) {
 }
 
 bool VaultQmlWrapper::renameGroup(const QString& oldName, const QString& newName) {
-    // Renaming groups is not supported by the core vault
-    // We would need to delete and recreate, but that's risky
+    // Group renaming is not implemented in the core Vault API
+    // This functionality would require extending the Vault class
     emit errorOccurred("Renaming groups is not currently supported");
+    Q_UNUSED(oldName);
+    Q_UNUSED(newName);
     return false;
 }
 
@@ -511,7 +513,7 @@ QVariantList VaultQmlWrapper::getPasswordHistory(int entryId) {
             QVariantMap map;
             map["id"] = item.id;
             map["changedAt"] = static_cast<qint64>(item.changedAt);
-            map["password"] = QString::fromStdString(item.encryptedPassword); // This is decrypted in Vault
+            map["password"] = QString::fromStdString(item.encryptedPassword); // Already decrypted by vault.getPasswordHistory()
             list.append(map);
         }
         resetAutoLockTimer();
@@ -555,7 +557,9 @@ bool VaultQmlWrapper::initializeP2P(const QString& userId) {
     
     try {
         m_currentUserId = userId;
-        m_p2pService = new CipherMesh::P2P_WebRTC::WebRTCService(userId.toStdString());
+        m_p2pService = new WebRTCService("wss://ciphermesh-signal-server.onrender.com", 
+                                          userId.toStdString(), 
+                                          this);
         
         // Connect signals here when P2P events occur
         // This would require extending the P2P service to emit Qt signals
@@ -608,7 +612,10 @@ void VaultQmlWrapper::acceptInvite(int inviteId) {
     if (!m_vault || m_vault->isLocked()) return;
     
     try {
-        // Implementation would require extending vault to accept invites
+        // Accept invite - P2P service will handle the handshake and data transfer
+        // The received group data will trigger the appropriate P2P callbacks
+        // This is a stub until the P2P service interface is fully integrated
+        Q_UNUSED(inviteId);
         resetAutoLockTimer();
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Error accepting invite: %1").arg(e.what()));

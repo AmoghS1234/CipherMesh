@@ -5,6 +5,10 @@ import QtQuick.Layouts
 Page {
     id: entryDetailPage
     
+    // Constants for consistent spacing
+    readonly property int defaultMargin: 20
+    readonly property int defaultSpacing: 10
+    
     property int entryId: -1
     property var entryData: null
     property bool isEditMode: entryId !== -1
@@ -107,7 +111,7 @@ Page {
             TextField {
                 id: titleField
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: defaultMargin
                 placeholderText: "Title *"
                 font.pixelSize: 16
                 Material.containerStyle: Material.Filled
@@ -122,7 +126,7 @@ Page {
             TextField {
                 id: usernameField
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: defaultMargin
                 visible: passwordRadio.checked
                 placeholderText: "Username"
                 font.pixelSize: 16
@@ -155,7 +159,7 @@ Page {
             // Password (only for passwords)
             ColumnLayout {
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: defaultMargin
                 visible: passwordRadio.checked
                 spacing: 10
                 
@@ -262,7 +266,7 @@ Page {
             TextField {
                 id: totpField
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: defaultMargin
                 visible: passwordRadio.checked
                 placeholderText: "TOTP Secret (Optional)"
                 font.pixelSize: 16
@@ -277,7 +281,7 @@ Page {
             // TOTP Code Display
             Rectangle {
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: defaultMargin
                 Layout.preferredHeight: 80
                 visible: totpField.text.length > 0 && passwordRadio.checked
                 color: "#2a2a3e"
@@ -333,7 +337,7 @@ Page {
             // Locations
             GroupBox {
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: defaultMargin
                 title: "Locations (URLs, Apps)"
                 visible: passwordRadio.checked
                 
@@ -393,7 +397,7 @@ Page {
             TextArea {
                 id: notesField
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: defaultMargin
                 Layout.preferredHeight: 150
                 placeholderText: "Notes (Optional)"
                 font.pixelSize: 16
@@ -408,7 +412,7 @@ Page {
             // Metadata (for existing entries)
             Label {
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: defaultMargin
                 visible: isEditMode && entryData
                 text: {
                     if (!entryData) return ""
