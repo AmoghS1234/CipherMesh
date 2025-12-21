@@ -28,12 +28,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install aqtinstall
 
-          # Qt for Android (target)
           python -m aqt install-qt linux android 6.5.0 android_armv7 \
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
-          # Qt for Desktop (host tools)
           python -m aqt install-qt linux desktop 6.5.0 gcc_64 \
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
@@ -43,14 +41,7 @@ jobs:
           export ANDROID_QT=$GITHUB_WORKSPACE/Qt/6.5.0/android_armv7
           export HOST_QT=$GITHUB_WORKSPACE/Qt/6.5.0/gcc_64
 
-          echo "Android Qt: $ANDROID_QT"
-          echo "Host Qt:    $HOST_QT"
-
-          chmod +x $ANDROID_QT/bin/* || true
-          chmod +x $HOST_QT/bin/* || true
-
           export PATH=$ANDROID_QT/bin:$HOST_QT/bin:$PATH
-          which qt-cmake
 
           mkdir -p build
           cd build
@@ -63,14 +54,14 @@ jobs:
 
           cmake --build . --target apk
 
-      - name: Locate APK (debug)
+      - name: Locate APK (verification)
         run: |
-          echo "Searching for APK files..."
-          find build -name "*.apk" -type f
+          echo "APK files found:"
+          find . -name "*.apk" -type f
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: CipherMesh-APK
-          path: build/**/*.apk
+          path: android-build/**/*.apk
           if-no-files-found: error
