@@ -30,12 +30,12 @@ jobs:
 
           # Qt for Android (target)
           python -m aqt install-qt linux android 6.5.0 android_armv7 \
-            --modules qtquick qtwebsockets \
+            --modules qtdeclarative qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
           # Qt for Desktop (host tools)
           python -m aqt install-qt linux desktop 6.5.0 gcc_64 \
-            --modules qtquick qtwebsockets \
+            --modules qtdeclarative qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
       - name: Build APK
@@ -43,7 +43,7 @@ jobs:
           export ANDROID_QT=$GITHUB_WORKSPACE/Qt/6.5.0/android_armv7
           export HOST_QT=$GITHUB_WORKSPACE/Qt/6.5.0/gcc_64
 
-          # Required: fix execute permissions on Qt tools
+          # Fix execute permissions (critical)
           chmod +x $ANDROID_QT/bin/* || true
           chmod +x $HOST_QT/bin/* || true
 
