@@ -56,8 +56,7 @@ FetchContent_Declare(
 set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
-# --- [FIX] Libsodium Header Compatibility Layer (Version + Export) ---
-# This ensures both version.h AND export.h exist in 'sodium/'
+# --- [FIX] Libsodium Header Compatibility Layer ---
 set(SODIUM_COMPAT_DIR "${CMAKE_BINARY_DIR}/sodium_compat")
 file(MAKE_DIRECTORY "${SODIUM_COMPAT_DIR}/sodium")
 
@@ -76,17 +75,16 @@ else()
     endif()
 endif()
 
-# 2. Handle export.h (Critical for fixing 'export.h not found' error)
+# 2. Handle export.h (With warning suppression)
 if(EXISTS "${sodium_BINARY_DIR}/export.h")
     file(COPY "${sodium_BINARY_DIR}/export.h" DESTINATION "${SODIUM_COMPAT_DIR}/sodium")
 else()
-    # Fallback: Create a dummy export.h if missing (common for static builds)
     if(NOT EXISTS "${SODIUM_COMPAT_DIR}/sodium/export.h")
-        file(WRITE "${SODIUM_COMPAT_DIR}/sodium/export.h" "#define SODIUM_EXPORT\n#define SODIUM_EXPORT_WEAK\n")
+        file(WRITE "${SODIUM_COMPAT_DIR}/sodium/export.h" 
+            "#ifndef SODIUM_EXPORT\n#define SODIUM_EXPORT\n#endif\n#ifndef SODIUM_EXPORT_WEAK\n#define SODIUM_EXPORT_WEAK\n#endif\n"
+        )
     endif()
 endif()
-
-message(STATUS "Fixed Libsodium includes: Populated compat dir with headers.")
 # -------------------------------------------------------------------
 
 # C. LibDataChannel
@@ -99,6 +97,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(LibDataChannel)
 
 # --- 3. Find Qt Packages ---
+# Qt6::Sql is REQUIRED here. It handles SQLite internally.
 find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent Quick WebSockets)
 
 # --- 4. Core Library ---
@@ -111,7 +110,6 @@ add_library(ciphermesh-core STATIC
 )
 
 target_include_directories(ciphermesh-core SYSTEM BEFORE PUBLIC
-    # This must be FIRST to intercept <sodium/version.h> and "export.h"
     ${SODIUM_COMPAT_DIR}
 )
 
@@ -127,7 +125,7 @@ target_include_directories(ciphermesh-core PUBLIC
 target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core
     Qt6::Network
-    Qt6::Sql
+    Qt6::Sql       # <--- Critical: Links the Qt SQLite driver
     Qt6::Concurrent
     Qt6::WebSockets
     libsodium

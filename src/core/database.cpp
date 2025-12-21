@@ -1,6 +1,18 @@
-#include <sodium.h>
 #include "database.hpp"
-#include <sqlite3.h>
+#include <sodium.h>
+
+// Qt SQL Includes
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QSqlError>
+#include <QSqlRecord>
+#include <QVariant>
+#include <QDateTime>
+#include <QDebug>
+#include <QStandardPaths>
+#include <QDir>
+#include <QFileInfo>
+
 #include <stdexcept>
 #include <ctime>
 #include <iostream>
@@ -8,30 +20,75 @@
 namespace CipherMesh {
 namespace Core {
 
-inline void check_sqlite(int rc, sqlite3* db) {
-    if (rc != SQLITE_OK) {
-        std::string errMsg = sqlite3_errmsg(db);
-        throw DBException("SQLite error: " + errMsg);
+// Helper to throw DB exceptions from Qt errors
+inline void check_qt_error(const QSqlQuery& query) {
+    if (query.lastError().isValid()) {
+        throw DBException("SQL Error: " + query.lastError().text().toStdString());
     }
 }
 
-Database::Database() : m_db(nullptr) {}
-Database::~Database() { close(); }
+// Helper: Convert std::vector<unsigned char> to QByteArray
+inline QByteArray toQByteArray(const std::vector<unsigned char>& vec) {
+    return QByteArray(reinterpret_cast<const char*>(vec.data()), static_cast<int>(vec.size()));
+}
+
+// Helper: Convert QByteArray to std::vector<unsigned char>
+inline std::vector<unsigned char> toVector(const QByteArray& ba) {
+    return std::vector<unsigned char>(ba.begin(), ba.end());
+}
+
+Database::Database() {
+    // Check if the connection already exists to avoid warnings
+    if (QSqlDatabase::contains("CipherMeshConnection")) {
+        m_db = QSqlDatabase::database("CipherMeshConnection");
+    } else {
+        m_db = QSqlDatabase::addDatabase("QSQLITE", "CipherMeshConnection");
+    }
+}
+
+Database::~Database() {
+    close();
+}
 
 void Database::open(const std::string& path) {
-    if (m_db) close();
-    int rc = sqlite3_open(path.c_str(), &m_db);
-    if (rc != SQLITE_OK) {
-        std::string errMsg = sqlite3_errmsg(m_db);
-        sqlite3_close(m_db);
-        m_db = nullptr;
-        throw DBException("Cannot open database: " + errMsg);
+    if (m_db.isOpen()) {
+        m_db.close();
     }
-    exec("PRAGMA foreign_keys = ON;");
+
+    // Ensure the directory exists
+    QString dbPath = QString::fromStdString(path);
+    QFileInfo fileInfo(dbPath);
+    QDir dir = fileInfo.absoluteDir();
+    if (!dir.exists()) {
+        if (!dir.mkpath(".")) {
+            throw DBException("Cannot create database directory: " + dir.path().toStdString());
+        }
+    }
+
+    m_db.setDatabaseName(dbPath);
+
+    if (!m_db.open()) {
+        throw DBException("Cannot open database: " + m_db.lastError().text().toStdString());
+    }
+
+    // Enforce Foreign Keys support in SQLite
+    QSqlQuery query(m_db);
+    if (!query.exec("PRAGMA foreign_keys = ON;")) {
+        throw DBException("Failed to enable foreign keys");
+    }
 }
 
 void Database::close() {
-    if (m_db) { sqlite3_close(m_db); m_db = nullptr; }
+    if (m_db.isOpen()) {
+        m_db.close();
+    }
+}
+
+void Database::exec(const std::string& sql) {
+    QSqlQuery query(m_db);
+    if (!query.exec(QString::fromStdString(sql))) {
+        throw DBException("SQL Exec Error: " + query.lastError().text().toStdString());
+    }
 }
 
 void Database::createTables() {
@@ -58,23 +115,18 @@ void Database::createTables() {
         ); 
     )");
     
-    // Add totp_secret column if it doesn't exist (migration for existing databases)
-    // This will fail silently if column already exists
-    try {
-        exec(R"( 
-            ALTER TABLE entries ADD COLUMN totp_secret TEXT DEFAULT '';
-        )");
-    } catch (const DBException&) {
-        // Column already exists, ignore error
+    // Migrations: Add columns if they don't exist
+    // QtSql doesn't throw on simple exec failures unless checked, but we check specifically.
+    QSqlQuery query(m_db);
+    
+    // Migration 1: totp_secret
+    if (!query.exec("ALTER TABLE entries ADD COLUMN totp_secret TEXT DEFAULT '';")) {
+        // Ignore "duplicate column name" error, throw others if critical, mostly safe to ignore for migrations
     }
     
-    // Add entry_type column if it doesn't exist (migration for existing databases)
-    try {
-        exec(R"( 
-            ALTER TABLE entries ADD COLUMN entry_type TEXT DEFAULT 'password';
-        )");
-    } catch (const DBException&) {
-        // Column already exists, ignore error
+    // Migration 2: entry_type
+    if (!query.exec("ALTER TABLE entries ADD COLUMN entry_type TEXT DEFAULT 'password';")) {
+        // Ignore error if column exists
     }
     
     exec(R"( CREATE TABLE IF NOT EXISTS locations ( id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER NOT NULL, type TEXT NOT NULL, value TEXT NOT NULL, FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE ); )");
@@ -90,7 +142,7 @@ void Database::createTables() {
         );
     )");
     
-    // UPDATED: Added 'status' column
+    // Pending invites
     exec(R"( 
         CREATE TABLE IF NOT EXISTS pending_invites ( 
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -98,7 +150,7 @@ void Database::createTables() {
             group_name TEXT NOT NULL, 
             payload_json TEXT NOT NULL, 
             timestamp INTEGER,
-            status TEXT DEFAULT 'pending' -- 'pending', 'accepted'
+            status TEXT DEFAULT 'pending'
         ); 
     )");
 
@@ -106,287 +158,261 @@ void Database::createTables() {
     exec(R"( CREATE TABLE IF NOT EXISTS group_settings ( group_id INTEGER PRIMARY KEY, admins_only_write INTEGER DEFAULT 0, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE ); )");
 }
 
-void Database::exec(const std::string& sql) {
-    char* zErrMsg = nullptr;
-    int rc = sqlite3_exec(m_db, sql.c_str(), 0, 0, &zErrMsg);
-    if (rc != SQLITE_OK) {
-        std::string errMsg = zErrMsg;
-        sqlite3_free(zErrMsg);
-        throw DBException("SQL error: " + errMsg);
-    }
-}
+// --- METADATA & GROUPS ---
 
-// --- METADATA & GROUPS (Unchanged) ---
 void Database::storeMetadata(const std::string& key, const std::vector<unsigned char>& value) {
-    sqlite3_stmt* stmt;
-    const char* sql = "INSERT OR REPLACE INTO vault_metadata (key, value) VALUES (?, ?);";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_blob(stmt, 2, value.data(), value.size(), SQLITE_STATIC);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("INSERT OR REPLACE INTO vault_metadata (key, value) VALUES (?, ?);");
+    query.addBindValue(QString::fromStdString(key));
+    query.addBindValue(toQByteArray(value));
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 std::vector<unsigned char> Database::getMetadata(const std::string& key) {
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT value FROM vault_metadata WHERE key = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_STATIC);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        const void* blob = sqlite3_column_blob(stmt, 0);
-        int size = sqlite3_column_bytes(stmt, 0);
-        std::vector<unsigned char> value(static_cast<const unsigned char*>(blob), static_cast<const unsigned char*>(blob) + size);
-        sqlite3_finalize(stmt);
-        return value;
+    QSqlQuery query(m_db);
+    query.prepare("SELECT value FROM vault_metadata WHERE key = ?;");
+    query.addBindValue(QString::fromStdString(key));
+    
+    if (!query.exec()) check_qt_error(query);
+    
+    if (query.next()) {
+        return toVector(query.value(0).toByteArray());
     }
-    sqlite3_finalize(stmt);
     throw DBException("Metadata key not found: " + key);
 }
 
 void Database::storeEncryptedGroup(const std::string& name, const std::vector<unsigned char>& encryptedKey, const std::string& ownerId) {
-    exec("BEGIN TRANSACTION;");
+    if (!m_db.transaction()) throw DBException("Failed to start transaction");
+
     try {
-        sqlite3_stmt* stmt1;
-        const char* sql1 = "INSERT INTO groups (name, owner_id) VALUES (?, ?);";
-        int rc = sqlite3_prepare_v2(m_db, sql1, -1, &stmt1, 0);
-        check_sqlite(rc, m_db);
-        sqlite3_bind_text(stmt1, 1, name.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt1, 2, ownerId.c_str(), -1, SQLITE_STATIC);
-        if (sqlite3_step(stmt1) != SQLITE_DONE) { sqlite3_finalize(stmt1); throw DBException("Failed to insert group name"); }
-        sqlite3_finalize(stmt1);
-        sqlite3_int64 groupId = sqlite3_last_insert_rowid(m_db);
-        sqlite3_stmt* stmt2;
-        const char* sql2 = "INSERT INTO group_keys (group_id, encrypted_group_key) VALUES (?, ?);";
-        rc = sqlite3_prepare_v2(m_db, sql2, -1, &stmt2, 0);
-        check_sqlite(rc, m_db);
-        sqlite3_bind_int64(stmt2, 1, groupId);
-        sqlite3_bind_blob(stmt2, 2, encryptedKey.data(), encryptedKey.size(), SQLITE_STATIC);
-        if (sqlite3_step(stmt2) != SQLITE_DONE) { sqlite3_finalize(stmt2); throw DBException("Failed to insert group key"); }
-        sqlite3_finalize(stmt2);
-        exec("INSERT INTO group_settings (group_id, admins_only_write) VALUES (" + std::to_string(groupId) + ", 0);");
-        exec("COMMIT;");
-    } catch (...) { exec("ROLLBACK;"); throw; }
+        QSqlQuery q1(m_db);
+        q1.prepare("INSERT INTO groups (name, owner_id) VALUES (?, ?);");
+        q1.addBindValue(QString::fromStdString(name));
+        q1.addBindValue(QString::fromStdString(ownerId));
+        if (!q1.exec()) throw DBException("Failed to insert group name: " + q1.lastError().text().toStdString());
+        
+        QVariant groupId = q1.lastInsertId();
+
+        QSqlQuery q2(m_db);
+        q2.prepare("INSERT INTO group_keys (group_id, encrypted_group_key) VALUES (?, ?);");
+        q2.addBindValue(groupId);
+        q2.addBindValue(toQByteArray(encryptedKey));
+        if (!q2.exec()) throw DBException("Failed to insert group key: " + q2.lastError().text().toStdString());
+
+        QSqlQuery q3(m_db);
+        q3.prepare("INSERT INTO group_settings (group_id, admins_only_write) VALUES (?, 0);");
+        q3.addBindValue(groupId);
+        if (!q3.exec()) throw DBException("Failed to insert group settings");
+
+        m_db.commit();
+    } catch (...) {
+        m_db.rollback();
+        throw;
+    }
 }
 
 std::vector<unsigned char> Database::getEncryptedGroupKey(const std::string& name, int& groupId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT g.id, gk.encrypted_group_key FROM groups g JOIN group_keys gk ON g.id = gk.group_id WHERE g.name = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_STATIC);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        groupId = sqlite3_column_int(stmt, 0);
-        const void* blob = sqlite3_column_blob(stmt, 1);
-        int size = sqlite3_column_bytes(stmt, 1);
-        std::vector<unsigned char> value(static_cast<const unsigned char*>(blob), static_cast<const unsigned char*>(blob) + size);
-        sqlite3_finalize(stmt);
-        return value;
+    QSqlQuery query(m_db);
+    query.prepare("SELECT g.id, gk.encrypted_group_key FROM groups g JOIN group_keys gk ON g.id = gk.group_id WHERE g.name = ?;");
+    query.addBindValue(QString::fromStdString(name));
+    
+    if (!query.exec()) check_qt_error(query);
+
+    if (query.next()) {
+        groupId = query.value(0).toInt();
+        return toVector(query.value(1).toByteArray());
     }
-    sqlite3_finalize(stmt);
     throw DBException("Group not found: " + name);
 }
 
 std::vector<unsigned char> Database::getEncryptedGroupKeyById(int groupId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT encrypted_group_key FROM group_keys WHERE group_id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        const void* blob = sqlite3_column_blob(stmt, 0);
-        int size = sqlite3_column_bytes(stmt, 0);
-        std::vector<unsigned char> value(static_cast<const unsigned char*>(blob), static_cast<const unsigned char*>(blob) + size);
-        sqlite3_finalize(stmt);
-        return value;
+    QSqlQuery query(m_db);
+    query.prepare("SELECT encrypted_group_key FROM group_keys WHERE group_id = ?;");
+    query.addBindValue(groupId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    if (query.next()) {
+        return toVector(query.value(0).toByteArray());
     }
-    sqlite3_finalize(stmt);
     throw DBException("Group key not found for ID");
 }
 
 std::map<int, std::vector<unsigned char>> Database::getAllEncryptedGroupKeys() {
     std::map<int, std::vector<unsigned char>> keys;
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT group_id, encrypted_group_key FROM group_keys;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int groupId = sqlite3_column_int(stmt, 0);
-        const void* blob = sqlite3_column_blob(stmt, 1);
-        int size = sqlite3_column_bytes(stmt, 1);
-        keys[groupId] = std::vector<unsigned char>(static_cast<const unsigned char*>(blob), static_cast<const unsigned char*>(blob) + size);
+    QSqlQuery query(m_db);
+    
+    if (!query.exec("SELECT group_id, encrypted_group_key FROM group_keys;")) {
+        check_qt_error(query);
     }
-    sqlite3_finalize(stmt);
+
+    while (query.next()) {
+        int gid = query.value(0).toInt();
+        keys[gid] = toVector(query.value(1).toByteArray());
+    }
     return keys;
 }
 
 void Database::updateEncryptedGroupKey(int groupId, const std::vector<unsigned char>& newKey) {
-    sqlite3_stmt* stmt;
-    const char* sql = "UPDATE group_keys SET encrypted_group_key = ? WHERE group_id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_blob(stmt, 1, newKey.data(), newKey.size(), SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 2, groupId);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("UPDATE group_keys SET encrypted_group_key = ? WHERE group_id = ?;");
+    query.addBindValue(toQByteArray(newKey));
+    query.addBindValue(groupId);
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 std::vector<std::string> Database::getAllGroupNames() {
     std::vector<std::string> names;
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT name FROM groups ORDER BY name;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        const unsigned char* name = sqlite3_column_text(stmt, 0);
-        names.push_back(std::string(reinterpret_cast<const char*>(name)));
+    QSqlQuery query(m_db);
+    
+    if (!query.exec("SELECT name FROM groups ORDER BY name;")) {
+        check_qt_error(query);
     }
-    sqlite3_finalize(stmt);
+
+    while (query.next()) {
+        names.push_back(query.value(0).toString().toStdString());
+    }
     return names;
 }
 
 int Database::getGroupId(const std::string& name) {
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT id FROM groups WHERE name = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_STATIC);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        sqlite3_finalize(stmt);
-        return id;
+    QSqlQuery query(m_db);
+    query.prepare("SELECT id FROM groups WHERE name = ?;");
+    query.addBindValue(QString::fromStdString(name));
+    
+    if (!query.exec()) check_qt_error(query);
+
+    if (query.next()) {
+        return query.value(0).toInt();
     }
-    sqlite3_finalize(stmt);
     throw DBException("Group not found: " + name);
 }
 
 int Database::getGroupIdForEntry(int entryId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT group_id FROM entries WHERE id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, entryId);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        sqlite3_finalize(stmt);
-        return id;
+    QSqlQuery query(m_db);
+    query.prepare("SELECT group_id FROM entries WHERE id = ?;");
+    query.addBindValue(entryId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    if (query.next()) {
+        return query.value(0).toInt();
     }
-    sqlite3_finalize(stmt);
     throw DBException("Entry not found");
 }
 
 bool Database::deleteGroup(const std::string& name) {
-    sqlite3_stmt* stmt;
-    const char* sql = "DELETE FROM groups WHERE name = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_STATIC);
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    return sqlite3_changes(m_db) > 0;
+    QSqlQuery query(m_db);
+    query.prepare("DELETE FROM groups WHERE name = ?;");
+    query.addBindValue(QString::fromStdString(name));
+    
+    if (!query.exec()) check_qt_error(query);
+    
+    return query.numRowsAffected() > 0;
 }
 
 // --- ENTRIES ---
+
 void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsigned char>& encryptedPassword) {
-    exec("BEGIN TRANSACTION;");
+    if (!m_db.transaction()) throw DBException("Failed to start transaction");
+
     try {
-        sqlite3_stmt* stmt;
-        long long now = std::time(nullptr);
-        const char* sql = "INSERT INTO entries (group_id, title, username, notes, encrypted_password, created_at, last_modified, last_accessed, password_expiry, totp_secret, entry_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
-        int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-        check_sqlite(rc, m_db);
-        sqlite3_bind_int(stmt, 1, groupId);
-        sqlite3_bind_text(stmt, 2, entry.title.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 3, entry.username.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 4, entry.notes.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_blob(stmt, 5, encryptedPassword.data(), encryptedPassword.size(), SQLITE_STATIC);
-        sqlite3_bind_int64(stmt, 6, now); // created_at
-        sqlite3_bind_int64(stmt, 7, now); // last_modified
-        sqlite3_bind_int64(stmt, 8, now); // last_accessed
-        sqlite3_bind_int64(stmt, 9, entry.passwordExpiry); // password_expiry
-        sqlite3_bind_text(stmt, 10, entry.totp_secret.c_str(), -1, SQLITE_STATIC); // totp_secret
-        sqlite3_bind_text(stmt, 11, entry.entry_type.c_str(), -1, SQLITE_STATIC); // entry_type
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-        entry.id = sqlite3_last_insert_rowid(m_db);
+        qint64 now = QDateTime::currentSecsSinceEpoch();
+        
+        QSqlQuery q(m_db);
+        q.prepare("INSERT INTO entries (group_id, title, username, notes, encrypted_password, created_at, last_modified, last_accessed, password_expiry, totp_secret, entry_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+        
+        q.addBindValue(groupId);
+        q.addBindValue(QString::fromStdString(entry.title));
+        q.addBindValue(QString::fromStdString(entry.username));
+        q.addBindValue(QString::fromStdString(entry.notes));
+        q.addBindValue(toQByteArray(encryptedPassword));
+        q.addBindValue(now); // created_at
+        q.addBindValue(now); // last_modified
+        q.addBindValue(now); // last_accessed
+        q.addBindValue(static_cast<qint64>(entry.passwordExpiry));
+        q.addBindValue(QString::fromStdString(entry.totp_secret));
+        q.addBindValue(QString::fromStdString(entry.entry_type));
+
+        if (!q.exec()) throw DBException("Insert entry failed: " + q.lastError().text().toStdString());
+
+        entry.id = q.lastInsertId().toInt();
         entry.createdAt = now;
         entry.lastModified = now;
         entry.lastAccessed = now;
+
+        QSqlQuery loc_stmt(m_db);
+        loc_stmt.prepare("INSERT INTO locations (entry_id, type, value) VALUES (?, ?, ?);");
         
-        sqlite3_stmt* loc_stmt;
-        const char* loc_sql = "INSERT INTO locations (entry_id, type, value) VALUES (?, ?, ?);";
-        rc = sqlite3_prepare_v2(m_db, loc_sql, -1, &loc_stmt, 0);
-        check_sqlite(rc, m_db);
         for (Location& loc : entry.locations) {
-            sqlite3_bind_int(loc_stmt, 1, entry.id);
-            sqlite3_bind_text(loc_stmt, 2, loc.type.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(loc_stmt, 3, loc.value.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(loc_stmt);
-            loc.id = sqlite3_last_insert_rowid(m_db); 
-            sqlite3_reset(loc_stmt);
+            loc_stmt.bindValue(0, entry.id);
+            loc_stmt.bindValue(1, QString::fromStdString(loc.type));
+            loc_stmt.bindValue(2, QString::fromStdString(loc.value));
+            if (!loc_stmt.exec()) throw DBException("Insert location failed");
+            loc.id = loc_stmt.lastInsertId().toInt();
         }
-        sqlite3_finalize(loc_stmt);
-        exec("COMMIT;");
-    } catch (...) { exec("ROLLBACK;"); throw; }
+
+        m_db.commit();
+    } catch (...) {
+        m_db.rollback();
+        throw;
+    }
 }
 
 std::vector<VaultEntry> Database::getEntriesForGroup(int groupId) {
     std::vector<VaultEntry> entries;
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT id, title, username, notes, created_at, last_modified, last_accessed, password_expiry, totp_secret, entry_type FROM entries WHERE group_id = ? ORDER BY title;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        std::string title = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        std::string username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        std::string notes = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+    QSqlQuery query(m_db);
+    query.prepare("SELECT id, title, username, notes, created_at, last_modified, last_accessed, password_expiry, totp_secret, entry_type FROM entries WHERE group_id = ? ORDER BY title;");
+    query.addBindValue(groupId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    while (query.next()) {
+        int id = query.value(0).toInt();
+        std::string title = query.value(1).toString().toStdString();
+        std::string username = query.value(2).toString().toStdString();
+        std::string notes = query.value(3).toString().toStdString();
+
         VaultEntry entry(id, title, username, notes);
-        entry.createdAt = sqlite3_column_int64(stmt, 4);
-        entry.lastModified = sqlite3_column_int64(stmt, 5);
-        entry.lastAccessed = sqlite3_column_int64(stmt, 6);
-        entry.passwordExpiry = sqlite3_column_int64(stmt, 7);
-        const unsigned char* totp_ptr = sqlite3_column_text(stmt, 8);
-        entry.totp_secret = totp_ptr ? reinterpret_cast<const char*>(totp_ptr) : "";
-        const unsigned char* type_ptr = sqlite3_column_text(stmt, 9);
-        entry.entry_type = type_ptr ? reinterpret_cast<const char*>(type_ptr) : "password";
+        entry.createdAt = query.value(4).toLongLong();
+        entry.lastModified = query.value(5).toLongLong();
+        entry.lastAccessed = query.value(6).toLongLong();
+        entry.passwordExpiry = query.value(7).toLongLong();
+        entry.totp_secret = query.value(8).toString().toStdString();
+        entry.entry_type = query.value(9).toString().toStdString();
+        if (entry.entry_type.empty()) entry.entry_type = "password";
+
         entry.locations = getLocationsForEntry(id);
         entries.push_back(std::move(entry));
     }
-    sqlite3_finalize(stmt);
     return entries;
 }
 
 std::vector<Location> Database::getLocationsForEntry(int entryId) {
     std::vector<Location> locations;
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT id, type, value FROM locations WHERE entry_id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, entryId);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        std::string type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        std::string value = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+    QSqlQuery query(m_db);
+    query.prepare("SELECT id, type, value FROM locations WHERE entry_id = ?;");
+    query.addBindValue(entryId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    while (query.next()) {
+        int id = query.value(0).toInt();
+        std::string type = query.value(1).toString().toStdString();
+        std::string value = query.value(2).toString().toStdString();
         locations.emplace_back(id, type, value);
     }
-    sqlite3_finalize(stmt);
     return locations;
 }
 
 std::vector<VaultEntry> Database::findEntriesByLocation(const std::string& locationValue) {
     std::vector<VaultEntry> entries;
-    sqlite3_stmt* stmt;
-    
-    // First try exact match
-    const char* sql = R"(
+    QSqlQuery query(m_db);
+    QString qs = QString::fromStdString(locationValue);
+
+    query.prepare(R"(
         SELECT DISTINCT e.id, e.title, e.username, e.notes 
         FROM entries e 
         JOIN locations l ON e.id = l.entry_id 
@@ -396,194 +422,193 @@ std::vector<VaultEntry> Database::findEntriesByLocation(const std::string& locat
         FROM entries e 
         JOIN locations l ON e.id = l.entry_id 
         WHERE ? LIKE '%' || l.value || '%' OR l.value LIKE '%' || ? || '%';
-    )";
+    )");
     
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, locationValue.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, locationValue.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, locationValue.c_str(), -1, SQLITE_STATIC);
-    
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        std::string title = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        std::string username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        std::string notes = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+    query.addBindValue(qs);
+    query.addBindValue(qs);
+    query.addBindValue(qs);
+
+    if (!query.exec()) check_qt_error(query);
+
+    while (query.next()) {
+        int id = query.value(0).toInt();
+        std::string title = query.value(1).toString().toStdString();
+        std::string username = query.value(2).toString().toStdString();
+        std::string notes = query.value(3).toString().toStdString();
+        
         VaultEntry entry(id, title, username, notes);
         entry.locations = getLocationsForEntry(id); 
         entries.push_back(std::move(entry));
     }
-    sqlite3_finalize(stmt);
     return entries;
 }
 
 std::vector<VaultEntry> Database::searchEntries(const std::string& searchTerm) {
     std::vector<VaultEntry> entries;
-    sqlite3_stmt* stmt;
-    const char* sql = R"( SELECT id, title, username, notes, totp_secret, entry_type FROM entries WHERE title LIKE ? OR username LIKE ? OR notes LIKE ? UNION SELECT DISTINCT e.id, e.title, e.username, e.notes, e.totp_secret, e.entry_type FROM entries e JOIN locations l ON e.id = l.entry_id WHERE l.value LIKE ?; )";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    std::string likeTerm = "%" + searchTerm + "%";
-    sqlite3_bind_text(stmt, 1, likeTerm.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, likeTerm.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, likeTerm.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 4, likeTerm.c_str(), -1, SQLITE_STATIC);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        std::string title = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        std::string username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        std::string notes = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
-        const unsigned char* totp_ptr = sqlite3_column_text(stmt, 4);
-        const unsigned char* type_ptr = sqlite3_column_text(stmt, 5);
+    QSqlQuery query(m_db);
+    QString term = "%" + QString::fromStdString(searchTerm) + "%";
+
+    QString sql = R"( 
+        SELECT id, title, username, notes, totp_secret, entry_type 
+        FROM entries 
+        WHERE title LIKE ? OR username LIKE ? OR notes LIKE ? 
+        UNION 
+        SELECT DISTINCT e.id, e.title, e.username, e.notes, e.totp_secret, e.entry_type 
+        FROM entries e 
+        JOIN locations l ON e.id = l.entry_id 
+        WHERE l.value LIKE ?; 
+    )";
+
+    query.prepare(sql);
+    query.addBindValue(term);
+    query.addBindValue(term);
+    query.addBindValue(term);
+    query.addBindValue(term);
+
+    if (!query.exec()) check_qt_error(query);
+
+    while (query.next()) {
+        int id = query.value(0).toInt();
+        std::string title = query.value(1).toString().toStdString();
+        std::string username = query.value(2).toString().toStdString();
+        std::string notes = query.value(3).toString().toStdString();
+        
         VaultEntry entry(id, title, username, notes);
-        entry.totp_secret = totp_ptr ? reinterpret_cast<const char*>(totp_ptr) : "";
-        entry.entry_type = type_ptr ? reinterpret_cast<const char*>(type_ptr) : "password";
+        entry.totp_secret = query.value(4).toString().toStdString();
+        entry.entry_type = query.value(5).toString().toStdString();
+        if (entry.entry_type.empty()) entry.entry_type = "password";
+        
         entry.locations = getLocationsForEntry(id);
         entries.push_back(std::move(entry));
     }
-    sqlite3_finalize(stmt);
     return entries;
 }
 
 std::vector<unsigned char> Database::getEncryptedPassword(int entryId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT encrypted_password FROM entries WHERE id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, entryId);
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        const void* blob = sqlite3_column_blob(stmt, 0);
-        int size = sqlite3_column_bytes(stmt, 0);
-        std::vector<unsigned char> value(static_cast<const unsigned char*>(blob), static_cast<const unsigned char*>(blob) + size);
-        sqlite3_finalize(stmt);
-        return value;
+    QSqlQuery query(m_db);
+    query.prepare("SELECT encrypted_password FROM entries WHERE id = ?;");
+    query.addBindValue(entryId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    if (query.next()) {
+        return toVector(query.value(0).toByteArray());
     }
-    sqlite3_finalize(stmt);
     throw DBException("Entry not found");
 }
 
 bool Database::deleteEntry(int entryId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "DELETE FROM entries WHERE id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, entryId);
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    return sqlite3_changes(m_db) > 0;
+    QSqlQuery query(m_db);
+    query.prepare("DELETE FROM entries WHERE id = ?;");
+    query.addBindValue(entryId);
+    
+    if (!query.exec()) check_qt_error(query);
+    return query.numRowsAffected() > 0;
 }
 
 void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned char>* newEncryptedPassword) {
-    exec("BEGIN TRANSACTION;");
+    if (!m_db.transaction()) throw DBException("Failed to start transaction");
+
     try {
-        sqlite3_stmt* stmt;
-        const char* sql = "UPDATE entries SET title = ?, username = ?, notes = ?, last_modified = ?, password_expiry = ?, totp_secret = ?, entry_type = ? WHERE id = ?;";
-        int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-        check_sqlite(rc, m_db);
-        sqlite3_bind_text(stmt, 1, entry.title.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 2, entry.username.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 3, entry.notes.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_int64(stmt, 4, std::time(nullptr));
-        sqlite3_bind_int64(stmt, 5, entry.passwordExpiry);
-        sqlite3_bind_text(stmt, 6, entry.totp_secret.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 7, entry.entry_type.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_int(stmt, 8, entry.id);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
+        QSqlQuery q(m_db);
+        q.prepare("UPDATE entries SET title = ?, username = ?, notes = ?, last_modified = ?, password_expiry = ?, totp_secret = ?, entry_type = ? WHERE id = ?;");
+        q.addBindValue(QString::fromStdString(entry.title));
+        q.addBindValue(QString::fromStdString(entry.username));
+        q.addBindValue(QString::fromStdString(entry.notes));
+        q.addBindValue(QDateTime::currentSecsSinceEpoch());
+        q.addBindValue(static_cast<qint64>(entry.passwordExpiry));
+        q.addBindValue(QString::fromStdString(entry.totp_secret));
+        q.addBindValue(QString::fromStdString(entry.entry_type));
+        q.addBindValue(entry.id);
+        
+        if (!q.exec()) throw DBException("Update entry failed");
 
         if (newEncryptedPassword) {
-            // Save old password to history first
             try {
+                // Save old password
                 std::vector<unsigned char> oldPassword = getEncryptedPassword(entry.id);
                 storePasswordHistory(entry.id, oldPassword);
-                // Keep only last 10 passwords
                 deleteOldPasswordHistory(entry.id, 10);
             } catch (...) {
-                // If entry doesn't exist or error, continue with password update
+                // Ignore if history fails
             }
             
-            sqlite3_stmt* pass_stmt;
-            const char* pass_sql = "UPDATE entries SET encrypted_password = ? WHERE id = ?;";
-            rc = sqlite3_prepare_v2(m_db, pass_sql, -1, &pass_stmt, 0);
-            check_sqlite(rc, m_db);
-            sqlite3_bind_blob(pass_stmt, 1, newEncryptedPassword->data(), newEncryptedPassword->size(), SQLITE_STATIC);
-            sqlite3_bind_int(pass_stmt, 2, entry.id);
-            sqlite3_step(pass_stmt);
-            sqlite3_finalize(pass_stmt);
+            QSqlQuery pq(m_db);
+            pq.prepare("UPDATE entries SET encrypted_password = ? WHERE id = ?;");
+            pq.addBindValue(toQByteArray(*newEncryptedPassword));
+            pq.addBindValue(entry.id);
+            if (!pq.exec()) throw DBException("Update password failed");
         }
 
-        sqlite3_stmt* del_stmt;
-        const char* del_sql = "DELETE FROM locations WHERE entry_id = ?;";
-        rc = sqlite3_prepare_v2(m_db, del_sql, -1, &del_stmt, 0);
-        check_sqlite(rc, m_db);
-        sqlite3_bind_int(del_stmt, 1, entry.id);
-        sqlite3_step(del_stmt);
-        sqlite3_finalize(del_stmt);
+        // Update locations
+        QSqlQuery del_loc(m_db);
+        del_loc.prepare("DELETE FROM locations WHERE entry_id = ?;");
+        del_loc.addBindValue(entry.id);
+        if (!del_loc.exec()) throw DBException("Clear locations failed");
 
-        sqlite3_stmt* loc_stmt;
-        const char* loc_sql = "INSERT INTO locations (entry_id, type, value) VALUES (?, ?, ?);";
-        rc = sqlite3_prepare_v2(m_db, loc_sql, -1, &loc_stmt, 0);
-        check_sqlite(rc, m_db);
+        QSqlQuery loc_stmt(m_db);
+        loc_stmt.prepare("INSERT INTO locations (entry_id, type, value) VALUES (?, ?, ?);");
         for (const Location& loc : entry.locations) {
-            sqlite3_bind_int(loc_stmt, 1, entry.id);
-            sqlite3_bind_text(loc_stmt, 2, loc.type.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(loc_stmt, 3, loc.value.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(loc_stmt);
-            sqlite3_reset(loc_stmt);
+            loc_stmt.bindValue(0, entry.id);
+            loc_stmt.bindValue(1, QString::fromStdString(loc.type));
+            loc_stmt.bindValue(2, QString::fromStdString(loc.value));
+            if (!loc_stmt.exec()) throw DBException("Insert location failed");
         }
-        sqlite3_finalize(loc_stmt);
-        exec("COMMIT;");
-    } catch (...) { exec("ROLLBACK;"); throw; }
+
+        m_db.commit();
+    } catch (...) {
+        m_db.rollback();
+        throw;
+    }
 }
 
 bool Database::entryExists(const std::string& username, const std::string& locationValue) {
-    sqlite3_stmt* stmt;
-    const char* sql = R"( SELECT 1 FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = ? AND l.value = ? LIMIT 1; )";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, locationValue.c_str(), -1, SQLITE_STATIC);
-    bool exists = (sqlite3_step(stmt) == SQLITE_ROW);
-    sqlite3_finalize(stmt);
-    return exists;
+    QSqlQuery query(m_db);
+    query.prepare("SELECT 1 FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = ? AND l.value = ? LIMIT 1;");
+    query.addBindValue(QString::fromStdString(username));
+    query.addBindValue(QString::fromStdString(locationValue));
+    
+    if (!query.exec()) check_qt_error(query);
+    return query.next();
 }
 
 // --- PASSWORD HISTORY ---
+
 void Database::storePasswordHistory(int entryId, const std::vector<unsigned char>& oldEncryptedPassword) {
-    sqlite3_stmt* stmt;
-    const char* sql = "INSERT INTO password_history (entry_id, encrypted_password, changed_at) VALUES (?, ?, ?);";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, entryId);
-    sqlite3_bind_blob(stmt, 2, oldEncryptedPassword.data(), oldEncryptedPassword.size(), SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 3, std::time(nullptr));
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("INSERT INTO password_history (entry_id, encrypted_password, changed_at) VALUES (?, ?, ?);");
+    query.addBindValue(entryId);
+    query.addBindValue(toQByteArray(oldEncryptedPassword));
+    query.addBindValue(QDateTime::currentSecsSinceEpoch());
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 std::vector<PasswordHistoryEntry> Database::getPasswordHistory(int entryId) {
     std::vector<PasswordHistoryEntry> history;
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT id, encrypted_password, changed_at FROM password_history WHERE entry_id = ? ORDER BY changed_at DESC;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, entryId);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        const void* blob = sqlite3_column_blob(stmt, 1);
-        int size = sqlite3_column_bytes(stmt, 1);
-        std::string encPwd(static_cast<const char*>(blob), size);
-        long long changedAt = sqlite3_column_int64(stmt, 2);
-        history.emplace_back(id, entryId, encPwd, changedAt);
+    QSqlQuery query(m_db);
+    query.prepare("SELECT id, encrypted_password, changed_at FROM password_history WHERE entry_id = ? ORDER BY changed_at DESC;");
+    query.addBindValue(entryId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    while (query.next()) {
+        int id = query.value(0).toInt();
+        std::vector<unsigned char> encPwd = toVector(query.value(1).toByteArray());
+        
+        // Convert vector back to string for the struct if needed, or change struct to use vector
+        // Assuming PasswordHistoryEntry uses string for encryptedBlob based on original code
+        std::string encPwdStr(encPwd.begin(), encPwd.end()); 
+        
+        long long changedAt = query.value(2).toLongLong();
+        history.emplace_back(id, entryId, encPwdStr, changedAt);
     }
-    sqlite3_finalize(stmt);
     return history;
 }
 
 void Database::deleteOldPasswordHistory(int entryId, int keepCount) {
-    sqlite3_stmt* stmt;
-    const char* sql = R"(
+    QSqlQuery query(m_db);
+    QString sql = R"(
         DELETE FROM password_history 
         WHERE entry_id = ? AND id NOT IN (
             SELECT id FROM password_history 
@@ -592,221 +617,204 @@ void Database::deleteOldPasswordHistory(int entryId, int keepCount) {
             LIMIT ?
         );
     )";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, entryId);
-    sqlite3_bind_int(stmt, 2, entryId);
-    sqlite3_bind_int(stmt, 3, keepCount);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    query.prepare(sql);
+    query.addBindValue(entryId);
+    query.addBindValue(entryId);
+    query.addBindValue(keepCount);
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 // --- ENTRY ACCESS TRACKING ---
+
 void Database::updateEntryAccessTime(int entryId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "UPDATE entries SET last_accessed = ? WHERE id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int64(stmt, 1, std::time(nullptr));
-    sqlite3_bind_int(stmt, 2, entryId);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("UPDATE entries SET last_accessed = ? WHERE id = ?;");
+    query.addBindValue(QDateTime::currentSecsSinceEpoch());
+    query.addBindValue(entryId);
+    query.exec(); // Ignore errors for access time updates
 }
 
 std::vector<VaultEntry> Database::getRecentlyAccessedEntries(int groupId, int limit) {
     std::vector<VaultEntry> entries;
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT id, title, username, notes, created_at, last_modified, last_accessed, password_expiry, totp_secret, entry_type FROM entries WHERE group_id = ? AND last_accessed > 0 ORDER BY last_accessed DESC LIMIT ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    sqlite3_bind_int(stmt, 2, limit);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        std::string title = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        std::string username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        std::string notes = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+    QSqlQuery query(m_db);
+    query.prepare("SELECT id, title, username, notes, created_at, last_modified, last_accessed, password_expiry, totp_secret, entry_type FROM entries WHERE group_id = ? AND last_accessed > 0 ORDER BY last_accessed DESC LIMIT ?;");
+    query.addBindValue(groupId);
+    query.addBindValue(limit);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    while (query.next()) {
+        int id = query.value(0).toInt();
+        std::string title = query.value(1).toString().toStdString();
+        std::string username = query.value(2).toString().toStdString();
+        std::string notes = query.value(3).toString().toStdString();
+
         VaultEntry entry(id, title, username, notes);
-        entry.createdAt = sqlite3_column_int64(stmt, 4);
-        entry.lastModified = sqlite3_column_int64(stmt, 5);
-        entry.lastAccessed = sqlite3_column_int64(stmt, 6);
-        entry.passwordExpiry = sqlite3_column_int64(stmt, 7);
-        const unsigned char* totp_ptr = sqlite3_column_text(stmt, 8);
-        entry.totp_secret = totp_ptr ? reinterpret_cast<const char*>(totp_ptr) : "";
-        const unsigned char* type_ptr = sqlite3_column_text(stmt, 9);
-        entry.entry_type = type_ptr ? reinterpret_cast<const char*>(type_ptr) : "password";
+        entry.createdAt = query.value(4).toLongLong();
+        entry.lastModified = query.value(5).toLongLong();
+        entry.lastAccessed = query.value(6).toLongLong();
+        entry.passwordExpiry = query.value(7).toLongLong();
+        entry.totp_secret = query.value(8).toString().toStdString();
+        entry.entry_type = query.value(9).toString().toStdString();
+        if (entry.entry_type.empty()) entry.entry_type = "password";
+
         entry.locations = getLocationsForEntry(id);
         entries.push_back(std::move(entry));
     }
-    sqlite3_finalize(stmt);
     return entries;
 }
 
 // --- PENDING INVITES ---
+
 void Database::storePendingInvite(const std::string& senderId, const std::string& groupName, const std::string& payloadJson) {
-    sqlite3_stmt* stmt;
-    const char* sql = "INSERT INTO pending_invites (sender_id, group_name, payload_json, timestamp) VALUES (?, ?, ?, ?);";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, senderId.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, groupName.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, payloadJson.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 4, std::time(nullptr));
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("INSERT INTO pending_invites (sender_id, group_name, payload_json, timestamp) VALUES (?, ?, ?, ?);");
+    query.addBindValue(QString::fromStdString(senderId));
+    query.addBindValue(QString::fromStdString(groupName));
+    query.addBindValue(QString::fromStdString(payloadJson));
+    query.addBindValue(QDateTime::currentSecsSinceEpoch());
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
-// --- NEW: Update status ---
 void Database::updatePendingInviteStatus(int inviteId, const std::string& status) {
-    sqlite3_stmt* stmt;
-    const char* sql = "UPDATE pending_invites SET status = ? WHERE id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, status.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 2, inviteId);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("UPDATE pending_invites SET status = ? WHERE id = ?;");
+    query.addBindValue(QString::fromStdString(status));
+    query.addBindValue(inviteId);
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 std::vector<PendingInvite> Database::getPendingInvites() {
     std::vector<PendingInvite> invites;
-    // UPDATED: Now fetching status
-    const char* sql = "SELECT id, sender_id, group_name, payload_json, timestamp, status FROM pending_invites ORDER BY timestamp DESC;";
-    sqlite3_stmt* stmt;
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    QSqlQuery query(m_db);
+    
+    if (!query.exec("SELECT id, sender_id, group_name, payload_json, timestamp, status FROM pending_invites ORDER BY timestamp DESC;")) {
+        check_qt_error(query);
+    }
+
+    while (query.next()) {
         PendingInvite invite;
-        invite.id = sqlite3_column_int(stmt, 0);
-        invite.senderId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        invite.groupName = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        invite.payloadJson = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
-        invite.timestamp = sqlite3_column_int64(stmt, 4);
-        // Status might be null if old DB, handle gracefully or ensure schema upgrade
-        const unsigned char* statusText = sqlite3_column_text(stmt, 5);
-        invite.status = statusText ? reinterpret_cast<const char*>(statusText) : "pending";
+        invite.id = query.value(0).toInt();
+        invite.senderId = query.value(1).toString().toStdString();
+        invite.groupName = query.value(2).toString().toStdString();
+        invite.payloadJson = query.value(3).toString().toStdString();
+        invite.timestamp = query.value(4).toLongLong();
+        invite.status = query.value(5).toString().toStdString();
+        if (invite.status.empty()) invite.status = "pending";
+        
         invites.push_back(invite);
     }
-    sqlite3_finalize(stmt);
     return invites;
 }
 
 void Database::deletePendingInvite(int inviteId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "DELETE FROM pending_invites WHERE id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, inviteId);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("DELETE FROM pending_invites WHERE id = ?;");
+    query.addBindValue(inviteId);
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 // --- MEMBERS ---
+
 void Database::addGroupMember(int groupId, const std::string& userId, const std::string& role, const std::string& status) {
-    sqlite3_stmt* stmt;
-    const char* sql = "INSERT OR REPLACE INTO group_members (group_id, user_id, role, status) VALUES (?, ?, ?, ?);";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, role.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 4, status.c_str(), -1, SQLITE_STATIC);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("INSERT OR REPLACE INTO group_members (group_id, user_id, role, status) VALUES (?, ?, ?, ?);");
+    query.addBindValue(groupId);
+    query.addBindValue(QString::fromStdString(userId));
+    query.addBindValue(QString::fromStdString(role));
+    query.addBindValue(QString::fromStdString(status));
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 void Database::removeGroupMember(int groupId, const std::string& userId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "DELETE FROM group_members WHERE group_id = ? AND user_id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    sqlite3_bind_text(stmt, 2, userId.c_str(), -1, SQLITE_STATIC);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("DELETE FROM group_members WHERE group_id = ? AND user_id = ?;");
+    query.addBindValue(groupId);
+    query.addBindValue(QString::fromStdString(userId));
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 void Database::updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole) {
-    sqlite3_stmt* stmt;
-    const char* sql = "UPDATE group_members SET role = ? WHERE group_id = ? AND user_id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, newRole.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 2, groupId);
-    sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("UPDATE group_members SET role = ? WHERE group_id = ? AND user_id = ?;");
+    query.addBindValue(QString::fromStdString(newRole));
+    query.addBindValue(groupId);
+    query.addBindValue(QString::fromStdString(userId));
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 void Database::updateGroupMemberStatus(int groupId, const std::string& userId, const std::string& newStatus) {
-    sqlite3_stmt* stmt;
-    const char* sql = "UPDATE group_members SET status = ? WHERE group_id = ? AND user_id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_text(stmt, 1, newStatus.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 2, groupId);
-    sqlite3_bind_text(stmt, 3, userId.c_str(), -1, SQLITE_STATIC);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("UPDATE group_members SET status = ? WHERE group_id = ? AND user_id = ?;");
+    query.addBindValue(QString::fromStdString(newStatus));
+    query.addBindValue(groupId);
+    query.addBindValue(QString::fromStdString(userId));
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 std::vector<GroupMember> Database::getGroupMembers(int groupId) {
     std::vector<GroupMember> members;
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT user_id, role, status FROM group_members WHERE group_id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    QSqlQuery query(m_db);
+    query.prepare("SELECT user_id, role, status FROM group_members WHERE group_id = ?;");
+    query.addBindValue(groupId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    while (query.next()) {
         GroupMember m;
-        m.userId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        m.role = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        m.status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        m.userId = query.value(0).toString().toStdString();
+        m.role = query.value(1).toString().toStdString();
+        m.status = query.value(2).toString().toStdString();
         members.push_back(m);
     }
-    sqlite3_finalize(stmt);
     return members;
 }
 
 void Database::setGroupPermissions(int groupId, bool adminsOnly) {
-    sqlite3_stmt* stmt;
-    const char* sql = "INSERT OR REPLACE INTO group_settings (group_id, admins_only_write) VALUES (?, ?);";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    sqlite3_bind_int(stmt, 2, adminsOnly ? 1 : 0);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    QSqlQuery query(m_db);
+    query.prepare("INSERT OR REPLACE INTO group_settings (group_id, admins_only_write) VALUES (?, ?);");
+    query.addBindValue(groupId);
+    query.addBindValue(adminsOnly ? 1 : 0);
+    
+    if (!query.exec()) check_qt_error(query);
 }
 
 GroupPermissions Database::getGroupPermissions(int groupId) {
     GroupPermissions p;
     p.adminsOnlyWrite = false;
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT admins_only_write FROM group_settings WHERE group_id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        p.adminsOnlyWrite = (sqlite3_column_int(stmt, 0) != 0);
+    
+    QSqlQuery query(m_db);
+    query.prepare("SELECT admins_only_write FROM group_settings WHERE group_id = ?;");
+    query.addBindValue(groupId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    if (query.next()) {
+        p.adminsOnlyWrite = query.value(0).toInt() != 0;
     }
-    sqlite3_finalize(stmt);
     return p;
 }
 
 std::string Database::getGroupOwner(int groupId) {
-    sqlite3_stmt* stmt;
-    const char* sql = "SELECT owner_id FROM groups WHERE id = ?;";
-    int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0);
-    check_sqlite(rc, m_db);
-    sqlite3_bind_int(stmt, 1, groupId);
-    std::string owner = "me";
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        owner = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+    QSqlQuery query(m_db);
+    query.prepare("SELECT owner_id FROM groups WHERE id = ?;");
+    query.addBindValue(groupId);
+    
+    if (!query.exec()) check_qt_error(query);
+
+    if (query.next()) {
+        return query.value(0).toString().toStdString();
     }
-    sqlite3_finalize(stmt);
-    return owner;
+    return "me";
 }
 
-}
-}
+} // namespace Core
+} // namespace CipherMesh
