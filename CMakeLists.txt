@@ -1,4 +1,4 @@
-# --- CRITICAL FIXES FOR ARCH LINUX & ANDROID ---
+# --- CRITICAL FIXES FOR ANDROID NDK + LIBDATACHANNEL ---
 set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
 cmake_minimum_required(VERSION 3.16)
 
@@ -32,6 +32,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(mbedtls)
 
+# 🔑 [THE CRITICAL BRIDGE] Force FindMbedTLS to succeed using absolute FILEPATHs
+set(MbedTLS_FOUND TRUE CACHE BOOL "" FORCE)
+set(MbedTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+set(MbedTLS_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedtls.a" CACHE FILEPATH "" FORCE)
+set(MbedX509_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedx509.a" CACHE FILEPATH "" FORCE)
+set(MbedCrypto_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedcrypto.a" CACHE FILEPATH "" FORCE)
+
 # B. Libsodium
 FetchContent_Declare(
     sodium
@@ -42,7 +49,7 @@ FetchContent_Declare(
 set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
-# C. LibDataChannel
+# C. LibDataChannel (Will now find MbedTLS correctly via variables above)
 FetchContent_Declare(
     LibDataChannel
     GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
@@ -51,12 +58,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(LibDataChannel)
 
-# --- 3. [THE FIX] Define Absolute Paths to Libraries ---
-# This bypasses the "Target not found" error entirely.
-set(SODIUM_STATIC_LIB "${sodium_BINARY_DIR}/liblibsodium.a")
-set(MBEDTLS_STATIC_LIB "${mbedtls_BINARY_DIR}/library/libmbedtls.a")
-set(MBEDX509_STATIC_LIB "${mbedtls_BINARY_DIR}/library/libmbedx509.a")
-set(MBEDCRYPTO_STATIC_LIB "${mbedtls_BINARY_DIR}/library/libmbedcrypto.a")
+# --- 3. Archive Path Variables (For final linking) ---
+set(SODIUM_STATIC_LIB "${sodium_BINARY_DIR}/src/libsodium/.libs/liblibsodium.a")
+set(MBEDTLS_STATIC_LIB "${MbedTLS_LIBRARY}")
+set(MBEDX509_STATIC_LIB "${MbedX509_LIBRARY}")
+set(MBEDCRYPTO_STATIC_LIB "${MbedCrypto_LIBRARY}")
 
 # --- 4. Find Qt Packages ---
 find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent Quick WebSockets)
@@ -81,19 +87,22 @@ target_include_directories(ciphermesh-core PUBLIC
     src/core src/p2p src/p2p_webrtc
     ${sodium_SOURCE_DIR}/src/libsodium/include
     ${libdatachannel_SOURCE_DIR}/include
-    ${mbedtls_SOURCE_DIR}/include
+    ${MbedTLS_INCLUDE_DIR}
 )
 
+target_compile_options(ciphermesh-core PRIVATE -Wno-macro-redefined)
+
+# Link using absolute paths to bypass NDK target-visibility issues
 target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core Qt6::Network Qt6::Sql Qt6::Concurrent Qt6::WebSockets
     LibDataChannel::LibDataChannelStatic
-    ${SODIUM_STATIC_LIB}
-    ${MBEDTLS_STATIC_LIB}
-    ${MBEDX509_STATIC_LIB}
-    ${MBEDCRYPTO_STATIC_LIB}
+    "${SODIUM_STATIC_LIB}"
+    "${MBEDTLS_STATIC_LIB}"
+    "${MBEDX509_STATIC_LIB}"
+    "${MBEDCRYPTO_STATIC_LIB}"
 )
 
-# --- 7. Android / Mobile Build ---
+# --- 7. Android Build ---
 if(ANDROID)
     qt_add_executable(CipherMesh-Mobile MANUAL_FINALIZATION WIN32 MACOSX_BUNDLE
         src/mobile/main_mobile.cpp
@@ -101,8 +110,6 @@ if(ANDROID)
         src/mobile/qml.qrc
     )
 
-    # Use --whole-archive with absolute paths to ensure the linker finds the files
-    # and includes all symbols despite the aggressive Android stripping.
     target_link_libraries(CipherMesh-Mobile PRIVATE
         ciphermesh-core
         -Wl,--whole-archive
