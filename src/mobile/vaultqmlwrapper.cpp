@@ -20,7 +20,8 @@ VaultQmlWrapper::VaultQmlWrapper(CipherMesh::Core::Vault* vault, QObject* parent
       m_p2pService(nullptr),
       m_autoLockTimer(nullptr),
       m_totpTimer(nullptr),
-      m_autoLockMinutes(5)
+      m_autoLockMinutes(5),
+      m_currentGroupName("Personal")
 {
     setupTimers();
 }
@@ -62,12 +63,38 @@ void VaultQmlWrapper::onTOTPTimerTick() {
 bool VaultQmlWrapper::unlockVault(const QString& password) {
     if (!m_vault) return false;
     
-    bool success = m_vault->verifyMasterPassword(password.toStdString());
+    // Get the database path from the property set in main
+    QString dbPath = property("dbPath").toString();
+    bool vaultExists = property("vaultExists").toBool();
+    
+    if (dbPath.isEmpty()) {
+        emit errorOccurred("Database path not set");
+        return false;
+    }
+    
+    bool success = false;
+    
+    // If vault doesn't exist, create it
+    if (!vaultExists) {
+        success = m_vault->createNewVault(dbPath.toStdString(), password.toStdString());
+        if (success) {
+            // Update the property so we know vault exists now
+            setProperty("vaultExists", true);
+            // Create default Personal group
+            m_vault->addGroup("Personal");
+            m_vault->setActiveGroup("Personal");
+            m_currentGroupName = "Personal";
+        }
+    } else {
+        // Vault exists, try to load it
+        success = m_vault->loadVault(dbPath.toStdString(), password.toStdString());
+    }
     
     if (success) {
         emit lockStatusChanged();
         resetAutoLockTimer();
     }
+    
     return success;
 }
 
@@ -102,7 +129,7 @@ QVariantList VaultQmlWrapper::getGroups() {
     if (!m_vault || m_vault->isLocked()) return list;
     
     try {
-        auto groups = m_vault->getGroups();
+        auto groups = m_vault->getGroupNames();
         for (const auto& group : groups) {
             QVariantMap map;
             map["name"] = QString::fromStdString(group);
@@ -118,10 +145,13 @@ bool VaultQmlWrapper::setActiveGroup(const QString& groupName) {
     if (!m_vault || m_vault->isLocked()) return false;
     
     try {
-        m_vault->setActiveGroup(groupName.toStdString());
-        emit currentGroupChanged();
+        bool success = m_vault->setActiveGroup(groupName.toStdString());
+        if (success) {
+            m_currentGroupName = groupName;
+            emit currentGroupChanged();
+        }
         resetAutoLockTimer();
-        return true;
+        return success;
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Error setting active group: %1").arg(e.what()));
         return false;
@@ -132,7 +162,7 @@ bool VaultQmlWrapper::createGroup(const QString& groupName) {
     if (!m_vault || m_vault->isLocked()) return false;
     
     try {
-        bool success = m_vault->createGroup(groupName.toStdString());
+        bool success = m_vault->addGroup(groupName.toStdString());
         if (success) {
             emit groupsChanged();
         }
@@ -161,24 +191,19 @@ bool VaultQmlWrapper::deleteGroup(const QString& groupName) {
 }
 
 bool VaultQmlWrapper::renameGroup(const QString& oldName, const QString& newName) {
-    if (!m_vault || m_vault->isLocked()) return false;
-    
-    try {
-        bool success = m_vault->renameGroup(oldName.toStdString(), newName.toStdString());
-        if (success) {
-            emit groupsChanged();
-        }
-        resetAutoLockTimer();
-        return success;
-    } catch (const std::exception& e) {
-        emit errorOccurred(QString("Error renaming group: %1").arg(e.what()));
-        return false;
-    }
+    // Renaming groups is not supported by the core vault
+    // We would need to delete and recreate, but that's risky
+    emit errorOccurred("Renaming groups is not currently supported");
+    return false;
 }
 
 QString VaultQmlWrapper::currentGroup() const {
+    // Since the Vault class doesn't expose the active group name directly,
+    // we'll track it ourselves in the wrapper
     if (!m_vault || m_vault->isLocked()) return QString();
-    return QString::fromStdString(m_vault->getActiveGroup());
+    
+    // Return the internally tracked group name
+    return m_currentGroupName;
 }
 
 // -- Entry Operations --

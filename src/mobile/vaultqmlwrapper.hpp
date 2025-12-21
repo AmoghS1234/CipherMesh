@@ -107,6 +107,7 @@ private:
     QTimer* m_totpTimer;
     int m_autoLockMinutes;
     QString m_currentUserId;
+    QString m_currentGroupName;
     
     void resetAutoLockTimer();
     void setupTimers();
