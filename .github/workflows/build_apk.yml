@@ -28,12 +28,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install aqtinstall
 
-          # Install Qt for Android (target) + required modules
+          # Android Qt (target)
           python -m aqt install-qt linux android 6.5.0 android_armv7 \
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
-          # Install Qt for Desktop (host tools) + required modules
+          # Desktop Qt (host tools)
           python -m aqt install-qt linux desktop 6.5.0 gcc_64 \
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
@@ -62,3 +62,9 @@ jobs:
             -DANDROID_ABI=armeabi-v7a
 
           cmake --build . --target apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CipherMesh-APK
+          path: build/android-build/build/outputs/apk/**/*.apk
