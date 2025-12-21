@@ -59,11 +59,35 @@ FetchContent_Declare(
 set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
-# --- [FIX] Libsodium Header Compatibility Layer ---
+# --- [FIX] Canonical Android Target Creation for Libsodium ---
+# Libsodium often fails to export a target on Android. We create one manually.
+if(NOT TARGET libsodium)
+    # 1. Find the physical static library file
+    find_library(
+        LIBSODIUM_A
+        NAMES libsodium sodium
+        PATHS ${sodium_BINARY_DIR}
+        NO_DEFAULT_PATH
+    )
+
+    if(NOT LIBSODIUM_A)
+        message(FATAL_ERROR "libsodium static library not found in ${sodium_BINARY_DIR}")
+    endif()
+
+    # 2. Define the target
+    add_library(libsodium STATIC IMPORTED GLOBAL)
+    set_target_properties(libsodium PROPERTIES
+        IMPORTED_LOCATION "${LIBSODIUM_A}"
+        INTERFACE_INCLUDE_DIRECTORIES "${sodium_SOURCE_DIR}/src/libsodium/include"
+    )
+    
+    message(STATUS "Created imported target 'libsodium' at ${LIBSODIUM_A}")
+endif()
+
+# --- [FIX] Header Compatibility Layer (Kept for safety) ---
 set(SODIUM_COMPAT_DIR "${CMAKE_BINARY_DIR}/sodium_compat")
 file(MAKE_DIRECTORY "${SODIUM_COMPAT_DIR}/sodium")
 
-# 1. Handle version.h
 if(EXISTS "${sodium_BINARY_DIR}/version.h")
     file(COPY "${sodium_BINARY_DIR}/version.h" DESTINATION "${SODIUM_COMPAT_DIR}/sodium")
 else()
@@ -78,15 +102,10 @@ else()
     endif()
 endif()
 
-# 2. Handle export.h (With warning suppression)
-if(EXISTS "${sodium_BINARY_DIR}/export.h")
-    file(COPY "${sodium_BINARY_DIR}/export.h" DESTINATION "${SODIUM_COMPAT_DIR}/sodium")
-else()
-    if(NOT EXISTS "${SODIUM_COMPAT_DIR}/sodium/export.h")
-        file(WRITE "${SODIUM_COMPAT_DIR}/sodium/export.h" 
-            "#ifndef SODIUM_EXPORT\n#define SODIUM_EXPORT\n#endif\n#ifndef SODIUM_EXPORT_WEAK\n#define SODIUM_EXPORT_WEAK\n#endif\n"
-        )
-    endif()
+if(NOT EXISTS "${SODIUM_COMPAT_DIR}/sodium/export.h")
+    file(WRITE "${SODIUM_COMPAT_DIR}/sodium/export.h" 
+        "#ifndef SODIUM_EXPORT\n#define SODIUM_EXPORT\n#endif\n#ifndef SODIUM_EXPORT_WEAK\n#define SODIUM_EXPORT_WEAK\n#endif\n"
+    )
 endif()
 # -------------------------------------------------------------------
 
@@ -124,18 +143,22 @@ target_include_directories(ciphermesh-core PUBLIC
     ${mbedtls_SOURCE_DIR}/include
 )
 
+# Optional: Silence redefinition warnings
+target_compile_options(ciphermesh-core PRIVATE -Wno-macro-redefined)
+
+# ✅ Correct Linking: Link against TARGETS, not files
 target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core
     Qt6::Network
     Qt6::Sql
     Qt6::Concurrent
     Qt6::WebSockets
-    # Correct CMake target name: 'sodium' (not 'libsodium')
-    sodium
-    LibDataChannel::LibDataChannelStatic
+    
+    libsodium   # This now refers to our IMPORTED target
     mbedtls
     mbedcrypto
     mbedx509
+    LibDataChannel::LibDataChannelStatic
 )
 
 # --- 5. Android / Mobile Build ---
@@ -148,13 +171,12 @@ if(ANDROID)
 
     target_include_directories(CipherMesh-Mobile PRIVATE src/mobile)
 
-    # ⚠️ FINAL FIX: Use Generator Expressions on REAL targets
-    # This forces CMake to pass absolute paths to the .a files to the linker.
+    # ✅ Correct Android Linking: Use Generator Expressions for dependencies
+    # This forces the linker to use absolute paths to the .a files
     target_link_libraries(CipherMesh-Mobile PRIVATE
         ciphermesh-core
         
-        # Resolve absolute paths to static library files
-        $<TARGET_FILE:sodium>
+        $<TARGET_FILE:libsodium>
         $<TARGET_FILE:mbedtls>
         $<TARGET_FILE:mbedcrypto>
         $<TARGET_FILE:mbedx509>
