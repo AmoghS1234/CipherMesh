@@ -103,8 +103,10 @@ target_link_libraries(ciphermesh-core PRIVATE
 
 # --- 5. Android / Mobile Build ---
 # --- 5. Android / Mobile Build ---
+# --- 5. Android / Mobile Build ---
 if(ANDROID)
-    add_executable(CipherMesh-Mobile WIN32 MACOSX_BUNDLE
+    # CHANGE: Use qt_add_executable with MANUAL_FINALIZATION
+    qt_add_executable(CipherMesh-Mobile MANUAL_FINALIZATION WIN32 MACOSX_BUNDLE
         src/mobile/main_mobile.cpp
         src/mobile/vaultqmlwrapper.cpp
         src/mobile/qml.qrc
@@ -124,9 +126,8 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android
     )
 
-    # <<<<<< ADD THIS LINE >>>>>>
+    # This line will now work because of MANUAL_FINALIZATION above
     qt_finalize_executable(CipherMesh-Mobile)
-
 endif()
 
 # --- 6. Desktop Build ---
