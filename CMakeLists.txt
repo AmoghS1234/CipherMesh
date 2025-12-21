@@ -102,6 +102,7 @@ target_link_libraries(ciphermesh-core PRIVATE
 )
 
 # --- 5. Android / Mobile Build ---
+# --- 5. Android / Mobile Build ---
 if(ANDROID)
     add_executable(CipherMesh-Mobile WIN32 MACOSX_BUNDLE
         src/mobile/main_mobile.cpp
@@ -122,6 +123,10 @@ if(ANDROID)
     set_target_properties(CipherMesh-Mobile PROPERTIES
         QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android
     )
+
+    # <<<<<< ADD THIS LINE >>>>>>
+    qt_finalize_executable(CipherMesh-Mobile)
+
 endif()
 
 # --- 6. Desktop Build ---
