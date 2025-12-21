@@ -23,17 +23,17 @@ jobs:
       - name: Setup Android SDK / NDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Qt (Android + Desktop with required modules)
+      - name: Install Qt (Android ARM64 + Desktop)
         run: |
           python -m pip install --upgrade pip
           python -m pip install aqtinstall
 
-          # Qt for Android (ARM64 – REQUIRED for Qt Quick)
+          echo ">>> Installing Qt Android ARM64"
           python -m aqt install-qt linux android 6.5.0 android_arm64_v8a \
             --modules qtdeclarative qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
-          # Qt for Desktop (host tools)
+          echo ">>> Installing Qt Desktop (host tools)"
           python -m aqt install-qt linux desktop 6.5.0 gcc_64 \
             --modules qtdeclarative qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
@@ -43,11 +43,15 @@ jobs:
           export ANDROID_QT=$GITHUB_WORKSPACE/Qt/6.5.0/android_arm64_v8a
           export HOST_QT=$GITHUB_WORKSPACE/Qt/6.5.0/gcc_64
 
-          # Fix execute permissions on Qt tools (critical in CI)
+          echo "ANDROID_QT=$ANDROID_QT"
+          echo "HOST_QT=$HOST_QT"
+
+          # Fix execute permissions (required on GitHub runners)
           chmod +x $ANDROID_QT/bin/* || true
           chmod +x $HOST_QT/bin/* || true
 
           export PATH=$ANDROID_QT/bin:$HOST_QT/bin:$PATH
+          which qt-cmake
 
           mkdir -p build
           cd build
