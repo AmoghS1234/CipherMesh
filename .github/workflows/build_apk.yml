@@ -46,11 +46,11 @@ jobs:
           echo "Android Qt: $ANDROID_QT"
           echo "Host Qt:    $HOST_QT"
 
+          # Ensure Qt tools are executable (GitHub runner quirk)
           chmod +x $ANDROID_QT/bin/* || true
           chmod +x $HOST_QT/bin/* || true
 
           export PATH=$ANDROID_QT/bin:$HOST_QT/bin:$PATH
-          which qt-cmake
 
           mkdir -p build
           cd build
@@ -61,18 +61,18 @@ jobs:
             -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
             -DANDROID_ABI=armeabi-v7a
 
-          cmake --build . --target apk
+          # ✅ Correct Qt 6 Android build target
+          cmake --build . --target CipherMesh_make_apk
 
-      # (Optional) Shows exactly where Qt placed the APK
-      - name: Locate APK
+      - name: Locate APK (debug)
         run: |
           echo "Searching for APK files..."
-          find . -name "*.apk" -type f
+          find build -name "*.apk" -type f
 
-      # ✅ Correct upload path for Qt Android builds
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: CipherMesh-APK
-          path: android-build/**/*.apk
+          # ✅ Correct path: android-build is inside build/
+          path: build/**/*.apk
           if-no-files-found: error
