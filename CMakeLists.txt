@@ -1,4 +1,4 @@
-# --- CRITICAL FIXES FOR ANDROID NDK + LIBDATACHANNEL ---
+# --- FINAL PRODUCTION FIXES FOR ANDROID NDK + AUTOTOOLS ABI ---
 set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
 cmake_minimum_required(VERSION 3.16)
 
@@ -20,8 +20,37 @@ set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 cmake_policy(SET CMP0077 NEW)
 add_compile_definitions(MBEDTLS_SSL_DTLS_SRTP)
 
-# --- 2. Fetch Dependencies ---
 include(FetchContent)
+include(ExternalProject)
+
+# --- 2. Build Libsodium (The Hardened ExternalProject) ---
+set(SODIUM_BUILD_DIR "${CMAKE_BINARY_DIR}/libsodium-build")
+set(SODIUM_STATIC_LIB "${SODIUM_BUILD_DIR}/src/libsodium/.libs/liblibsodium.a")
+
+ExternalProject_Add(libsodium_ext
+    GIT_REPOSITORY https://github.com/jedisct1/libsodium.git
+    GIT_TAG stable
+    GIT_SHALLOW TRUE
+    PREFIX libsodium
+    CONFIGURE_COMMAND <SOURCE_DIR>/configure
+        --host=armv7a-linux-androideabi
+        --enable-static
+        --disable-shared
+        CC=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang
+        # CFLAGS must include the target triple for NDK clang to act as a cross-compiler
+        CFLAGS=--target=armv7a-linux-androideabi21
+        AR=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+        RANLIB=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+    BUILD_COMMAND make -j$(nproc)
+    INSTALL_COMMAND ""
+    BUILD_BYPRODUCTS "${SODIUM_STATIC_LIB}"
+)
+
+# [FIX 1] Retrieve the source directory property from the ExternalProject
+ExternalProject_Get_Property(libsodium_ext SOURCE_DIR)
+set(LIBSODIUM_SOURCE_DIR ${SOURCE_DIR})
+
+# --- 3. Fetch CMake-based Dependencies ---
 
 # A. MbedTLS
 FetchContent_Declare(
@@ -32,24 +61,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(mbedtls)
 
-# 🔑 [THE CRITICAL BRIDGE] Force FindMbedTLS to succeed using absolute FILEPATHs
+# Force Bridge variables for LibDataChannel (Must use FILEPATHs)
 set(MbedTLS_FOUND TRUE CACHE BOOL "" FORCE)
 set(MbedTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
 set(MbedTLS_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedtls.a" CACHE FILEPATH "" FORCE)
 set(MbedX509_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedx509.a" CACHE FILEPATH "" FORCE)
 set(MbedCrypto_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedcrypto.a" CACHE FILEPATH "" FORCE)
 
-# B. Libsodium
-FetchContent_Declare(
-    sodium
-    GIT_REPOSITORY https://github.com/jedisct1/libsodium.git
-    GIT_TAG stable
-    GIT_SHALLOW TRUE
-)
-set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(sodium)
-
-# C. LibDataChannel (Will now find MbedTLS correctly via variables above)
+# B. LibDataChannel
 FetchContent_Declare(
     LibDataChannel
     GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
@@ -57,12 +76,6 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(LibDataChannel)
-
-# --- 3. Archive Path Variables (For final linking) ---
-set(SODIUM_STATIC_LIB "${sodium_BINARY_DIR}/src/libsodium/.libs/liblibsodium.a")
-set(MBEDTLS_STATIC_LIB "${MbedTLS_LIBRARY}")
-set(MBEDX509_STATIC_LIB "${MbedX509_LIBRARY}")
-set(MBEDCRYPTO_STATIC_LIB "${MbedCrypto_LIBRARY}")
 
 # --- 4. Find Qt Packages ---
 find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent Quick WebSockets)
@@ -82,24 +95,25 @@ add_library(ciphermesh-core STATIC
     src/p2p_webrtc/webrtcservice.cpp
 )
 
+add_dependencies(ciphermesh-core libsodium_ext)
+
 target_include_directories(ciphermesh-core SYSTEM BEFORE PUBLIC ${SODIUM_COMPAT_DIR})
 target_include_directories(ciphermesh-core PUBLIC
     src/core src/p2p src/p2p_webrtc
-    ${sodium_SOURCE_DIR}/src/libsodium/include
+    ${LIBSODIUM_SOURCE_DIR}/src/libsodium/include # [FIX] Correct variable
     ${libdatachannel_SOURCE_DIR}/include
     ${MbedTLS_INCLUDE_DIR}
 )
 
 target_compile_options(ciphermesh-core PRIVATE -Wno-macro-redefined)
 
-# Link using absolute paths to bypass NDK target-visibility issues
 target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core Qt6::Network Qt6::Sql Qt6::Concurrent Qt6::WebSockets
     LibDataChannel::LibDataChannelStatic
     "${SODIUM_STATIC_LIB}"
-    "${MBEDTLS_STATIC_LIB}"
-    "${MBEDX509_STATIC_LIB}"
-    "${MBEDCRYPTO_STATIC_LIB}"
+    "${MbedTLS_LIBRARY}"
+    "${MbedX509_LIBRARY}"
+    "${MbedCrypto_LIBRARY}"
 )
 
 # --- 7. Android Build ---
@@ -110,13 +124,15 @@ if(ANDROID)
         src/mobile/qml.qrc
     )
 
+    add_dependencies(CipherMesh-Mobile libsodium_ext)
+
     target_link_libraries(CipherMesh-Mobile PRIVATE
         ciphermesh-core
         -Wl,--whole-archive
         "${SODIUM_STATIC_LIB}"
-        "${MBEDTLS_STATIC_LIB}"
-        "${MBEDX509_STATIC_LIB}"
-        "${MBEDCRYPTO_STATIC_LIB}"
+        "${MbedTLS_LIBRARY}"
+        "${MbedX509_LIBRARY}"
+        "${MbedCrypto_LIBRARY}"
         -Wl,--no-whole-archive
         LibDataChannel::LibDataChannelStatic
         Qt6::Quick Qt6::Core Qt6::Network Qt6::WebSockets
