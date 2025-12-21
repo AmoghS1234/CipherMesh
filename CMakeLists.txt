@@ -32,7 +32,7 @@ if(DEFINED sodium_INCLUDE_DIR AND DEFINED sodium_LIBRARY_RELEASE)
     )
     message(STATUS "Using pre-built libsodium: ${sodium_LIBRARY_RELEASE}")
 else()
-    # Fallback:  find system libsodium
+    # Fallback: find system libsodium
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
@@ -58,7 +58,7 @@ set(MbedTLS_FOUND TRUE CACHE BOOL "" FORCE)
 set(MbedTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
 set(MbedTLS_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedtls.a" CACHE FILEPATH "" FORCE)
 set(MbedX509_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedx509.a" CACHE FILEPATH "" FORCE)
-set(MbedCrypto_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedcrypto. a" CACHE FILEPATH "" FORCE)
+set(MbedCrypto_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedcrypto.a" CACHE FILEPATH "" FORCE)
 
 # B. LibDataChannel
 FetchContent_Declare(
@@ -80,8 +80,8 @@ file(WRITE "${SODIUM_COMPAT_DIR}/sodium/version.h" "#define SODIUM_VERSION_STRIN
 
 # --- 6. Core Library ---
 add_library(ciphermesh-core STATIC
-    src/core/crypto. cpp
-    src/core/vault.cpp
+    src/core/crypto.cpp
+    src/core/vault. cpp
     src/core/database.cpp
     src/p2p/ip2pservice.cpp
     src/p2p_webrtc/webrtcservice.cpp
@@ -103,7 +103,7 @@ endif()
 target_compile_options(ciphermesh-core PRIVATE -Wno-macro-redefined)
 
 target_link_libraries(ciphermesh-core PRIVATE
-    Qt6::Core Qt6::Network Qt6::Sql Qt6::Concurrent Qt6::WebSockets
+    Qt6::Core Qt6::Network Qt6::Sql Qt6:: Concurrent Qt6::WebSockets
     LibDataChannel::LibDataChannelStatic
     sodium
     "${MbedTLS_LIBRARY}"
@@ -116,7 +116,7 @@ if(ANDROID)
     qt_add_executable(CipherMesh-Mobile MANUAL_FINALIZATION WIN32 MACOSX_BUNDLE
         src/mobile/main_mobile.cpp
         src/mobile/vaultqmlwrapper.cpp
-        src/mobile/qml. qrc
+        src/mobile/qml.qrc
     )
 
     target_link_libraries(CipherMesh-Mobile PRIVATE
@@ -128,7 +128,7 @@ if(ANDROID)
         "${MbedCrypto_LIBRARY}"
         -Wl,--no-whole-archive
         LibDataChannel::LibDataChannelStatic
-        Qt6::Quick Qt6::Core Qt6::Network Qt6::WebSockets
+        Qt6::Quick Qt6:: Core Qt6::Network Qt6:: WebSockets
     )
 
     set_target_properties(CipherMesh-Mobile PROPERTIES
@@ -138,10 +138,10 @@ if(ANDROID)
 endif()
 
 # --- 8. Desktop Build ---
-if(NOT ANDROID AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/desktop/main. cpp")
+if(NOT ANDROID AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/desktop/main.cpp")
     add_executable(CipherMesh-Desktop
         src/desktop/main.cpp
         src/desktop/mainwindow.cpp
     )
-    target_link_libraries(CipherMesh-Desktop PRIVATE ciphermesh-core Qt6:: Widgets)
+    target_link_libraries(CipherMesh-Desktop PRIVATE ciphermesh-core Qt6::Widgets)
 endif()
