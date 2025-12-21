@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Qt libraries to load -->
+    <array name="qt_libs">
+        <item>Qt6Core</item>
+        <item>Qt6Gui</item>
+        <item>Qt6Qml</item>
+        <item>Qt6QmlModels</item>
+        <item>Qt6Quick</item>
+        <item>Qt6QuickControls2</item>
+        <item>Qt6QuickTemplates2</item>
+        <item>Qt6Network</item>
+        <item>Qt6Concurrent</item>
+    </array>
+
+    <!-- Bundled libraries (your app libraries) -->
+    <array name="bundled_libs">
+        <item>CipherMesh-Mobile</item>
+    </array>
+
+    <!-- Qt sources -->
+    <array name="qt_sources">
+        <item>https://download.qt.io/ministro/android/qt6/qt-6.5</item>
+    </array>
+
+    <!-- Libraries to load on startup -->
+    <array name="load_local_libs">
+        <item>plugins/platforms/android/libqtforandroid_x86.so</item>
+        <item>plugins/platforms/android/libqtforandroid_x86_64.so</item>
+        <item>plugins/platforms/android/libqtforandroid_armeabi-v7a.so</item>
+        <item>plugins/platforms/android/libqtforandroid_arm64-v8a.so</item>
+    </array>
+
+    <!-- Application strings -->
+    <string name="app_name">CipherMesh</string>
+</resources>
