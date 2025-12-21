@@ -15,9 +15,6 @@ class Crypto;
 namespace CipherMesh {
 namespace Core {
 
-// REMOVED: Structs GroupMember and GroupPermissions
-// They are already defined in "vault_entry.hpp"
-
 class Vault {
 public:
     Vault();
@@ -26,13 +23,9 @@ public:
     bool createNewVault(const std::string& path, const std::string& masterPassword);
     bool loadVault(const std::string& path, const std::string& masterPassword);
     
-    // Locks the vault by wiping encryption keys from memory
-    // NOTE: Database remains open to allow password verification
     void lock();
     bool isLocked() const;
 
-    // Verify master password - works even when vault is locked
-    // This allows browser extensions to authenticate before performing operations
     bool verifyMasterPassword(const std::string& password);
     bool changeMasterPassword(const std::string& newPassword);
 
@@ -88,15 +81,14 @@ public:
     std::string getUserId();
     
     bool canUserEdit(const std::string& groupName);
-    // ... (existing public methods) ...
     
     // --- Theme Persistence ---
     void setThemeId(const std::string& themeId);
     std::string getThemeId();
     
     // --- Auto-lock Settings ---
-    void setAutoLockTimeout(int minutes); // 0 = never auto-lock
-    int getAutoLockTimeout(); // Returns timeout in minutes, 0 = disabled
+    void setAutoLockTimeout(int minutes); 
+    int getAutoLockTimeout();
     
     // --- Password History ---
     std::vector<PasswordHistoryEntry> getPasswordHistory(int entryId);
@@ -106,17 +98,31 @@ public:
     void updateEntryAccessTime(int entryId);
     std::vector<VaultEntry> getRecentlyAccessedEntries(int limit = 5);
 
+    // --- P2P ASYMMETRIC KEYS ---
+    std::string getIdentityPublicKey(); 
+    std::string decryptIncomingKey(const std::string& encryptedBase64);
+    
+    // Encrypts data specifically for a recipient using their Public Key (Sealed Box)
+    // Added for Secure Sender Logic
+    std::vector<unsigned char> encryptForUser(const std::string& recipientPubKeyBase64, const std::vector<unsigned char>& data);
+
 private:
     std::unique_ptr<Database> m_db;
     std::unique_ptr<Crypto> m_crypto;
     std::vector<unsigned char> m_masterKey_RAM;
     std::vector<unsigned char> m_activeGroupKey_RAM;
+    
+    // Ephemeral Identity Keys
+    std::vector<unsigned char> m_identityPrivateKey;
+    std::vector<unsigned char> m_identityPublicKey;
+
     int m_activeGroupId;
     std::string m_activeGroupName;
     std::string m_dbPath; 
 
     void checkLocked() const;
     void checkGroupActive() const;
+    void ensureIdentityKeys(); // Helper to load/gen keys
 };
 
 }

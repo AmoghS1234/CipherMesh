@@ -10,7 +10,10 @@
 #include "settingsdialog.hpp"
 #include "passwordhistorydialog.hpp"
 #include "toast.hpp"
-#include "webrtcservice.hpp" 
+// --- IMPORTANT: Include full definitions for casting ---
+#include "../p2p_webrtc/webrtcservice.hpp" 
+#include "../p2p/ip2pservice.hpp"
+// -------------------------------------------------------
 #include "themes.hpp"
 #include "totp.hpp"
 #include "breach_checker.hpp"
@@ -119,6 +122,7 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
         }, Qt::QueuedConnection);
     };
     
+    // --- P2P HANDLER FIXED FOR ENCRYPTION ---
     p2pWorker->onGroupDataReceived = [this](const std::string& senderId,
                                             const std::string& groupName, 
                                             const std::vector<unsigned char>& key, 
@@ -129,16 +133,15 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
         }, Qt::QueuedConnection);
     };
     
-    // --- NEW: Handle Peer Coming Online ---
     p2pWorker->onPeerOnline = [this](const std::string& userId) {
         QMetaObject::invokeMethod(this, [this, userId]() {
             handlePeerOnline(QString::fromStdString(userId));
         }, Qt::QueuedConnection);
     };
 
-    p2pWorker->onDataRequested = [this](const std::string& requesterId, const std::string& groupName) {
-        QMetaObject::invokeMethod(this, [this, requesterId, groupName]() {
-            handleDataRequested(QString::fromStdString(requesterId), QString::fromStdString(groupName));
+    p2pWorker->onDataRequested = [this](const std::string& requesterId, const std::string& groupName, const std::string& requesterPubKey) {
+        QMetaObject::invokeMethod(this, [this, requesterId, groupName, requesterPubKey]() {
+            handleDataRequested(QString::fromStdString(requesterId), QString::fromStdString(groupName), QString::fromStdString(requesterPubKey));
         }, Qt::QueuedConnection);
     };
     
@@ -325,13 +328,43 @@ void MainWindow::handlePeerOnline(const QString& userId) {
     }
 }
 
+// --- FIXED GROUP DATA HANDLER ---
 void MainWindow::handleGroupData(const QString& senderId,
                                  const QString& groupName, 
-                                 const std::vector<unsigned char>& key, 
+                                 const std::vector<unsigned char>& encryptedKeyData, 
                                  const std::vector<CipherMesh::Core::VaultEntry>& entries)
 {
     if (!m_vault) return;
 
+    std::vector<unsigned char> finalKey;
+
+    // 1. Check if it's already a raw key (Local Desktop-to-Desktop Test)
+    if (encryptedKeyData.size() == 32) {
+        finalKey = encryptedKeyData;
+    } 
+    // 2. Otherwise assume it's encrypted (Android-to-Desktop or Production)
+    else {
+        try {
+            // ⚠️ FIX: DO NOT RE-ENCODE.
+            // The encryptedKeyData vector already contains the ASCII characters of the Base64 string.
+            // Just convert the vector directly to a string.
+            std::string base64Ciphertext(encryptedKeyData.begin(), encryptedKeyData.end());
+            
+            // Now decrypt (Crypto class will handle the Base64 decode internally)
+            std::string decryptedKeyStr = m_vault->decryptIncomingKey(base64Ciphertext);
+            finalKey.assign(decryptedKeyStr.begin(), decryptedKeyStr.end());
+            qDebug() << "Successfully decrypted group key. Size:" << finalKey.size();
+        } 
+        catch (const std::exception& e) {
+            QMessageBox::critical(this, "Import Failed", 
+                "Could not decrypt the group key from " + senderId + ".\nError: " + e.what());
+            return;
+        }
+    }
+
+    // ... (The rest of the function remains exactly the same) ...
+    
+    // Logic to handle invite cleanup
     int inviteIdToDelete = -1;
     auto invites = m_vault->getPendingInvites();
     for(const auto& inv : invites) {
@@ -341,13 +374,15 @@ void MainWindow::handleGroupData(const QString& senderId,
         }
     }
 
+    // Handle duplicate names
     std::string finalName = groupName.toStdString();
     int counter = 1;
     while (m_vault->groupExists(finalName)) {
         finalName = groupName.toStdString() + " (Shared " + std::to_string(counter++) + ")";
     }
 
-    if (m_vault->addGroup(finalName, key)) {
+    // Import using the correct key
+    if (m_vault->addGroup(finalName, finalKey)) {
         m_vault->importGroupEntries(finalName, entries);
         
         if (inviteIdToDelete != -1) {
@@ -816,25 +851,25 @@ void MainWindow::updateWindowTitle()
     setWindowTitle(QString("CipherMesh - %1 - %2").arg(lockStatus, m_currentUserId));
 }
 
+// --- UPDATED POST-UNLOCK INIT (Sends Public Key) ---
 void MainWindow::postUnlockInit()
 {
     updateWindowTitle();
-    // ... (Theme logic) ...
     
-    // Notify P2P service that user is authenticated and can go online
+    // Inject Public Key into Service
     if (m_p2pService) {
+        // dynamic_cast requires complete type (webrtcservice.hpp included)
         WebRTCService* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
-        if (webrtcService) {
+        if (webrtcService && m_vault) {
+            std::string myPubKey = m_vault->getIdentityPublicKey();
+            webrtcService->setIdentityPublicKey(myPubKey);
             QMetaObject::invokeMethod(webrtcService, "setAuthenticated", Qt::QueuedConnection, Q_ARG(bool, true));
         }
     }
     
     loadGroups();
-    restoreOutgoingInvites(); // <-- NEW: Restore the retry loop!
-    
+    restoreOutgoingInvites(); 
     if (m_groupListWidget->count() > 0) m_groupListWidget->setCurrentRow(0);
-    
-    // Start auto-lock timer
     resetAutoLockTimer();
 }
 
@@ -1340,8 +1375,8 @@ void MainWindow::onDeleteGroupClicked()
         return;
     }
     QMessageBox::StandardButton reply = QMessageBox::question(this, "Delete Group",
-                                  QString("Are you sure you want to permanently delete the group '%1' and all its entries?").arg(groupName),
-                                  QMessageBox::Yes | QMessageBox::No);
+                                                      QString("Are you sure you want to permanently delete the group '%1' and all its entries?").arg(groupName),
+                                                      QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         try {
             if (m_vault->deleteGroup(groupName.toStdString())) {
@@ -1376,8 +1411,8 @@ void MainWindow::onDeleteEntryClicked()
     }
     QString entryTitle = m_entryListWidget->currentItem()->text();
     QMessageBox::StandardButton reply = QMessageBox::question(this, "Delete Entry",
-                                  QString("Are you sure you want to permanently delete the entry '%1'?").arg(entryTitle),
-                                  QMessageBox::Yes | QMessageBox::No);
+                                                      QString("Are you sure you want to permanently delete the entry '%1'?").arg(entryTitle),
+                                                      QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         try {
             if (m_vault->deleteEntry(entryId)) {
@@ -1483,7 +1518,6 @@ void MainWindow::onChangeMasterPasswordClicked()
 void MainWindow::onLockVault()
 {
     if (m_vault && !m_vault->isLocked()) {
-        // Set authenticated to false before locking
         if (m_p2pService) {
             WebRTCService* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
             if (webrtcService) {
@@ -1524,29 +1558,41 @@ QIcon MainWindow::loadSvgIcon(const QByteArray& svgData, const QColor& color)
 }
 
 // Handle data request from receiver (Alice's logic)
-// This replaces the fragile RAM-based m_pendingKeys
-void MainWindow::handleDataRequested(const QString& requesterId, const QString& groupName) {
+// --- SECURE SENDER LOGIC ---
+void MainWindow::handleDataRequested(const QString& requesterId, const QString& groupName, const QString& requesterPubKey) {
     if (!m_vault || !m_p2pService) return;
 
     qDebug() << "Processing data request from" << requesterId << "for group" << groupName;
 
-    // A. Verify we have the group
+    // 1. Validation
     if (!m_vault->groupExists(groupName.toStdString())) {
         qWarning() << "Requested group not found:" << groupName;
         return;
     }
+    
+    if (requesterPubKey.isEmpty()) {
+        qWarning() << "SECURITY ERROR: Requester did not provide a Public Key. Aborting transfer.";
+        return;
+    }
 
-    // B. Export FRESH data from Vault
     try {
-        std::vector<unsigned char> key = m_vault->getGroupKey(groupName.toStdString());
+        // 2. Get the RAW Group Key (AES)
+        std::vector<unsigned char> rawGroupKey = m_vault->getGroupKey(groupName.toStdString());
+        
+        // 3. ENCRYPT the Key using the Requester's Public Key
+        // This ensures only the specific user who requested it can read the key.
+        std::vector<unsigned char> encryptedKey = m_vault->encryptForUser(requesterPubKey.toStdString(), rawGroupKey);
+        
+        // 4. Export Entries
         std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(groupName.toStdString());
         
-        // C. Send the data directly via P2P (not through invite flow)
-        m_p2pService->sendGroupData(requesterId.toStdString(), groupName.toStdString(), key, entries);
+        // 5. Send the ENCRYPTED key
+        m_p2pService->sendGroupData(requesterId.toStdString(), groupName.toStdString(), encryptedKey, entries);
         
-        CipherMesh::Core::Crypto::secureWipe(key);
+        // 6. Cleanup
+        CipherMesh::Core::Crypto::secureWipe(rawGroupKey);
         
-        qDebug() << "Successfully sent group data to" << requesterId;
+        qDebug() << "Successfully sent ENCRYPTED group data to" << requesterId;
     } catch (const std::exception& e) {
         qWarning() << "Error exporting data:" << e.what();
     }
@@ -1555,8 +1601,7 @@ void MainWindow::handleDataRequested(const QString& requesterId, const QString& 
 void MainWindow::restoreOutgoingInvites() {
     if (!m_vault || !m_p2pService) return;
     
-    // Cast to WebRTCService to access specific queueInvite method
-    // (Ideally add to IP2PService interface, but dynamic_cast is fine for now)
+    // Updated cast
     auto* p2p = dynamic_cast<WebRTCService*>(m_p2pService);
     if (!p2p) return;
 
@@ -1565,14 +1610,11 @@ void MainWindow::restoreOutgoingInvites() {
     for (const std::string& groupName : groups) {
         auto members = m_vault->getGroupMembers(groupName);
         for (const auto& member : members) {
-            // If we sent an invite but they haven't accepted yet
             if (member.status == "pending") {
                 try {
-                    // Re-export the latest data to ensure they get the freshest version
                     std::vector<unsigned char> key = m_vault->getGroupKey(groupName);
                     std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(groupName);
                     
-                    // Queue it up!
                     p2p->queueInvite(groupName, member.userId, key, entries);
                     
                     CipherMesh::Core::Crypto::secureWipe(key);
@@ -1590,17 +1632,12 @@ void MainWindow::handleInviteResponse(const QString& userId, const QString& grou
     qDebug() << "DEBUG: Received invite response from" << userId << "for group" << groupName << "- Accepted:" << accepted;
     
     try {
-        // Update the member status in the database
         if (accepted) {
             m_vault->updateGroupMemberStatus(groupName.toStdString(), userId.toStdString(), "accepted");
         } else {
-            // Remove the member from the group since they rejected
             m_vault->removeGroupMember(groupName.toStdString(), userId.toStdString());
         }
-        
-        // Reload the groups view to reflect the status change
         loadGroups();
-        
         qDebug() << "DEBUG: Updated member status for" << userId << "in group" << groupName;
     } catch (const std::exception& e) {
         qWarning() << "ERROR: Failed to update member status:" << e.what();
@@ -1626,16 +1663,14 @@ void MainWindow::setupAutoLockTimer() {
 
 void MainWindow::resetAutoLockTimer() {
     if (!m_vault || m_vault->isLocked()) {
-        return; // Don't set timer if vault is locked
+        return; 
     }
     
     int timeout = m_vault->getAutoLockTimeout();
     if (timeout == 0) {
-        // Auto-lock disabled
         m_autoLockTimer->stop();
     } else {
-        // Set timer for timeout minutes
-        m_autoLockTimer->start(timeout * 60 * 1000); // Convert minutes to milliseconds
+        m_autoLockTimer->start(timeout * 60 * 1000); 
     }
 }
 
@@ -1648,6 +1683,7 @@ void MainWindow::onAutoLockTimeout() {
 void MainWindow::onAutoLockTimeoutChanged(int minutes) {
     resetAutoLockTimer();
 }
+
 void MainWindow::onViewPasswordHistoryClicked() {
     if (!m_vault || m_vault->isLocked()) {
         return;
@@ -1668,7 +1704,7 @@ void MainWindow::onViewPasswordHistoryClicked() {
     // Update access time
     if (m_vault) {
         m_vault->updateEntryAccessTime(entry.id);
-        updateRecentMenu(); // Update the recent menu
+        updateRecentMenu(); 
     }
     
     // Open password history dialog
@@ -1683,7 +1719,6 @@ void MainWindow::updateRecentMenu() {
     
     m_recentMenu->clear();
     
-    // Only show recent entries if a group is selected
     QString currentGroup = getSelectedGroupName();
     if (currentGroup.isEmpty()) {
         QAction* emptyAction = m_recentMenu->addAction("No group selected");
@@ -1763,7 +1798,7 @@ void MainWindow::refreshTOTPCode() {
     try {
         std::string code = CipherMesh::Utils::TOTP::generateCode(entry.totp_secret);
         
-        // Check if code generation failed (empty string indicates error)
+        // Check if code generation failed
         if (code.empty()) {
             m_totpCodeLabel->setText("INVALID");
             m_totpCodeLabel->setStyleSheet("color: #d32f2f; padding: 4px;");
@@ -1779,13 +1814,11 @@ void MainWindow::refreshTOTPCode() {
         long long currentTime = std::time(nullptr);
         int timeRemaining = 30 - (currentTime % 30);
         
-        // Update progress bar and label
         m_totpTimerBar->setValue(timeRemaining);
         m_totpTimerLabel->setText(QString("%1s").arg(timeRemaining));
         m_totpTimerBar->show();
         m_totpTimerLabel->show();
         
-        // Change color to warning when less than 5 seconds remain
         if (timeRemaining <= 5) {
             m_totpCodeLabel->setStyleSheet("color: #ff9800; padding: 4px;");
             m_totpTimerBar->setStyleSheet(R"(

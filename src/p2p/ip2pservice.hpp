@@ -1,55 +1,51 @@
-#pragma once
+#ifndef IP2PSERVICE_HPP
+#define IP2PSERVICE_HPP
+
 #include <string>
 #include <vector>
-#include <functional> 
-#include "vault_entry.hpp"
+#include <functional>
+#include <utility>
+#include "../core/vault_entry.hpp" 
 
 namespace CipherMesh {
 namespace P2P {
 
-struct GroupMember {
-    std::string id;
-    std::string displayName;
-    std::string status; 
-};
-
 class IP2PService {
 public:
-    virtual ~IP2PService();
+    virtual ~IP2PService() = default;
 
-    std::function<void(const std::vector<GroupMember>& members)> onGroupMembersUpdated;
-    std::function<void(bool success, const std::string& message)> onInviteStatus;
-    std::function<void(bool success, const std::string& message)> onRemoveStatus;
-    std::function<void(const std::string& userId, bool isOnline)> onUserStatusResult;
-    // ...
-    std::function<void(const std::string& userId)> onPeerOnline; // NEW
-    std::function<void(const std::string& requesterId, const std::string& groupName)> onDataRequested; // NEW
-    // ...
-    std::function<void(const std::string& senderId, const std::string& groupName)> onIncomingInvite;
-    std::function<void(const std::string& senderId)> onInviteCancelled;
-    std::function<void(const std::string& userId, const std::string& groupName, bool accepted)> onInviteResponse;
-    std::function<void(bool connected)> onConnectionStatusChanged;  // NEW: Connection status callback
-    
-    // UPDATED: Added 'senderId' as the first argument
-    std::function<void(const std::string& senderId,
-                       const std::string& groupName, 
-                       const std::vector<unsigned char>& key, 
-                       const std::vector<CipherMesh::Core::VaultEntry>& entries)> onGroupDataReceived;
-
-    virtual void fetchGroupMembers(const std::string& groupName) = 0;
+    // --- Core Methods ---
     virtual void inviteUser(const std::string& groupName, const std::string& userEmail, 
                             const std::vector<unsigned char>& groupKey,
                             const std::vector<CipherMesh::Core::VaultEntry>& entries) = 0;
-    virtual void removeUser(const std::string& groupName, const std::string& userId) = 0;
-    virtual void checkUserAvailability(const std::string& userId) = 0;
-    virtual void respondToInvite(const std::string& senderId, bool accept) = 0;
     virtual void cancelInvite(const std::string& userId) = 0;
-    virtual void sendGroupData(const std::string& recipientId, 
-                               const std::string& groupName,
+    virtual void respondToInvite(const std::string& senderId, bool accept) = 0;
+    virtual void requestData(const std::string& senderId, const std::string& groupName) = 0;
+    virtual void sendGroupData(const std::string& recipientId, const std::string& groupName,
                                const std::vector<unsigned char>& groupKey,
                                const std::vector<CipherMesh::Core::VaultEntry>& entries) = 0;
-    virtual void requestData(const std::string& senderId, const std::string& groupName) = 0;
+    virtual void fetchGroupMembers(const std::string& groupName) = 0;
+    virtual void removeUser(const std::string& groupName, const std::string& userId) = 0;
+
+    // --- Callbacks ---
+    std::function<void(bool)> onConnectionStatusChanged;
+    std::function<void(std::string, std::string)> onIncomingInvite; 
+    std::function<void(std::string)> onInviteCancelled; 
+    std::function<void(std::string, std::string, bool)> onInviteResponse; 
+    std::function<void(std::string, std::string, std::vector<unsigned char>, std::vector<CipherMesh::Core::VaultEntry>)> onGroupDataReceived;
+    std::function<void(std::string)> onPeerOnline;
+    
+    // SECURITY UPDATE: Request now includes the Requester's Public Key
+    // Callback signature: (requesterId, groupName, requesterPublicKey)
+    std::function<void(std::string, std::string, std::string)> onDataRequested;
+    
+    std::function<void(std::string, bool)> onUserStatusResult;
+    std::function<void(bool, std::string)> onInviteStatus;
+    std::function<void(bool, std::string)> onRemoveStatus;
+    std::function<void(std::vector<std::pair<std::string, std::string>>)> onGroupMembersUpdated;
 };
 
-} 
-}
+} // namespace P2P
+} // namespace CipherMesh
+
+#endif // IP2PSERVICE_HPP

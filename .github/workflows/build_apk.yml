@@ -1,0 +1,39 @@
+name: Build Android APK
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.5.0'
+          host: 'linux'
+          target: 'android'
+          arch: 'android_armv7'
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build APK
+        run: |
+          mkdir build
+          cd build
+          qt-cmake -S .. -B . 
+          cmake --build . --target apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-app-apk
+          path: build/android-build/build/outputs/apk/debug/*.apk

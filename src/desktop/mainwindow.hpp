@@ -67,7 +67,7 @@ private slots:
     void handleIncomingInvite(const QString& senderId, const QString& groupName);
     void handleInviteCancelled(const QString& senderId);
     void handlePeerOnline(const QString& userId);
-    void handleDataRequested(const QString& requesterId, const QString& groupName);
+    void handleDataRequested(const QString& requesterId, const QString& groupName, const QString& requesterPubKey);
     void handleInviteResponse(const QString& userId, const QString& groupName, bool accepted);
     void handleConnectionStatusChanged(bool connected);
     void handleGroupData(const QString& senderId,

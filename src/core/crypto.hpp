@@ -20,7 +20,7 @@ public:
         bool useUppercase = true;
         bool useLowercase = true;
         bool useNumbers = true;
-        std::string customSymbols = "!@#$%^&*()_+-=[]{}|;:,.<>?"; // <-- CHANGED
+        std::string customSymbols = "!@#$%^&*()_+-=[]{}|;:,.<>?";
     };
 
     static std::vector<unsigned char> deriveKey(const std::string& password, const std::vector<unsigned char>& salt);
@@ -36,6 +36,17 @@ public:
     
     // SHA-1 hash for breach detection (Have I Been Pwned API)
     static std::string sha1(const std::string& input);
+
+    // --- REQUIRED FOR P2P SECURITY (Added to support Vault) ---
+    // Encrypts for a specific recipient using their Public Key (Sealed Box)
+    static std::string encryptAsymmetric(const std::string& message, const std::vector<unsigned char>& recipientPublicKey);
+    
+    // Decrypts a message meant for us using our Private Key
+    static std::string decryptAsymmetric(const std::string& encryptedBase64, const std::vector<unsigned char>& privateKey);
+
+    // Base64 Helpers
+    static std::string base64Encode(const std::vector<unsigned char>& data);
+    static std::vector<unsigned char> base64Decode(const std::string& encoded);
 };
 
 }
