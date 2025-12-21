@@ -37,9 +37,11 @@ jobs:
           python -m pip install aqtinstall
 
           python -m aqt install-qt linux android 6.5.3 android_armv7 \
+            --modules qtdeclarative qtquickcontrols2 \
             --outputdir $GITHUB_WORKSPACE/Qt
 
           python -m aqt install-qt linux desktop 6.5.3 gcc_64 \
+            --modules qtdeclarative qtquickcontrols2 \
             --outputdir $GITHUB_WORKSPACE/Qt
 
       - name:  Build libsodium for Android (armeabi-v7a)
