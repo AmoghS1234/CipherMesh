@@ -128,9 +128,10 @@ This is a detailed, step-by-step guide for building the CipherMesh Android mobil
 Qt Creator's Android builds require JDK 17.
 
 **Option A: Install via Android Studio (Easiest)**
-- Android Studio comes with JDK 17
+- Recent versions of Android Studio (Hedgehog 2023.1.1 and later) come with JDK 17
+- Older versions may include JDK 11; verify your version or install separately
 - Location (write this down):
-  - Linux: `/snap/android-studio/current/android-studio/jbr`
+  - Linux: `/snap/android-studio/current/android-studio/jbr` (snap) or `/opt/android-studio/jbr` (manual install)
   - Windows: `C:\Program Files\Android\Android Studio\jbr`
   - macOS: `/Applications/Android Studio.app/Contents/jbr`
 
@@ -149,9 +150,19 @@ CipherMesh requires libsodium compiled for Android.
 For armeabi-v7a and arm64-v8a, you can download pre-built binaries from libsodium releases.
 
 1. Visit: https://github.com/jedisct1/libsodium/releases
-2. Download `libsodium-x.x.x-stable.tar.gz`
-3. Extract it
-4. Inside, find the Android builds or use Option B
+2. Download `libsodium-x.x.x-stable.tar.gz` (replace x.x.x with latest version)
+3. Extract the archive:
+   ```bash
+   tar -xzf libsodium-x.x.x-stable.tar.gz
+   cd libsodium-stable
+   ```
+4. Look for pre-compiled Android libraries in the `libsodium-android-*` directories
+5. If pre-built Android libraries are not included, use Option B to build from source
+6. Copy the libraries to a known location:
+   ```bash
+   mkdir -p ~/libsodium-android/lib ~/libsodium-android/include
+   # Copy include files and lib files from extracted archive
+   ```
 
 **Option B: Build from Source (Recommended)**
 
@@ -180,16 +191,26 @@ For armeabi-v7a and arm64-v8a, you can download pre-built binaries from libsodiu
    cd libsodium
    
    # Set NDK path (adjust to your actual path)
+   # Linux:
    export ANDROID_NDK_ROOT=/home/yourusername/Android/Sdk/ndk/27.2.12479018
-   # For Windows: export ANDROID_NDK_ROOT=/c/Users/YourName/AppData/Local/Android/Sdk/ndk/27.2.12479018
-   # For macOS: export ANDROID_NDK_ROOT=/Users/yourusername/Library/Android/sdk/ndk/27.2.12479018
+   
+   # Windows (Git Bash/WSL):
+   export ANDROID_NDK_ROOT=/c/Users/YourName/AppData/Local/Android/Sdk/ndk/27.2.12479018
+   # Windows (PowerShell): use Set-Item instead
+   # $env:ANDROID_NDK_ROOT="C:\Users\YourName\AppData\Local\Android\Sdk\ndk\27.2.12479018"
+   
+   # macOS:
+   # export ANDROID_NDK_ROOT=/Users/yourusername/Library/Android/sdk/ndk/27.2.12479018
    
    # Detect your OS for toolchain
-   if [[ "$OSTYPE" == "darwin"* ]]; then
-     export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/darwin-x86_64
-   else
-     export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
-   fi
+   # For Linux:
+   export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
+   
+   # For macOS, use this instead:
+   # export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/darwin-x86_64
+   
+   # For Windows (Git Bash), use:
+   # export TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/windows-x86_64
    
    export API=21
    export TARGET=armv7a-linux-androideabi
