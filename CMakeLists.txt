@@ -37,11 +37,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(mbedtls)
 
-set(MbedTLS_FOUND TRUE CACHE BOOL "" FORCE)
+# MbedTLS provides targets: mbedtls, mbedx509, mbedcrypto
 set(MbedTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
-set(MbedTLS_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedtls.a" CACHE FILEPATH "" FORCE)
-set(MbedX509_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedx509.a" CACHE FILEPATH "" FORCE)
-set(MbedCrypto_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedcrypto.a" CACHE FILEPATH "" FORCE)
 
 FetchContent_Declare(
     LibDataChannel
@@ -82,9 +79,9 @@ target_link_libraries(ciphermesh-core PRIVATE
     Qt6::WebSockets
     LibDataChannel::LibDataChannelStatic
     sodium
-    "${MbedTLS_LIBRARY}"
-    "${MbedX509_LIBRARY}"
-    "${MbedCrypto_LIBRARY}"
+    mbedtls
+    mbedx509
+    mbedcrypto
 )
 
 if(ANDROID)
@@ -92,16 +89,22 @@ if(ANDROID)
         MANUAL_FINALIZATION
         src/mobile/main_mobile.cpp
         src/mobile/vaultqmlwrapper.cpp
+        src/utils/totp.cpp
+        src/utils/passwordstrength.cpp
         src/mobile/qml.qrc
+    )
+
+    target_include_directories(CipherMesh-Mobile PRIVATE
+        src/utils
     )
 
     target_link_libraries(CipherMesh-Mobile PRIVATE
         ciphermesh-core
         -Wl,--whole-archive
         sodium
-        "${MbedTLS_LIBRARY}"
-        "${MbedX509_LIBRARY}"
-        "${MbedCrypto_LIBRARY}"
+        mbedtls
+        mbedx509
+        mbedcrypto
         -Wl,--no-whole-archive
         LibDataChannel::LibDataChannelStatic
         Qt6::Quick

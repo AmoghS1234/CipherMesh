@@ -1,47 +1,196 @@
 #include "vaultqmlwrapper.hpp"
+#include "../utils/passwordstrength.hpp"
+#include "../utils/totp.hpp"
+#include "../p2p_webrtc/webrtcservice.hpp"
 #include <QDebug>
+#include <QGuiApplication>
+#include <QClipboard>
+#include <QCryptographicHash>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QUrl>
+#include <QDateTime>
+#include <random>
+#include <algorithm>
 
 VaultQmlWrapper::VaultQmlWrapper(CipherMesh::Core::Vault* vault, QObject* parent)
-    : QObject(parent), m_vault(vault)
+    : QObject(parent), 
+      m_vault(vault),
+      m_p2pService(nullptr),
+      m_autoLockTimer(nullptr),
+      m_totpTimer(nullptr),
+      m_autoLockMinutes(5)
 {
+    setupTimers();
 }
+
+VaultQmlWrapper::~VaultQmlWrapper() {
+    if (m_p2pService) {
+        delete m_p2pService;
+    }
+}
+
+void VaultQmlWrapper::setupTimers() {
+    // Auto-lock timer
+    m_autoLockTimer = new QTimer(this);
+    connect(m_autoLockTimer, &QTimer::timeout, this, &VaultQmlWrapper::onAutoLockTimeout);
+    
+    // TOTP refresh timer (updates every second)
+    m_totpTimer = new QTimer(this);
+    m_totpTimer->setInterval(1000);
+    connect(m_totpTimer, &QTimer::timeout, this, &VaultQmlWrapper::onTOTPTimerTick);
+    m_totpTimer->start();
+}
+
+void VaultQmlWrapper::resetAutoLockTimer() {
+    if (m_autoLockMinutes > 0 && !isLocked()) {
+        m_autoLockTimer->start(m_autoLockMinutes * 60 * 1000);
+    }
+}
+
+void VaultQmlWrapper::onAutoLockTimeout() {
+    lockVault();
+}
+
+void VaultQmlWrapper::onTOTPTimerTick() {
+    emit totpTimerTick();
+}
+
+// -- Vault Operations --
 
 bool VaultQmlWrapper::unlockVault(const QString& password) {
     if (!m_vault) return false;
     
-    // In production, verify against DB. For now, assume simple verify or load
-    // Using the verifyMasterPassword method from Vault
     bool success = m_vault->verifyMasterPassword(password.toStdString());
-    
-    // Note: If Vault::loadVault wasn't called yet in main, you might need logic here
-    // to call loadVault if not initialized. Assuming main_mobile.cpp loaded it.
     
     if (success) {
         emit lockStatusChanged();
+        resetAutoLockTimer();
     }
     return success;
 }
 
 void VaultQmlWrapper::lockVault() {
-    if (m_vault) m_vault->lock();
-    emit lockStatusChanged();
+    if (m_vault) {
+        m_vault->lock();
+        m_autoLockTimer->stop();
+        emit lockStatusChanged();
+    }
+}
+
+bool VaultQmlWrapper::changeMasterPassword(const QString& oldPassword, const QString& newPassword) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        bool success = m_vault->changeMasterPassword(oldPassword.toStdString(), newPassword.toStdString());
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Failed to change password: %1").arg(e.what()));
+        return false;
+    }
 }
 
 bool VaultQmlWrapper::isLocked() const {
     return m_vault ? m_vault->isLocked() : true;
 }
 
+// -- Group Management --
+
+QVariantList VaultQmlWrapper::getGroups() {
+    QVariantList list;
+    if (!m_vault || m_vault->isLocked()) return list;
+    
+    try {
+        auto groups = m_vault->getGroups();
+        for (const auto& group : groups) {
+            QVariantMap map;
+            map["name"] = QString::fromStdString(group);
+            list.append(map);
+        }
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error fetching groups: %1").arg(e.what()));
+    }
+    return list;
+}
+
+bool VaultQmlWrapper::setActiveGroup(const QString& groupName) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        m_vault->setActiveGroup(groupName.toStdString());
+        emit currentGroupChanged();
+        resetAutoLockTimer();
+        return true;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error setting active group: %1").arg(e.what()));
+        return false;
+    }
+}
+
+bool VaultQmlWrapper::createGroup(const QString& groupName) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        bool success = m_vault->createGroup(groupName.toStdString());
+        if (success) {
+            emit groupsChanged();
+        }
+        resetAutoLockTimer();
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error creating group: %1").arg(e.what()));
+        return false;
+    }
+}
+
+bool VaultQmlWrapper::deleteGroup(const QString& groupName) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        bool success = m_vault->deleteGroup(groupName.toStdString());
+        if (success) {
+            emit groupsChanged();
+        }
+        resetAutoLockTimer();
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error deleting group: %1").arg(e.what()));
+        return false;
+    }
+}
+
+bool VaultQmlWrapper::renameGroup(const QString& oldName, const QString& newName) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        bool success = m_vault->renameGroup(oldName.toStdString(), newName.toStdString());
+        if (success) {
+            emit groupsChanged();
+        }
+        resetAutoLockTimer();
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error renaming group: %1").arg(e.what()));
+        return false;
+    }
+}
+
+QString VaultQmlWrapper::currentGroup() const {
+    if (!m_vault || m_vault->isLocked()) return QString();
+    return QString::fromStdString(m_vault->getActiveGroup());
+}
+
+// -- Entry Operations --
+
 QVariantList VaultQmlWrapper::getEntries() {
     QVariantList list;
     if (!m_vault || m_vault->isLocked()) return list;
 
     try {
-        // Assuming we are just showing the active group's entries or all if simplified
-        // Mobile UI might need group selection logic later. 
-        // For V1, let's grab the "Personal" group or active group.
-        
         if (!m_vault->isGroupActive()) {
-            m_vault->setActiveGroup("Personal"); 
+            // Default to Personal group if none is active
+            m_vault->setActiveGroup("Personal");
         }
 
         auto entries = m_vault->getEntries();
@@ -51,28 +200,464 @@ QVariantList VaultQmlWrapper::getEntries() {
             map["title"] = QString::fromStdString(entry.title);
             map["username"] = QString::fromStdString(entry.username);
             map["notes"] = QString::fromStdString(entry.notes);
-            // Don't send password unless requested for security? 
-            // Or send it if this is for the ViewDetails page.
+            map["entryType"] = QString::fromStdString(entry.entry_type);
+            map["hasTotp"] = !entry.totp_secret.empty();
+            map["createdAt"] = static_cast<qint64>(entry.createdAt);
+            map["lastModified"] = static_cast<qint64>(entry.lastModified);
+            map["lastAccessed"] = static_cast<qint64>(entry.lastAccessed);
             list.append(map);
         }
+        resetAutoLockTimer();
     } catch (const std::exception& e) {
-        qWarning() << "Error fetching entries for QML:" << e.what();
+        emit errorOccurred(QString("Error fetching entries: %1").arg(e.what()));
     }
     return list;
 }
 
-bool VaultQmlWrapper::addEntry(const QString& title, const QString& username, const QString& password, const QString& notes) {
+QVariantMap VaultQmlWrapper::getEntry(int entryId) {
+    QVariantMap map;
+    if (!m_vault || m_vault->isLocked()) return map;
+    
+    try {
+        auto entry = m_vault->getEntryById(entryId);
+        map["id"] = entry.id;
+        map["title"] = QString::fromStdString(entry.title);
+        map["username"] = QString::fromStdString(entry.username);
+        map["notes"] = QString::fromStdString(entry.notes);
+        map["password"] = QString::fromStdString(entry.password);
+        map["entryType"] = QString::fromStdString(entry.entry_type);
+        map["totpSecret"] = QString::fromStdString(entry.totp_secret);
+        map["hasTotp"] = !entry.totp_secret.empty();
+        map["createdAt"] = static_cast<qint64>(entry.createdAt);
+        map["lastModified"] = static_cast<qint64>(entry.lastModified);
+        map["lastAccessed"] = static_cast<qint64>(entry.lastAccessed);
+        
+        // Get locations
+        QVariantList locations;
+        for (const auto& loc : entry.locations) {
+            QVariantMap locMap;
+            locMap["id"] = loc.id;
+            locMap["type"] = QString::fromStdString(loc.type);
+            locMap["value"] = QString::fromStdString(loc.value);
+            locations.append(locMap);
+        }
+        map["locations"] = locations;
+        
+        resetAutoLockTimer();
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error fetching entry: %1").arg(e.what()));
+    }
+    return map;
+}
+
+bool VaultQmlWrapper::addEntry(const QString& title, const QString& username, 
+                               const QString& password, const QString& notes,
+                               const QString& totpSecret, const QString& entryType) {
     if (!m_vault || m_vault->isLocked()) return false;
 
     CipherMesh::Core::VaultEntry entry;
     entry.title = title.toStdString();
     entry.username = username.toStdString();
     entry.notes = notes.toStdString();
+    entry.totp_secret = totpSecret.toStdString();
+    entry.entry_type = entryType.toStdString();
     entry.id = -1; // New entry
+    entry.createdAt = QDateTime::currentSecsSinceEpoch();
+    entry.lastModified = entry.createdAt;
     
     bool success = m_vault->addEntry(entry, password.toStdString());
     if (success) {
-        emit entryAdded(); // Tells QML List to refresh
+        emit entryAdded();
+        resetAutoLockTimer();
     }
     return success;
+}
+
+bool VaultQmlWrapper::updateEntry(int entryId, const QString& title, const QString& username,
+                                  const QString& password, const QString& notes,
+                                  const QString& totpSecret, const QString& entryType) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        auto entry = m_vault->getEntryById(entryId);
+        entry.title = title.toStdString();
+        entry.username = username.toStdString();
+        entry.notes = notes.toStdString();
+        entry.totp_secret = totpSecret.toStdString();
+        entry.entry_type = entryType.toStdString();
+        entry.lastModified = QDateTime::currentSecsSinceEpoch();
+        
+        bool success = m_vault->updateEntry(entry, password.toStdString());
+        if (success) {
+            emit entryUpdated();
+            resetAutoLockTimer();
+        }
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error updating entry: %1").arg(e.what()));
+        return false;
+    }
+}
+
+bool VaultQmlWrapper::deleteEntry(int entryId) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        bool success = m_vault->deleteEntry(entryId);
+        if (success) {
+            emit entryDeleted();
+            resetAutoLockTimer();
+        }
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error deleting entry: %1").arg(e.what()));
+        return false;
+    }
+}
+
+bool VaultQmlWrapper::duplicateEntry(int entryId) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        auto entry = m_vault->getEntryById(entryId);
+        entry.title = entry.title + " (Copy)";
+        entry.id = -1; // New entry
+        entry.createdAt = QDateTime::currentSecsSinceEpoch();
+        entry.lastModified = entry.createdAt;
+        
+        bool success = m_vault->addEntry(entry, entry.password);
+        if (success) {
+            emit entryAdded();
+            resetAutoLockTimer();
+        }
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error duplicating entry: %1").arg(e.what()));
+        return false;
+    }
+}
+
+QVariantList VaultQmlWrapper::searchEntries(const QString& query) {
+    QVariantList list;
+    if (!m_vault || m_vault->isLocked() || query.isEmpty()) return list;
+    
+    try {
+        auto entries = m_vault->searchEntries(query.toStdString());
+        for (const auto& entry : entries) {
+            QVariantMap map;
+            map["id"] = entry.id;
+            map["title"] = QString::fromStdString(entry.title);
+            map["username"] = QString::fromStdString(entry.username);
+            map["notes"] = QString::fromStdString(entry.notes);
+            map["entryType"] = QString::fromStdString(entry.entry_type);
+            map["hasTotp"] = !entry.totp_secret.empty();
+            list.append(map);
+        }
+        resetAutoLockTimer();
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error searching entries: %1").arg(e.what()));
+    }
+    return list;
+}
+
+// -- Location Management --
+
+QVariantList VaultQmlWrapper::getLocations(int entryId) {
+    QVariantList list;
+    if (!m_vault || m_vault->isLocked()) return list;
+    
+    try {
+        auto entry = m_vault->getEntryById(entryId);
+        for (const auto& loc : entry.locations) {
+            QVariantMap map;
+            map["id"] = loc.id;
+            map["type"] = QString::fromStdString(loc.type);
+            map["value"] = QString::fromStdString(loc.value);
+            list.append(map);
+        }
+        resetAutoLockTimer();
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error fetching locations: %1").arg(e.what()));
+    }
+    return list;
+}
+
+bool VaultQmlWrapper::addLocation(int entryId, const QString& type, const QString& value) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        CipherMesh::Core::Location loc(-1, type.toStdString(), value.toStdString());
+        bool success = m_vault->addLocation(entryId, loc);
+        if (success) {
+            emit entryUpdated();
+            resetAutoLockTimer();
+        }
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error adding location: %1").arg(e.what()));
+        return false;
+    }
+}
+
+bool VaultQmlWrapper::updateLocation(int entryId, int locationId, const QString& type, const QString& value) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        CipherMesh::Core::Location loc(locationId, type.toStdString(), value.toStdString());
+        bool success = m_vault->updateLocation(entryId, loc);
+        if (success) {
+            emit entryUpdated();
+            resetAutoLockTimer();
+        }
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error updating location: %1").arg(e.what()));
+        return false;
+    }
+}
+
+bool VaultQmlWrapper::deleteLocation(int entryId, int locationId) {
+    if (!m_vault || m_vault->isLocked()) return false;
+    
+    try {
+        bool success = m_vault->deleteLocation(entryId, locationId);
+        if (success) {
+            emit entryUpdated();
+            resetAutoLockTimer();
+        }
+        return success;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error deleting location: %1").arg(e.what()));
+        return false;
+    }
+}
+
+// -- Password Operations --
+
+QString VaultQmlWrapper::generatePassword(int length, bool upper, bool lower, bool numbers, bool symbols, const QString& customSymbols) {
+    std::string charset;
+    if (upper) charset += "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    if (lower) charset += "abcdefghijklmnopqrstuvwxyz";
+    if (numbers) charset += "0123456789";
+    if (symbols) {
+        if (!customSymbols.isEmpty()) {
+            charset += customSymbols.toStdString();
+        } else {
+            charset += "!@#$%^&*()_+-=[]{}|;:,.<>?";
+        }
+    }
+    
+    if (charset.empty()) {
+        charset = "abcdefghijklmnopqrstuvwxyz"; // Default to lowercase
+    }
+    
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, charset.size() - 1);
+    
+    std::string password;
+    for (int i = 0; i < length; ++i) {
+        password += charset[dis(gen)];
+    }
+    
+    return QString::fromStdString(password);
+}
+
+int VaultQmlWrapper::calculatePasswordStrength(const QString& password) {
+    auto info = CipherMesh::Utils::PasswordStrengthCalculator::calculate(password.toStdString());
+    return info.score;
+}
+
+QString VaultQmlWrapper::getPasswordStrengthText(int strength) {
+    if (strength < 20) return "Very Weak";
+    if (strength < 40) return "Weak";
+    if (strength < 60) return "Fair";
+    if (strength < 80) return "Strong";
+    return "Very Strong";
+}
+
+QVariantList VaultQmlWrapper::getPasswordHistory(int entryId) {
+    QVariantList list;
+    if (!m_vault || m_vault->isLocked()) return list;
+    
+    try {
+        auto history = m_vault->getPasswordHistory(entryId);
+        for (const auto& item : history) {
+            QVariantMap map;
+            map["id"] = item.id;
+            map["changedAt"] = static_cast<qint64>(item.changedAt);
+            map["password"] = QString::fromStdString(item.encryptedPassword); // This is decrypted in Vault
+            list.append(map);
+        }
+        resetAutoLockTimer();
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error fetching password history: %1").arg(e.what()));
+    }
+    return list;
+}
+
+// -- TOTP Operations --
+
+QString VaultQmlWrapper::generateTOTPCode(const QString& secret) {
+    if (secret.isEmpty()) return QString();
+    
+    try {
+        std::string code = CipherMesh::Utils::TOTP::generate(secret.toStdString());
+        return QString::fromStdString(code);
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error generating TOTP code: %1").arg(e.what()));
+        return QString();
+    }
+}
+
+int VaultQmlWrapper::getTOTPTimeRemaining() {
+    return CipherMesh::Utils::TOTP::getSecondsRemaining();
+}
+
+// -- Clipboard Operations --
+
+void VaultQmlWrapper::copyToClipboard(const QString& text) {
+    QGuiApplication::clipboard()->setText(text);
+    resetAutoLockTimer();
+}
+
+// -- P2P Sharing --
+
+bool VaultQmlWrapper::initializeP2P(const QString& userId) {
+    if (m_p2pService) {
+        return true; // Already initialized
+    }
+    
+    try {
+        m_currentUserId = userId;
+        m_p2pService = new CipherMesh::P2P_WebRTC::WebRTCService(userId.toStdString());
+        
+        // Connect signals here when P2P events occur
+        // This would require extending the P2P service to emit Qt signals
+        
+        emit p2pConnectionChanged();
+        return true;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error initializing P2P: %1").arg(e.what()));
+        return false;
+    }
+}
+
+void VaultQmlWrapper::shareGroup(const QString& groupName, const QString& recipientUserId) {
+    if (!m_p2pService || !m_vault || m_vault->isLocked()) {
+        emit errorOccurred("P2P not initialized or vault is locked");
+        return;
+    }
+    
+    try {
+        m_p2pService->sendInvite(recipientUserId.toStdString(), groupName.toStdString());
+        resetAutoLockTimer();
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error sharing group: %1").arg(e.what()));
+    }
+}
+
+QVariantList VaultQmlWrapper::getPendingInvites() {
+    QVariantList list;
+    if (!m_vault || m_vault->isLocked()) return list;
+    
+    try {
+        auto invites = m_vault->getPendingInvites();
+        for (const auto& invite : invites) {
+            QVariantMap map;
+            map["id"] = invite.id;
+            map["senderId"] = QString::fromStdString(invite.senderId);
+            map["groupName"] = QString::fromStdString(invite.groupName);
+            map["timestamp"] = static_cast<qint64>(invite.timestamp);
+            map["status"] = QString::fromStdString(invite.status);
+            list.append(map);
+        }
+        resetAutoLockTimer();
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error fetching invites: %1").arg(e.what()));
+    }
+    return list;
+}
+
+void VaultQmlWrapper::acceptInvite(int inviteId) {
+    if (!m_vault || m_vault->isLocked()) return;
+    
+    try {
+        // Implementation would require extending vault to accept invites
+        resetAutoLockTimer();
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error accepting invite: %1").arg(e.what()));
+    }
+}
+
+void VaultQmlWrapper::rejectInvite(int inviteId) {
+    if (!m_vault || m_vault->isLocked()) return;
+    
+    try {
+        m_vault->deletePendingInvite(inviteId);
+        resetAutoLockTimer();
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Error rejecting invite: %1").arg(e.what()));
+    }
+}
+
+bool VaultQmlWrapper::p2pConnected() const {
+    return m_p2pService != nullptr;
+}
+
+// -- Settings --
+
+void VaultQmlWrapper::setAutoLockTimeout(int minutes) {
+    m_autoLockMinutes = minutes;
+    if (!isLocked()) {
+        resetAutoLockTimer();
+    }
+}
+
+int VaultQmlWrapper::getAutoLockTimeout() const {
+    return m_autoLockMinutes;
+}
+
+// -- Breach Checking --
+
+void VaultQmlWrapper::checkPasswordBreach(const QString& password) {
+    // Hash the password with SHA-1
+    QCryptographicHash hash(QCryptographicHash::Sha1);
+    hash.addData(password.toUtf8());
+    QString sha1Hash = hash.result().toHex().toUpper();
+    
+    // Take first 5 characters for k-anonymity
+    QString prefix = sha1Hash.left(5);
+    QString suffix = sha1Hash.mid(5);
+    
+    // Call HaveIBeenPwned API
+    QNetworkAccessManager* manager = new QNetworkAccessManager(this);
+    QUrl url(QString("https://api.pwnedpasswords.com/range/%1").arg(prefix));
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::UserAgentHeader, "CipherMesh-Mobile");
+    
+    QNetworkReply* reply = manager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, suffix]() {
+        if (reply->error() == QNetworkReply::NoError) {
+            QString response = QString::fromUtf8(reply->readAll());
+            QStringList lines = response.split('\n');
+            
+            bool found = false;
+            int count = 0;
+            
+            for (const QString& line : lines) {
+                QStringList parts = line.split(':');
+                if (parts.size() == 2 && parts[0].trimmed() == suffix) {
+                    found = true;
+                    count = parts[1].trimmed().toInt();
+                    break;
+                }
+            }
+            
+            emit breachCheckResult(found, count);
+        } else {
+            emit errorOccurred("Failed to check password breach");
+        }
+        reply->deleteLater();
+    });
 }

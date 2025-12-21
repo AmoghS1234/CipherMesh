@@ -1,6 +1,5 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
+import QtQuick.Controls.Material
 
 ApplicationWindow {
     visible: true
@@ -8,76 +7,109 @@ ApplicationWindow {
     height: 640
     title: "CipherMesh Mobile"
     
-    // Dark Theme Background
-    color: "#121212"
-
+    Material.theme: Material.Dark
+    Material.primary: Material.Teal
+    Material.accent: Material.Cyan
+    
+    // Main Stack View for Navigation
     StackView {
         id: stackView
         anchors.fill: parent
-        initialItem: loginPage
-    }
-
-    Component {
-        id: loginPage
-        Page {
-            background: Rectangle { color: "#121212" }
+        initialItem: unlockScreen
+        
+        // Unlock Screen
+        Component {
+            id: unlockScreen
             
-            ColumnLayout {
-                anchors.centerIn: parent
-                spacing: 20
-                
-                Label {
-                    text: "CipherMesh"
-                    font.pixelSize: 32
-                    color: "white"
-                    Layout.alignment: Qt.AlignHCenter
+            UnlockScreen {
+                onUnlocked: {
+                    stackView.replace(vaultListScreen)
+                }
+            }
+        }
+        
+        // Vault List Screen
+        Component {
+            id: vaultListScreen
+            
+            VaultListScreen {
+                onEntrySelected: function(entryId) {
+                    stackView.push(entryDetailScreen, {
+                        "entryId": entryId
+                    })
                 }
                 
-                TextField {
-                    id: masterPassField
-                    placeholderText: "Master Password"
-                    echoMode: TextInput.Password
-                    Layout.preferredWidth: 300
+                onSettingsRequested: {
+                    stackView.push(settingsScreen)
                 }
                 
-                Button {
-                    text: "Unlock Vault"
-                    Layout.fillWidth: true
-                    onClicked: {
-                        // Call C++ function here
-                        // if (vaultBackend.verify(masterPassField.text)) ...
-                        stackView.push(homePage)
-                    }
+                onLockRequested: {
+                    vaultBackend.lockVault()
+                    stackView.replace(unlockScreen)
+                }
+            }
+        }
+        
+        // Entry Detail Screen
+        Component {
+            id: entryDetailScreen
+            
+            EntryDetailScreen {
+                onBack: {
+                    stackView.pop()
+                }
+            }
+        }
+        
+        // Settings Screen
+        Component {
+            id: settingsScreen
+            
+            SettingsScreen {
+                onBack: {
+                    stackView.pop()
                 }
             }
         }
     }
-
-    Component {
-        id: homePage
-        Page {
-            header: ToolBar {
-                Label { text: "My Passwords"; anchors.centerIn: parent }
-            }
-            
-            ListView {
-                anchors.fill: parent
-                model: 5 // Placeholder: Replace with C++ model
-                delegate: ItemDelegate {
-                    text: "Entry " + index
-                    width: parent.width
-                    onClicked: console.log("Clicked entry")
-                }
-            }
-            
-            // Floating Action Button for Scan/Share
-            RoundButton {
-                text: "+"
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: 20
-                onClicked: console.log("Add new or Scan QR")
-            }
+    
+    // Handle back button on Android
+    onClosing: function(close) {
+        if (stackView.depth > 1) {
+            close.accepted = false
+            stackView.pop()
         }
+    }
+    
+    // Global error handler
+    Connections {
+        target: vaultBackend
+        
+        function onErrorOccurred(message) {
+            errorDialog.text = message
+            errorDialog.open()
+        }
+    }
+    
+    // Error Dialog
+    Dialog {
+        id: errorDialog
+        anchors.centerIn: parent
+        width: Math.min(parent.width * 0.9, 400)
+        title: "Error"
+        modal: true
+        
+        property alias text: errorLabel.text
+        
+        Material.background: "#2a2a3e"
+        
+        Label {
+            id: errorLabel
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: "#ff6b6b"
+        }
+        
+        standardButtons: Dialog.Ok
     }
 }
