@@ -27,6 +27,10 @@ jobs:
 
       - name: Build APK
         run: |
+          # 1. Fix permissions for the Qt binaries
+          chmod +x ${{ env.Qt6_DIR }}/bin/*
+
+          # 2. Proceed with build
           mkdir build
           cd build
           qt-cmake -S .. -B . 
