@@ -82,8 +82,9 @@ target_include_directories(ciphermesh-core PUBLIC
     src/p2p
     src/p2p_webrtc
     ${sodium_SOURCE_DIR}/src/libsodium/include
-    ${sodium_BINARY_DIR}                        # <--- FIX: Finds generated version.h
-    ${sodium_BINARY_DIR}/src/libsodium/include  # <--- FIX: Backup path
+    ${sodium_BINARY_DIR}                        # Finds generated files in root of build dir
+    ${sodium_BINARY_DIR}/include                # <--- CRITICAL FIX: Finds sodium/version.h
+    ${sodium_BINARY_DIR}/src/libsodium/include  # Backup path
     ${libdatachannel_SOURCE_DIR}/include
     ${mbedtls_SOURCE_DIR}/include
 )
@@ -101,8 +102,6 @@ target_link_libraries(ciphermesh-core PRIVATE
     mbedx509
 )
 
-# --- 5. Android / Mobile Build ---
-# --- 5. Android / Mobile Build ---
 # --- 5. Android / Mobile Build ---
 if(ANDROID)
     # CHANGE: Use qt_add_executable with MANUAL_FINALIZATION
