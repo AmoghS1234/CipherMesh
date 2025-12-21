@@ -28,12 +28,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install aqtinstall
 
-          # Android Qt (target)
+          # Qt for Android (target)
           python -m aqt install-qt linux android 6.5.0 android_armv7 \
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
-          # Desktop Qt (host tools)
+          # Qt for Desktop (host tools)
           python -m aqt install-qt linux desktop 6.5.0 gcc_64 \
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
@@ -63,8 +63,14 @@ jobs:
 
           cmake --build . --target apk
 
+      - name: Locate APK (debug)
+        run: |
+          echo "Searching for APK files..."
+          find build -name "*.apk" -type f
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: CipherMesh-APK
-          path: build/android-build/build/outputs/apk/**/*.apk
+          path: build/**/*.apk
+          if-no-files-found: error
