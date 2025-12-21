@@ -57,6 +57,7 @@ set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
 # --- [FIX] Libsodium Header Compatibility Layer ---
+# Solves 'sodium/version.h' and 'export.h' not found errors during COMPILATION
 set(SODIUM_COMPAT_DIR "${CMAKE_BINARY_DIR}/sodium_compat")
 file(MAKE_DIRECTORY "${SODIUM_COMPAT_DIR}/sodium")
 
@@ -97,7 +98,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(LibDataChannel)
 
 # --- 3. Find Qt Packages ---
-# Qt6::Sql is REQUIRED here. It handles SQLite internally.
 find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent Quick WebSockets)
 
 # --- 4. Core Library ---
@@ -125,7 +125,7 @@ target_include_directories(ciphermesh-core PUBLIC
 target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core
     Qt6::Network
-    Qt6::Sql       # <--- Critical: Links the Qt SQLite driver
+    Qt6::Sql
     Qt6::Concurrent
     Qt6::WebSockets
     libsodium
@@ -145,8 +145,17 @@ if(ANDROID)
 
     target_include_directories(CipherMesh-Mobile PRIVATE src/mobile)
 
+    # ⚠️ CRITICAL FIX: Explicitly re-link static dependencies for Android Shared Object
     target_link_libraries(CipherMesh-Mobile PRIVATE
         ciphermesh-core
+        
+        # Dependencies must be visible to the shared library linker
+        libsodium
+        mbedtls
+        mbedcrypto
+        mbedx509
+        LibDataChannel::LibDataChannelStatic
+
         Qt6::Quick
         Qt6::Core
         Qt6::Network
