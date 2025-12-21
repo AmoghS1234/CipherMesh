@@ -2,7 +2,7 @@
 set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
 # -----------------------------------------------
 
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.24) # Bumped to 3.24 for LINK_LIBRARY support
 
 project(CipherMesh VERSION 0.1 LANGUAGES CXX)
 
@@ -59,14 +59,18 @@ FetchContent_Declare(
 set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
-# --- [FIX] Libsodium Target Alias ---
-# Ensure 'libsodium' target exists so generator expressions work.
-# FetchContent usually creates 'sodium', but we want a standard name.
-if(NOT TARGET libsodium AND TARGET sodium)
-    add_library(libsodium ALIAS sodium)
+# --- [FIX] Target Normalization Safety Net ---
+# Ensure the target 'sodium' always exists, regardless of what FetchContent named it.
+if(NOT TARGET sodium AND TARGET libsodium)
+    message(STATUS "Aliasing target 'libsodium' to 'sodium'")
+    add_library(sodium ALIAS libsodium)
+elseif(TARGET sodium)
+    message(STATUS "Target 'sodium' exists and will be used.")
+else()
+    message(FATAL_ERROR "Libsodium target not found! Checked 'sodium' and 'libsodium'.")
 endif()
 
-# --- [FIX] Header Compatibility Layer ---
+# --- [FIX] Header Compatibility Layer (Kept for version.h/export.h) ---
 set(SODIUM_COMPAT_DIR "${CMAKE_BINARY_DIR}/sodium_compat")
 file(MAKE_DIRECTORY "${SODIUM_COMPAT_DIR}/sodium")
 
@@ -129,6 +133,7 @@ target_include_directories(ciphermesh-core PUBLIC
 target_compile_options(ciphermesh-core PRIVATE -Wno-macro-redefined)
 
 # Standard linking for the static core library
+# No generator expressions needed here (Static -> Static)
 target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core
     Qt6::Network
@@ -136,7 +141,7 @@ target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Concurrent
     Qt6::WebSockets
     
-    libsodium 
+    sodium 
     mbedtls
     mbedcrypto
     mbedx509
@@ -154,16 +159,16 @@ if(ANDROID)
     target_include_directories(CipherMesh-Mobile PRIVATE src/mobile)
 
     # ✅ THE CANONICAL FIX: 
-    # Use $<LINK_LIBRARY:WHOLE_ARCHIVE,...> to handle absolute paths + whole-archive automatically.
-    # This is safe, portable, and correctly handles Android linker requirements.
+    # Use $<LINK_LIBRARY:WHOLE_ARCHIVE,target> to handle paths + whole-archive automatically.
+    # This works because we ensured the 'sodium' target exists above.
     target_link_libraries(CipherMesh-Mobile PRIVATE
         ciphermesh-core
         
-        $<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_FILE:libsodium>>
-        $<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_FILE:mbedtls>>
-        $<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_FILE:mbedcrypto>>
-        $<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_FILE:mbedx509>>
-        $<LINK_LIBRARY:WHOLE_ARCHIVE,$<TARGET_FILE:LibDataChannel::LibDataChannelStatic>>
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,sodium>
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,mbedtls>
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,mbedcrypto>
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,mbedx509>
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,LibDataChannel::LibDataChannelStatic>
 
         Qt6::Quick
         Qt6::Core
