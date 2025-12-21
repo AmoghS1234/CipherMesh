@@ -1,24 +1,37 @@
-- name: Build APK
-  run: |
-    export ANDROID_QT=$RUNNER_WORKSPACE/Qt/6.5.0/android_armv7
-    export HOST_QT=$RUNNER_WORKSPACE/Qt/6.5.0/gcc_64
+name: Build Android APK
 
-    echo "Android Qt: $ANDROID_QT"
-    echo "Host Qt:    $HOST_QT"
+on:
+  push:
+  workflow_dispatch:
 
-    chmod +x $ANDROID_QT/bin/* || true
-    chmod +x $HOST_QT/bin/* || true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    export PATH=$ANDROID_QT/bin:$HOST_QT/bin:$PATH
-    which qt-cmake
+      - name: Build APK
+        run: |
+          export ANDROID_QT=$RUNNER_WORKSPACE/Qt/6.5.0/android_armv7
+          export HOST_QT=$RUNNER_WORKSPACE/Qt/6.5.0/gcc_64
 
-    mkdir -p build
-    cd build
+          echo "Android Qt: $ANDROID_QT"
+          echo "Host Qt:    $HOST_QT"
 
-    qt-cmake -S .. -B . \
-      -DQT_HOST_PATH=$HOST_QT \
-      -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
-      -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
-      -DANDROID_ABI=armeabi-v7a
+          chmod +x $ANDROID_QT/bin/* || true
+          chmod +x $HOST_QT/bin/* || true
 
-    cmake --build . --target apk
+          export PATH=$ANDROID_QT/bin:$HOST_QT/bin:$PATH
+          which qt-cmake
+
+          mkdir -p build
+          cd build
+
+          qt-cmake -S .. -B . \
+            -DQT_HOST_PATH=$HOST_QT \
+            -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
+            -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
+            -DANDROID_ABI=armeabi-v7a
+
+          cmake --build . --target apk
