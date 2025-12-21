@@ -11,6 +11,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Java
         uses: actions/setup-java@v3
@@ -18,18 +20,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK/NDK
+      - name: Setup Android SDK / NDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Qt (Android + Desktop)
+      - name: Install Qt (Android + Desktop with WebSockets)
         run: |
           python -m pip install --upgrade pip
           python -m pip install aqtinstall
 
+          # Install Qt for Android (target) + required modules
           python -m aqt install-qt linux android 6.5.0 android_armv7 \
+            --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
+          # Install Qt for Desktop (host tools) + required modules
           python -m aqt install-qt linux desktop 6.5.0 gcc_64 \
+            --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
       - name: Build APK
