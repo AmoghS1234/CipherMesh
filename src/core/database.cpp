@@ -38,7 +38,6 @@ inline std::vector<unsigned char> toVector(const QByteArray& ba) {
 }
 
 Database::Database() {
-    // Check if the connection already exists to avoid warnings
     if (QSqlDatabase::contains("CipherMeshConnection")) {
         m_db = QSqlDatabase::database("CipherMeshConnection");
     } else {
@@ -55,7 +54,6 @@ void Database::open(const std::string& path) {
         m_db.close();
     }
 
-    // Ensure the directory exists
     QString dbPath = QString::fromStdString(path);
     QFileInfo fileInfo(dbPath);
     QDir dir = fileInfo.absoluteDir();
@@ -71,7 +69,6 @@ void Database::open(const std::string& path) {
         throw DBException("Cannot open database: " + m_db.lastError().text().toStdString());
     }
 
-    // Enforce Foreign Keys support in SQLite
     QSqlQuery query(m_db);
     if (!query.exec("PRAGMA foreign_keys = ON;")) {
         throw DBException("Failed to enable foreign keys");
@@ -82,6 +79,11 @@ void Database::close() {
     if (m_db.isOpen()) {
         m_db.close();
     }
+}
+
+// --- FIX: Added implementation ---
+bool Database::isOpen() const {
+    return m_db.isOpen();
 }
 
 void Database::exec(const std::string& sql) {
@@ -96,7 +98,6 @@ void Database::createTables() {
     exec(R"( CREATE TABLE IF NOT EXISTS groups ( id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, owner_id TEXT DEFAULT 'me' ); )");
     exec(R"( CREATE TABLE IF NOT EXISTS group_keys ( group_id INTEGER PRIMARY KEY, encrypted_group_key BLOB NOT NULL, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE ); )");
     
-    // Updated entries table with timestamps
     exec(R"( 
         CREATE TABLE IF NOT EXISTS entries ( 
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -115,23 +116,13 @@ void Database::createTables() {
         ); 
     )");
     
-    // Migrations: Add columns if they don't exist
-    // QtSql doesn't throw on simple exec failures unless checked, but we check specifically.
     QSqlQuery query(m_db);
-    
-    // Migration 1: totp_secret
-    if (!query.exec("ALTER TABLE entries ADD COLUMN totp_secret TEXT DEFAULT '';")) {
-        // Ignore "duplicate column name" error, throw others if critical, mostly safe to ignore for migrations
-    }
-    
-    // Migration 2: entry_type
-    if (!query.exec("ALTER TABLE entries ADD COLUMN entry_type TEXT DEFAULT 'password';")) {
-        // Ignore error if column exists
-    }
+    // Migrations
+    if (!query.exec("ALTER TABLE entries ADD COLUMN totp_secret TEXT DEFAULT '';")) {}
+    if (!query.exec("ALTER TABLE entries ADD COLUMN entry_type TEXT DEFAULT 'password';")) {}
     
     exec(R"( CREATE TABLE IF NOT EXISTS locations ( id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER NOT NULL, type TEXT NOT NULL, value TEXT NOT NULL, FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE ); )");
     
-    // Password history table
     exec(R"(
         CREATE TABLE IF NOT EXISTS password_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,7 +133,6 @@ void Database::createTables() {
         );
     )");
     
-    // Pending invites
     exec(R"( 
         CREATE TABLE IF NOT EXISTS pending_invites ( 
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -329,9 +319,9 @@ void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsi
         q.addBindValue(QString::fromStdString(entry.username));
         q.addBindValue(QString::fromStdString(entry.notes));
         q.addBindValue(toQByteArray(encryptedPassword));
-        q.addBindValue(now); // created_at
-        q.addBindValue(now); // last_modified
-        q.addBindValue(now); // last_accessed
+        q.addBindValue(now); 
+        q.addBindValue(now); 
+        q.addBindValue(now); 
         q.addBindValue(static_cast<qint64>(entry.passwordExpiry));
         q.addBindValue(QString::fromStdString(entry.totp_secret));
         q.addBindValue(QString::fromStdString(entry.entry_type));
@@ -525,7 +515,6 @@ void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned c
 
         if (newEncryptedPassword) {
             try {
-                // Save old password
                 std::vector<unsigned char> oldPassword = getEncryptedPassword(entry.id);
                 storePasswordHistory(entry.id, oldPassword);
                 deleteOldPasswordHistory(entry.id, 10);
@@ -595,11 +584,7 @@ std::vector<PasswordHistoryEntry> Database::getPasswordHistory(int entryId) {
     while (query.next()) {
         int id = query.value(0).toInt();
         std::vector<unsigned char> encPwd = toVector(query.value(1).toByteArray());
-        
-        // Convert vector back to string for the struct if needed, or change struct to use vector
-        // Assuming PasswordHistoryEntry uses string for encryptedBlob based on original code
         std::string encPwdStr(encPwd.begin(), encPwd.end()); 
-        
         long long changedAt = query.value(2).toLongLong();
         history.emplace_back(id, entryId, encPwdStr, changedAt);
     }
@@ -632,7 +617,7 @@ void Database::updateEntryAccessTime(int entryId) {
     query.prepare("UPDATE entries SET last_accessed = ? WHERE id = ?;");
     query.addBindValue(QDateTime::currentSecsSinceEpoch());
     query.addBindValue(entryId);
-    query.exec(); // Ignore errors for access time updates
+    query.exec(); 
 }
 
 std::vector<VaultEntry> Database::getRecentlyAccessedEntries(int groupId, int limit) {

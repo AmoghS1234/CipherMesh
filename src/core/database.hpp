@@ -4,7 +4,10 @@
 #include <vector>
 #include <map>
 #include <stdexcept>
-#include <QSqlDatabase> // <--- CRITICAL: Added for Qt SQL
+#include <QSqlDatabase>
+
+// Include existing definitions to prevent redefinition errors
+#include "vault_entry.hpp" 
 
 namespace CipherMesh {
 namespace Core {
@@ -15,63 +18,6 @@ public:
     explicit DBException(const std::string& msg) : std::runtime_error(msg) {}
 };
 
-// Data Structures (Reverse-engineered from your cpp file)
-struct Location {
-    int id;
-    std::string type;
-    std::string value;
-
-    Location(int i, std::string t, std::string v) 
-        : id(i), type(std::move(t)), value(std::move(v)) {}
-};
-
-struct VaultEntry {
-    int id;
-    std::string title;
-    std::string username;
-    std::string notes;
-    long long createdAt;
-    long long lastModified;
-    long long lastAccessed;
-    long long passwordExpiry;
-    std::string totp_secret;
-    std::string entry_type;
-    std::vector<Location> locations;
-
-    VaultEntry(int i, std::string t, std::string u, std::string n)
-        : id(i), title(std::move(t)), username(std::move(u)), notes(std::move(n)),
-          createdAt(0), lastModified(0), lastAccessed(0), passwordExpiry(0) {}
-};
-
-struct PasswordHistoryEntry {
-    int id;
-    int entryId;
-    std::string encryptedPassword;
-    long long changedAt;
-
-    PasswordHistoryEntry(int i, int eid, std::string ep, long long ca)
-        : id(i), entryId(eid), encryptedPassword(std::move(ep)), changedAt(ca) {}
-};
-
-struct PendingInvite {
-    int id;
-    std::string senderId;
-    std::string groupName;
-    std::string payloadJson;
-    long long timestamp;
-    std::string status;
-};
-
-struct GroupMember {
-    std::string userId;
-    std::string role;
-    std::string status;
-};
-
-struct GroupPermissions {
-    bool adminsOnlyWrite;
-};
-
 class Database {
 public:
     Database();
@@ -80,8 +26,9 @@ public:
     // Core Management
     void open(const std::string& path);
     void close();
+    bool isOpen() const; // <--- FIX: Added missing method
     void createTables();
-    void exec(const std::string& sql); // Kept for raw SQL support if needed
+    void exec(const std::string& sql);
 
     // Metadata
     void storeMetadata(const std::string& key, const std::vector<unsigned char>& value);
@@ -136,7 +83,6 @@ public:
     std::string getGroupOwner(int groupId);
 
 private:
-    // CHANGE: No longer 'sqlite3* m_db', now QSqlDatabase
     QSqlDatabase m_db; 
 };
 
