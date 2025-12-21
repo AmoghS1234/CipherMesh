@@ -31,7 +31,7 @@ message(STATUS "Using prebuilt libsodium:  ${sodium_LIBRARY_RELEASE}")
 
 FetchContent_Declare(
     mbedtls
-    GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls. git
+    GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
     GIT_TAG v3.6.0
     GIT_SHALLOW TRUE
 )
@@ -39,7 +39,7 @@ FetchContent_MakeAvailable(mbedtls)
 
 set(MbedTLS_FOUND TRUE CACHE BOOL "" FORCE)
 set(MbedTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
-set(MbedTLS_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedtls. a" CACHE FILEPATH "" FORCE)
+set(MbedTLS_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedtls.a" CACHE FILEPATH "" FORCE)
 set(MbedX509_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedx509.a" CACHE FILEPATH "" FORCE)
 set(MbedCrypto_LIBRARY "${mbedtls_BINARY_DIR}/library/libmbedcrypto.a" CACHE FILEPATH "" FORCE)
 
@@ -78,9 +78,9 @@ target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core
     Qt6::Network
     Qt6::Sql
-    Qt6:: Concurrent
+    Qt6::Concurrent
     Qt6::WebSockets
-    LibDataChannel:: LibDataChannelStatic
+    LibDataChannel::LibDataChannelStatic
     sodium
     "${MbedTLS_LIBRARY}"
     "${MbedX509_LIBRARY}"
@@ -92,7 +92,7 @@ if(ANDROID)
         MANUAL_FINALIZATION
         src/mobile/main_mobile.cpp
         src/mobile/vaultqmlwrapper.cpp
-        src/mobile/qml. qrc
+        src/mobile/qml.qrc
     )
 
     target_link_libraries(CipherMesh-Mobile PRIVATE
@@ -104,7 +104,7 @@ if(ANDROID)
         "${MbedCrypto_LIBRARY}"
         -Wl,--no-whole-archive
         LibDataChannel::LibDataChannelStatic
-        Qt6:: Quick
+        Qt6::Quick
         Qt6::Core
         Qt6::Network
         Qt6::WebSockets
@@ -122,7 +122,7 @@ if(NOT ANDROID AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/desktop/main.cpp")
     if(Qt6Widgets_FOUND)
         add_executable(CipherMesh-Desktop
             src/desktop/main.cpp
-            src/desktop/mainwindow. cpp
+            src/desktop/mainwindow.cpp
         )
         target_link_libraries(CipherMesh-Desktop PRIVATE
             ciphermesh-core
