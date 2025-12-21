@@ -7,14 +7,35 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Qt (Android + Desktop)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install aqtinstall
+
+          python -m aqt install-qt linux android 6.5.0 android_armv7 \
+            --outputdir $GITHUB_WORKSPACE/Qt
+
+          python -m aqt install-qt linux desktop 6.5.0 gcc_64 \
+            --outputdir $GITHUB_WORKSPACE/Qt
+
       - name: Build APK
         run: |
-          export ANDROID_QT=$RUNNER_WORKSPACE/Qt/6.5.0/android_armv7
-          export HOST_QT=$RUNNER_WORKSPACE/Qt/6.5.0/gcc_64
+          export ANDROID_QT=$GITHUB_WORKSPACE/Qt/6.5.0/android_armv7
+          export HOST_QT=$GITHUB_WORKSPACE/Qt/6.5.0/gcc_64
 
           echo "Android Qt: $ANDROID_QT"
           echo "Host Qt:    $HOST_QT"
