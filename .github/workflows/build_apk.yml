@@ -38,11 +38,15 @@ jobs:
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
-      - name: Configure & Build APK
+      - name: Build APK
         run: |
           export ANDROID_QT=$GITHUB_WORKSPACE/Qt/6.5.0/android_armv7
           export HOST_QT=$GITHUB_WORKSPACE/Qt/6.5.0/gcc_64
 
+          echo "Android Qt: $ANDROID_QT"
+          echo "Host Qt:    $HOST_QT"
+
+          # Required on GitHub runners
           chmod +x $ANDROID_QT/bin/* || true
           chmod +x $HOST_QT/bin/* || true
 
@@ -57,16 +61,10 @@ jobs:
             -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
             -DANDROID_ABI=armeabi-v7a
 
-          echo "==== Available CMake targets ===="
-          cmake --build . --target help
+          # ✅ Explicit APK packaging target (required)
+          cmake --build . --target CipherMesh-Mobile_make_apk
 
-          echo "==== Building APK target ===="
-          APK_TARGET=$(cmake --build . --target help | grep '_make_apk' | head -n 1 | awk '{print $1}')
-          echo "Using APK target: $APK_TARGET"
-
-          cmake --build . --target "$APK_TARGET"
-
-      - name: Locate APK
+      - name: Locate APK (debug)
         run: |
           echo "Searching for APK files..."
           find build -name "*.apk" -type f
