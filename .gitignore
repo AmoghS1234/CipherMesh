@@ -34,6 +34,9 @@ Thumbs.db
 commit_message.txt
 _codeql_*
 
+# Log files
+*.log
+
 # Extension icons (add your own)
 extensions/*/icons/*.png
 extensions/*/icons/*.jpg
