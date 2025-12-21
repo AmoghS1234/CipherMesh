@@ -14,6 +14,9 @@ set(NO_LOGGING ON CACHE BOOL "" FORCE)
 set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
 set(NO_TESTS ON CACHE BOOL "" FORCE)
 
+# Prevent shared libs for dependencies (forces .a static libs)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
 set(USE_MBEDTLS ON CACHE BOOL "" FORCE)
 set(USE_OPENSSL OFF CACHE BOOL "" FORCE)
 
@@ -57,7 +60,6 @@ set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
 # --- [FIX] Libsodium Header Compatibility Layer ---
-# Solves 'sodium/version.h' and 'export.h' not found errors during COMPILATION
 set(SODIUM_COMPAT_DIR "${CMAKE_BINARY_DIR}/sodium_compat")
 file(MAKE_DIRECTORY "${SODIUM_COMPAT_DIR}/sodium")
 
@@ -128,7 +130,8 @@ target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Sql
     Qt6::Concurrent
     Qt6::WebSockets
-    libsodium
+    # Correct CMake target name: 'sodium' (not 'libsodium')
+    sodium
     LibDataChannel::LibDataChannelStatic
     mbedtls
     mbedcrypto
@@ -145,16 +148,17 @@ if(ANDROID)
 
     target_include_directories(CipherMesh-Mobile PRIVATE src/mobile)
 
-    # ⚠️ CRITICAL FIX: Explicitly re-link static dependencies for Android Shared Object
+    # ⚠️ FINAL FIX: Use Generator Expressions on REAL targets
+    # This forces CMake to pass absolute paths to the .a files to the linker.
     target_link_libraries(CipherMesh-Mobile PRIVATE
         ciphermesh-core
         
-        # Dependencies must be visible to the shared library linker
-        libsodium
-        mbedtls
-        mbedcrypto
-        mbedx509
-        LibDataChannel::LibDataChannelStatic
+        # Resolve absolute paths to static library files
+        $<TARGET_FILE:sodium>
+        $<TARGET_FILE:mbedtls>
+        $<TARGET_FILE:mbedcrypto>
+        $<TARGET_FILE:mbedx509>
+        $<TARGET_FILE:LibDataChannel::LibDataChannelStatic>
 
         Qt6::Quick
         Qt6::Core
