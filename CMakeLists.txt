@@ -38,7 +38,11 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(mbedtls)
 
 # MbedTLS provides targets: mbedtls, mbedx509, mbedcrypto
-set(MbedTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+# Set variables that libdatachannel's FindMbedTLS expects
+set(MBEDTLS_INCLUDE_DIRS "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+set(MBEDTLS_LIBRARY mbedtls CACHE STRING "" FORCE)
+set(MBEDX509_LIBRARY mbedx509 CACHE STRING "" FORCE)
+set(MBEDCRYPTO_LIBRARY mbedcrypto CACHE STRING "" FORCE)
 
 FetchContent_Declare(
     LibDataChannel
