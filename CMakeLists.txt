@@ -56,6 +56,33 @@ FetchContent_Declare(
 set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
+# --- [FIX] Libsodium Header Compatibility Layer ---
+# This creates a 'sodium/version.h' structure so <sodium/version.h> works.
+set(SODIUM_COMPAT_DIR "${CMAKE_BINARY_DIR}/sodium_compat")
+
+# 1. Create the 'sodium' subdirectory
+file(MAKE_DIRECTORY "${SODIUM_COMPAT_DIR}/sodium")
+
+# 2. Locate the generated version.h (It usually lands in binary root)
+if(EXISTS "${sodium_BINARY_DIR}/version.h")
+    # Copy it into our compat folder
+    file(COPY "${sodium_BINARY_DIR}/version.h" DESTINATION "${SODIUM_COMPAT_DIR}/sodium")
+    message(STATUS "Fixed Libsodium includes: Copied version.h to compat dir.")
+else()
+    # Fallback: Try to generate it from source if build didn't (Safety Net)
+    if(EXISTS "${sodium_SOURCE_DIR}/src/libsodium/include/sodium/version.h.in")
+        message(STATUS "Generating version.h manually from template...")
+        set(VERSION "1.0.18") # Hardcoded fallback for 'stable' tag
+        set(SODIUM_LIBRARY_VERSION_MAJOR 10)
+        set(SODIUM_LIBRARY_VERSION_MINOR 3)
+        configure_file(
+            "${sodium_SOURCE_DIR}/src/libsodium/include/sodium/version.h.in"
+            "${SODIUM_COMPAT_DIR}/sodium/version.h"
+        )
+    endif()
+endif()
+# ----------------------------------------------------
+
 # C. LibDataChannel
 FetchContent_Declare(
     LibDataChannel
@@ -77,19 +104,16 @@ add_library(ciphermesh-core STATIC
     src/p2p_webrtc/webrtcservice.cpp
 )
 
-# ⚠️ THE CORRECT FIX: Enforce include ordering
-# 1. sodium-build/include must come BEFORE source include to find generated version.h
-# 2. SYSTEM prevents warnings from 3rd party headers
 target_include_directories(ciphermesh-core SYSTEM BEFORE PUBLIC
-    ${CMAKE_BINARY_DIR}/_deps/sodium-build/include
-    ${CMAKE_BINARY_DIR}/_deps/sodium-src/src/libsodium/include
+    # This must be FIRST to intercept the <sodium/version.h> call
+    ${SODIUM_COMPAT_DIR}
 )
 
-# Standard includes for other libs
 target_include_directories(ciphermesh-core PUBLIC
     src/core
     src/p2p
     src/p2p_webrtc
+    ${sodium_SOURCE_DIR}/src/libsodium/include
     ${libdatachannel_SOURCE_DIR}/include
     ${mbedtls_SOURCE_DIR}/include
 )
@@ -100,7 +124,7 @@ target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Sql
     Qt6::Concurrent
     Qt6::WebSockets
-    libsodium  # Linking the actual target
+    libsodium
     LibDataChannel::LibDataChannelStatic
     mbedtls
     mbedcrypto
@@ -109,7 +133,6 @@ target_link_libraries(ciphermesh-core PRIVATE
 
 # --- 5. Android / Mobile Build ---
 if(ANDROID)
-    # Qt6 Specific: Use qt_add_executable with MANUAL_FINALIZATION
     qt_add_executable(CipherMesh-Mobile MANUAL_FINALIZATION WIN32 MACOSX_BUNDLE
         src/mobile/main_mobile.cpp
         src/mobile/vaultqmlwrapper.cpp
@@ -130,7 +153,6 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android
     )
 
-    # Trigger Android deployment rules (creates the _make_apk target)
     qt_finalize_executable(CipherMesh-Mobile)
 endif()
 
