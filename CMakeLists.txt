@@ -82,9 +82,10 @@ target_include_directories(ciphermesh-core PUBLIC
     src/p2p
     src/p2p_webrtc
     ${sodium_SOURCE_DIR}/src/libsodium/include
-    ${sodium_BINARY_DIR}                        # Finds generated files in root of build dir
-    ${sodium_BINARY_DIR}/include                # <--- CRITICAL FIX: Finds sodium/version.h
-    ${sodium_BINARY_DIR}/src/libsodium/include  # Backup path
+    ${sodium_BINARY_DIR}
+    ${sodium_BINARY_DIR}/include
+    # ⚠️ CRITICAL FIX: Direct path to where FetchContent puts the build artifacts
+    ${CMAKE_BINARY_DIR}/_deps/sodium-build
     ${libdatachannel_SOURCE_DIR}/include
     ${mbedtls_SOURCE_DIR}/include
 )
@@ -95,7 +96,8 @@ target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Sql
     Qt6::Concurrent
     Qt6::WebSockets
-    sodium
+    # ⚠️ CRITICAL FIX: Link against 'libsodium' (Target), NOT 'sodium' (Download Name)
+    libsodium
     LibDataChannel::LibDataChannelStatic
     mbedtls
     mbedcrypto
