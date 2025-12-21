@@ -63,16 +63,16 @@ jobs:
 
           cmake --build . --target apk
 
-      # 🔍 This shows exactly where Qt placed the APK
+      # (Optional) Shows exactly where Qt placed the APK
       - name: Locate APK
         run: |
           echo "Searching for APK files..."
-          find build -name "*.apk" -type f
+          find . -name "*.apk" -type f
 
-      # 📦 This saves the APK so you can download it
+      # ✅ Correct upload path for Qt Android builds
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: CipherMesh-APK
-          path: build/**/*.apk
+          path: android-build/**/*.apk
           if-no-files-found: error
