@@ -59,39 +59,6 @@ FetchContent_Declare(
 set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
-# --- [FIX] Canonical Android Target Creation for Libsodium ---
-# Robustly find the library file by checking all known build output locations
-if(NOT TARGET libsodium)
-    find_library(
-        LIBSODIUM_A
-        NAMES libsodium sodium
-        PATHS 
-            ${sodium_BINARY_DIR}
-            ${sodium_BINARY_DIR}/src
-            ${sodium_BINARY_DIR}/src/libsodium
-            ${sodium_BINARY_DIR}/src/libsodium/.libs
-            ${sodium_BINARY_DIR}/lib
-        NO_DEFAULT_PATH
-    )
-
-    if(NOT LIBSODIUM_A)
-        message(FATAL_ERROR 
-            "libsodium static library not found.\n"
-            "Searched under: ${sodium_BINARY_DIR}\n"
-            "Check build logs to see where libsodium placed the .a file."
-        )
-    endif()
-
-    # Create the imported target manually using the found file
-    add_library(libsodium STATIC IMPORTED GLOBAL)
-    set_target_properties(libsodium PROPERTIES
-        IMPORTED_LOCATION "${LIBSODIUM_A}"
-        INTERFACE_INCLUDE_DIRECTORIES "${sodium_SOURCE_DIR}/src/libsodium/include"
-    )
-    
-    message(STATUS "Imported libsodium target from: ${LIBSODIUM_A}")
-endif()
-
 # --- [FIX] Header Compatibility Layer (Kept for safety) ---
 set(SODIUM_COMPAT_DIR "${CMAKE_BINARY_DIR}/sodium_compat")
 file(MAKE_DIRECTORY "${SODIUM_COMPAT_DIR}/sodium")
@@ -151,10 +118,9 @@ target_include_directories(ciphermesh-core PUBLIC
     ${mbedtls_SOURCE_DIR}/include
 )
 
-# Optional: Silence redefinition warnings
+# Optional: Silence warnings
 target_compile_options(ciphermesh-core PRIVATE -Wno-macro-redefined)
 
-# ✅ Correct Linking: Link against TARGETS
 target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core
     Qt6::Network
@@ -162,7 +128,9 @@ target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Concurrent
     Qt6::WebSockets
     
-    libsodium   # Use the target we created above
+    # We link against the TARGET here (created by FetchContent implicitly)
+    # The linker error happens later, at the shared lib boundary.
+    sodium
     mbedtls
     mbedcrypto
     mbedx509
@@ -179,16 +147,19 @@ if(ANDROID)
 
     target_include_directories(CipherMesh-Mobile PRIVATE src/mobile)
 
-    # ✅ Correct Android Linking: Use Generator Expressions on REAL targets
-    # This forces the linker to use absolute paths to the .a files
+    # ✅ THE FINAL FIX: Force whole-archive linking
+    # This instructs the linker to include ALL symbols from these static libs
+    # into the final .so, preventing them from being stripped or lost.
     target_link_libraries(CipherMesh-Mobile PRIVATE
         ciphermesh-core
-        
-        $<TARGET_FILE:libsodium>
-        $<TARGET_FILE:mbedtls>
-        $<TARGET_FILE:mbedcrypto>
-        $<TARGET_FILE:mbedx509>
-        $<TARGET_FILE:LibDataChannel::LibDataChannelStatic>
+
+        -Wl,--whole-archive
+        sodium
+        mbedtls
+        mbedcrypto
+        mbedx509
+        LibDataChannel::LibDataChannelStatic
+        -Wl,--no-whole-archive
 
         Qt6::Quick
         Qt6::Core
