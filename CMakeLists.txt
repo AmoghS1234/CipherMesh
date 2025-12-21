@@ -77,15 +77,19 @@ add_library(ciphermesh-core STATIC
     src/p2p_webrtc/webrtcservice.cpp
 )
 
+# ⚠️ THE CORRECT FIX: Enforce include ordering
+# 1. sodium-build/include must come BEFORE source include to find generated version.h
+# 2. SYSTEM prevents warnings from 3rd party headers
+target_include_directories(ciphermesh-core SYSTEM BEFORE PUBLIC
+    ${CMAKE_BINARY_DIR}/_deps/sodium-build/include
+    ${CMAKE_BINARY_DIR}/_deps/sodium-src/src/libsodium/include
+)
+
+# Standard includes for other libs
 target_include_directories(ciphermesh-core PUBLIC
     src/core
     src/p2p
     src/p2p_webrtc
-    ${sodium_SOURCE_DIR}/src/libsodium/include
-    ${sodium_BINARY_DIR}
-    ${sodium_BINARY_DIR}/include
-    # ⚠️ CRITICAL FIX: Direct path to where FetchContent puts the build artifacts
-    ${CMAKE_BINARY_DIR}/_deps/sodium-build
     ${libdatachannel_SOURCE_DIR}/include
     ${mbedtls_SOURCE_DIR}/include
 )
@@ -96,8 +100,7 @@ target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Sql
     Qt6::Concurrent
     Qt6::WebSockets
-    # ⚠️ CRITICAL FIX: Link against 'libsodium' (Target), NOT 'sodium' (Download Name)
-    libsodium
+    libsodium  # Linking the actual target
     LibDataChannel::LibDataChannelStatic
     mbedtls
     mbedcrypto
@@ -106,7 +109,7 @@ target_link_libraries(ciphermesh-core PRIVATE
 
 # --- 5. Android / Mobile Build ---
 if(ANDROID)
-    # CHANGE: Use qt_add_executable with MANUAL_FINALIZATION
+    # Qt6 Specific: Use qt_add_executable with MANUAL_FINALIZATION
     qt_add_executable(CipherMesh-Mobile MANUAL_FINALIZATION WIN32 MACOSX_BUNDLE
         src/mobile/main_mobile.cpp
         src/mobile/vaultqmlwrapper.cpp
@@ -127,7 +130,7 @@ if(ANDROID)
         QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android
     )
 
-    # This line will now work because of MANUAL_FINALIZATION above
+    # Trigger Android deployment rules (creates the _make_apk target)
     qt_finalize_executable(CipherMesh-Mobile)
 endif()
 
