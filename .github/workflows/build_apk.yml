@@ -1,7 +1,8 @@
 name: Build Android APK
 
+# Workflow disabled - build using Android Studio instead
+# See BUILD_ANDROID_STUDIO.md for instructions
 on: 
-  push:
   workflow_dispatch: 
 
 jobs:
