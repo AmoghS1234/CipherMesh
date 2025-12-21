@@ -1,11 +1,12 @@
-# --- FINAL PRODUCTION-READY ANDROID BUILD ---
 cmake_minimum_required(VERSION 3.16)
 project(CipherMesh VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# --- Force dependency options ---
+# --------------------------------------------------
+# Forced dependency options
+# --------------------------------------------------
 set(NO_LOGGING ON CACHE BOOL "" FORCE)
 set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
 set(NO_TESTS ON CACHE BOOL "" FORCE)
@@ -20,7 +21,7 @@ add_compile_definitions(MBEDTLS_SSL_DTLS_SRTP)
 include(FetchContent)
 
 # --------------------------------------------------
-# Libsodium (prebuilt from CI)
+# Libsodium (prebuilt, injected by CI)
 # --------------------------------------------------
 if(NOT DEFINED sodium_INCLUDE_DIR OR NOT DEFINED sodium_LIBRARY_RELEASE)
     message(FATAL_ERROR "Prebuilt libsodium not provided")
@@ -32,14 +33,14 @@ set_target_properties(sodium PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${sodium_INCLUDE_DIR}"
 )
 
-message(STATUS "Using prebuilt libsodium:  ${sodium_LIBRARY_RELEASE}")
+message(STATUS "Using prebuilt libsodium: ${sodium_LIBRARY_RELEASE}")
 
 # --------------------------------------------------
 # MbedTLS
 # --------------------------------------------------
 FetchContent_Declare(
     mbedtls
-    GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls. git
+    GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
     GIT_TAG v3.6.0
     GIT_SHALLOW TRUE
 )
@@ -70,7 +71,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 )
 
 # --------------------------------------------------
-# Core Library
+# Core library
 # --------------------------------------------------
 add_library(ciphermesh-core STATIC
     src/core/crypto.cpp
@@ -85,9 +86,6 @@ target_include_directories(ciphermesh-core PUBLIC
     src/p2p
     src/p2p_webrtc
     ${MbedTLS_INCLUDE_DIR}
-)
-
-target_include_directories(ciphermesh-core PUBLIC
     $<TARGET_PROPERTY:sodium,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
@@ -95,11 +93,11 @@ target_compile_options(ciphermesh-core PRIVATE -Wno-macro-redefined)
 
 target_link_libraries(ciphermesh-core PRIVATE
     Qt6::Core
-    Qt6:: Network
+    Qt6::Network
     Qt6::Sql
     Qt6::Concurrent
     Qt6::WebSockets
-    LibDataChannel:: LibDataChannelStatic
+    LibDataChannel::LibDataChannelStatic
     sodium
     "${MbedTLS_LIBRARY}"
     "${MbedX509_LIBRARY}"
@@ -107,14 +105,14 @@ target_link_libraries(ciphermesh-core PRIVATE
 )
 
 # --------------------------------------------------
-# Android App
+# Android app
 # --------------------------------------------------
 if(ANDROID)
     qt_add_executable(CipherMesh-Mobile
         MANUAL_FINALIZATION
         src/mobile/main_mobile.cpp
         src/mobile/vaultqmlwrapper.cpp
-        src/mobile/qml. qrc
+        src/mobile/qml.qrc
     )
 
     target_link_libraries(CipherMesh-Mobile PRIVATE
@@ -152,6 +150,6 @@ if(NOT ANDROID AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/desktop/main.cpp")
     )
     target_link_libraries(CipherMesh-Desktop PRIVATE
         ciphermesh-core
-        Qt6:: Widgets
+        Qt6::Widgets
     )
 endif()
