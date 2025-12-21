@@ -56,23 +56,17 @@ FetchContent_Declare(
 set(SODIUM_LIBRARY_MINIMAL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(sodium)
 
-# --- [FIX] Libsodium Header Compatibility Layer ---
-# This creates a 'sodium/version.h' structure so <sodium/version.h> works.
+# --- [FIX] Libsodium Header Compatibility Layer (Version + Export) ---
+# This ensures both version.h AND export.h exist in 'sodium/'
 set(SODIUM_COMPAT_DIR "${CMAKE_BINARY_DIR}/sodium_compat")
-
-# 1. Create the 'sodium' subdirectory
 file(MAKE_DIRECTORY "${SODIUM_COMPAT_DIR}/sodium")
 
-# 2. Locate the generated version.h (It usually lands in binary root)
+# 1. Handle version.h
 if(EXISTS "${sodium_BINARY_DIR}/version.h")
-    # Copy it into our compat folder
     file(COPY "${sodium_BINARY_DIR}/version.h" DESTINATION "${SODIUM_COMPAT_DIR}/sodium")
-    message(STATUS "Fixed Libsodium includes: Copied version.h to compat dir.")
 else()
-    # Fallback: Try to generate it from source if build didn't (Safety Net)
     if(EXISTS "${sodium_SOURCE_DIR}/src/libsodium/include/sodium/version.h.in")
-        message(STATUS "Generating version.h manually from template...")
-        set(VERSION "1.0.18") # Hardcoded fallback for 'stable' tag
+        set(VERSION "1.0.18")
         set(SODIUM_LIBRARY_VERSION_MAJOR 10)
         set(SODIUM_LIBRARY_VERSION_MINOR 3)
         configure_file(
@@ -81,7 +75,19 @@ else()
         )
     endif()
 endif()
-# ----------------------------------------------------
+
+# 2. Handle export.h (Critical for fixing 'export.h not found' error)
+if(EXISTS "${sodium_BINARY_DIR}/export.h")
+    file(COPY "${sodium_BINARY_DIR}/export.h" DESTINATION "${SODIUM_COMPAT_DIR}/sodium")
+else()
+    # Fallback: Create a dummy export.h if missing (common for static builds)
+    if(NOT EXISTS "${SODIUM_COMPAT_DIR}/sodium/export.h")
+        file(WRITE "${SODIUM_COMPAT_DIR}/sodium/export.h" "#define SODIUM_EXPORT\n#define SODIUM_EXPORT_WEAK\n")
+    endif()
+endif()
+
+message(STATUS "Fixed Libsodium includes: Populated compat dir with headers.")
+# -------------------------------------------------------------------
 
 # C. LibDataChannel
 FetchContent_Declare(
@@ -105,7 +111,7 @@ add_library(ciphermesh-core STATIC
 )
 
 target_include_directories(ciphermesh-core SYSTEM BEFORE PUBLIC
-    # This must be FIRST to intercept the <sodium/version.h> call
+    # This must be FIRST to intercept <sodium/version.h> and "export.h"
     ${SODIUM_COMPAT_DIR}
 )
 
