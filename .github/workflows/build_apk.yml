@@ -1,27 +1,27 @@
 name: Build Android APK
 
-on:
-  push: 
+on: 
+  push:  
   workflow_dispatch:
 
-jobs: 
-  build:
-    runs-on:  ubuntu-latest
+jobs:  
+  build: 
+    runs-on: ubuntu-latest
 
-    steps: 
+    steps:  
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Setup Java
+      - name:  Setup Java
         uses: actions/setup-java@v3
         with:
-          distribution: temurin
-          java-version:  '17'
+          distribution:  temurin
+          java-version: '17'
 
-      - name:  Setup Android SDK / NDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android SDK / NDK
+        uses:  android-actions/setup-android@v3
 
       - name: Install Qt (Android + Desktop with WebSockets)
         run: |
@@ -36,12 +36,12 @@ jobs:
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
-      - name: Build libsodium for Android
+      - name:  Build libsodium for Android
         run:  |
           sudo apt-get update
           sudo apt-get install -y autoconf automake libtool
           
-          git clone --depth 1 --branch stable https://github.com/jedisct1/libsodium. git
+          git clone --depth 1 --branch stable https://github.com/jedisct1/libsodium.git
           cd libsodium
           
           export NDK=$ANDROID_NDK_ROOT
@@ -67,7 +67,7 @@ jobs:
           make -j$(nproc)
           make install
 
-      - name:  Build APK
+      - name: Build APK
         run: |
           export ANDROID_QT=$GITHUB_WORKSPACE/Qt/6.5.0/android_armv7
           export HOST_QT=$GITHUB_WORKSPACE/Qt/6.5.0/gcc_64
@@ -90,7 +90,7 @@ jobs:
             -Dsodium_LIBRARY_RELEASE=$SODIUM_ROOT/lib/libsodium.a \
             -DCMAKE_FIND_ROOT_PATH="$SODIUM_ROOT;$ANDROID_QT"
 
-          cmake --build . --target CipherMesh-Mobile_make_apk
+          cmake --build .  --target CipherMesh-Mobile_make_apk
 
       - name: Upload APK
         uses:  actions/upload-artifact@v4
