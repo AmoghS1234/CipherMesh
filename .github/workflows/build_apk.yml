@@ -1,29 +1,37 @@
 name: Build Android APK
 
 on:
-  push: 
+  push:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on:  ubuntu-latest
+    runs-on: ubuntu-latest
 
-    steps: 
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name:  Setup Java
+      - name: Setup Java
         uses: actions/setup-java@v3
         with:
-          distribution:  temurin
-          java-version:  '17'
+          distribution: temurin
+          java-version: '17'
 
-      - name:  Setup Android SDK / NDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Qt (Android + Desktop with WebSockets)
+      - name: Install Android NDK
+        run: |
+          sdkmanager "ndk;27.2.12479018"
+
+      - name: Export ANDROID_NDK_ROOT
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> $GITHUB_ENV
+
+      - name: Install Qt (Android + Desktop)
         run: |
           python -m pip install --upgrade pip
           python -m pip install aqtinstall
@@ -36,34 +44,33 @@ jobs:
             --modules qtwebsockets \
             --outputdir $GITHUB_WORKSPACE/Qt
 
-      - name: Build libsodium for Android
+      - name: Build libsodium for Android (armeabi-v7a)
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake libtool
-          
-          git clone --depth 1 --branch stable https://github.com/jedisct1/libsodium. git
+
+          git clone --depth 1 --branch stable https://github.com/jedisct1/libsodium.git
           cd libsodium
-          
+
           export NDK=$ANDROID_NDK_ROOT
-          export HOST_TAG=linux-x86_64
-          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/$HOST_TAG
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
           export API=21
-          
           export TARGET=armv7a-linux-androideabi
-          export AR=$TOOLCHAIN/bin/llvm-ar
+
           export CC=$TOOLCHAIN/bin/${TARGET}${API}-clang
           export CXX=$TOOLCHAIN/bin/${TARGET}${API}-clang++
-          export LD=$TOOLCHAIN/bin/ld
+          export AR=$TOOLCHAIN/bin/llvm-ar
           export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
           export STRIP=$TOOLCHAIN/bin/llvm-strip
-          
+
           ./autogen.sh
-          ./configure --host=arm-linux-androideabi \
+          ./configure \
+            --host=armv7a-linux-androideabi \
             --prefix=$GITHUB_WORKSPACE/libsodium-android \
             --disable-shared \
             --enable-static \
             --with-pic
-          
+
           make -j$(nproc)
           make install
 
@@ -72,29 +79,25 @@ jobs:
           export ANDROID_QT=$GITHUB_WORKSPACE/Qt/6.5.0/android_armv7
           export HOST_QT=$GITHUB_WORKSPACE/Qt/6.5.0/gcc_64
           export PATH=$ANDROID_QT/bin:$HOST_QT/bin:$PATH
-          
-          export SODIUM_ROOT=$GITHUB_WORKSPACE/libsodium-android
 
-          chmod +x $ANDROID_QT/bin/* || true
-          chmod +x $HOST_QT/bin/* || true
+          export SODIUM_ROOT=$GITHUB_WORKSPACE/libsodium-android
 
           mkdir -p build
           cd build
 
-          qt-cmake -S .. -B . \
+          qt-cmake .. \
             -DQT_HOST_PATH=$HOST_QT \
             -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
             -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
             -DANDROID_ABI=armeabi-v7a \
             -Dsodium_INCLUDE_DIR=$SODIUM_ROOT/include \
-            -Dsodium_LIBRARY_RELEASE=$SODIUM_ROOT/lib/libsodium.a \
-            -DCMAKE_FIND_ROOT_PATH="$SODIUM_ROOT;$ANDROID_QT"
+            -Dsodium_LIBRARY_RELEASE=$SODIUM_ROOT/lib/libsodium.a
 
-          cmake --build .  --target CipherMesh-Mobile_make_apk
+          cmake --build . --target CipherMesh-Mobile_make_apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name:  CipherMesh-APK
+          name: CipherMesh-APK
           path: build/**/*.apk
           if-no-files-found: error
