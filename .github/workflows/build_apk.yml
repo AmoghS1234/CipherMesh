@@ -1,12 +1,15 @@
 name: Build Android APK
-on: [push]
+on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v3
@@ -15,6 +18,8 @@ jobs:
           host: 'linux'
           target: 'android'
           arch: 'android_armv7'
+          # We also cache the installation to speed up future builds
+          cache: 'true'
 
       - name: Setup Java
         uses: actions/setup-java@v3
@@ -27,17 +32,28 @@ jobs:
 
       - name: Build APK
         run: |
-          # 1. Fix permissions for the Qt binaries
+          # 1. Fix permissions for the Qt binaries (Solves "Permission denied")
           chmod +x ${{ env.Qt6_DIR }}/bin/*
+          
+          # 2. Define the path to the Host (Linux) Qt
+          # The action installs 'android_armv7' and 'gcc_64' side-by-side.
+          # We need to point CMake to the gcc_64 folder for internal tools like moc/rcc.
+          export QT_HOST_PATH=$(readlink -f ${{ env.Qt6_DIR }}/../../gcc_64)
+          echo "Using Host Qt at: $QT_HOST_PATH"
 
-          # 2. Proceed with build
+          # 3. Create Build Directory
           mkdir build
           cd build
-          qt-cmake -S .. -B . 
+
+          # 4. Configure (Cross-Compile)
+          # We pass the Host Path explicitly to fix the "QT_HOST_PATH" error
+          qt-cmake -S .. -B . -DQT_HOST_PATH=$QT_HOST_PATH
+
+          # 5. Compile
           cmake --build . --target apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: my-app-apk
+          name: CipherMesh-APK
           path: build/android-build/build/outputs/apk/debug/*.apk
