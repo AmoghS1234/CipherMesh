@@ -2,6 +2,11 @@ plugins {
     id 'com.android.application'
 }
 
+repositories {
+    google()
+    mavenCentral()
+}
+
 android {
     namespace 'com.ciphermesh.mobile'
     compileSdk 34
@@ -45,17 +50,15 @@ android {
         }
     }
 
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
+    // Remove compileOptions since this is a native C++/Qt project, not Java
+    // The Java activity is minimal and will use default settings
 
     sourceSets {
         main {
             manifest.srcFile 'src/main/AndroidManifest.xml'
-            java.srcDirs = ['src/main/java']
             res.srcDirs = ['src/main/res']
-            assets.srcDirs = ['src/main/assets']
+            // Note: This is primarily a Qt/C++ project using CMake
+            // Java source directory can be added if needed for minimal Java wrapper code
         }
     }
 }
