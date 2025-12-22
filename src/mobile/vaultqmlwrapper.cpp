@@ -110,7 +110,14 @@ bool VaultQmlWrapper::changeMasterPassword(const QString& oldPassword, const QSt
     if (!m_vault || m_vault->isLocked()) return false;
     
     try {
-        bool success = m_vault->changeMasterPassword(oldPassword.toStdString(), newPassword.toStdString());
+        // First verify the old password
+        if (!m_vault->verifyMasterPassword(oldPassword.toStdString())) {
+            emit errorOccurred("Current password is incorrect");
+            return false;
+        }
+        
+        // Change to new password
+        bool success = m_vault->changeMasterPassword(newPassword.toStdString());
         return success;
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Failed to change password: %1").arg(e.what()));
@@ -246,29 +253,38 @@ QVariantMap VaultQmlWrapper::getEntry(int entryId) {
     if (!m_vault || m_vault->isLocked()) return map;
     
     try {
-        auto entry = m_vault->getEntryById(entryId);
-        map["id"] = entry.id;
-        map["title"] = QString::fromStdString(entry.title);
-        map["username"] = QString::fromStdString(entry.username);
-        map["notes"] = QString::fromStdString(entry.notes);
-        map["password"] = QString::fromStdString(entry.password);
-        map["entryType"] = QString::fromStdString(entry.entry_type);
-        map["totpSecret"] = QString::fromStdString(entry.totp_secret);
-        map["hasTotp"] = !entry.totp_secret.empty();
-        map["createdAt"] = static_cast<qint64>(entry.createdAt);
-        map["lastModified"] = static_cast<qint64>(entry.lastModified);
-        map["lastAccessed"] = static_cast<qint64>(entry.lastAccessed);
-        
-        // Get locations
-        QVariantList locations;
-        for (const auto& loc : entry.locations) {
-            QVariantMap locMap;
-            locMap["id"] = loc.id;
-            locMap["type"] = QString::fromStdString(loc.type);
-            locMap["value"] = QString::fromStdString(loc.value);
-            locations.append(locMap);
+        // Get all entries and find the one with matching ID
+        auto entries = m_vault->getEntries();
+        for (const auto& entry : entries) {
+            if (entry.id == entryId) {
+                // Get the decrypted password
+                std::string decryptedPassword = m_vault->getDecryptedPassword(entryId);
+                
+                map["id"] = entry.id;
+                map["title"] = QString::fromStdString(entry.title);
+                map["username"] = QString::fromStdString(entry.username);
+                map["notes"] = QString::fromStdString(entry.notes);
+                map["password"] = QString::fromStdString(decryptedPassword);
+                map["entryType"] = QString::fromStdString(entry.entry_type);
+                map["totpSecret"] = QString::fromStdString(entry.totp_secret);
+                map["hasTotp"] = !entry.totp_secret.empty();
+                map["createdAt"] = static_cast<qint64>(entry.createdAt);
+                map["lastModified"] = static_cast<qint64>(entry.lastModified);
+                map["lastAccessed"] = static_cast<qint64>(entry.lastAccessed);
+                
+                // Get locations
+                QVariantList locations;
+                for (const auto& loc : entry.locations) {
+                    QVariantMap locMap;
+                    locMap["id"] = loc.id;
+                    locMap["type"] = QString::fromStdString(loc.type);
+                    locMap["value"] = QString::fromStdString(loc.value);
+                    locations.append(locMap);
+                }
+                map["locations"] = locations;
+                break;
+            }
         }
-        map["locations"] = locations;
         
         resetAutoLockTimer();
     } catch (const std::exception& e) {
@@ -306,20 +322,27 @@ bool VaultQmlWrapper::updateEntry(int entryId, const QString& title, const QStri
     if (!m_vault || m_vault->isLocked()) return false;
     
     try {
-        auto entry = m_vault->getEntryById(entryId);
-        entry.title = title.toStdString();
-        entry.username = username.toStdString();
-        entry.notes = notes.toStdString();
-        entry.totp_secret = totpSecret.toStdString();
-        entry.entry_type = entryType.toStdString();
-        entry.lastModified = QDateTime::currentSecsSinceEpoch();
-        
-        bool success = m_vault->updateEntry(entry, password.toStdString());
-        if (success) {
-            emit entryUpdated();
-            resetAutoLockTimer();
+        // Get all entries and find the one with matching ID
+        auto entries = m_vault->getEntries();
+        for (auto& entry : entries) {
+            if (entry.id == entryId) {
+                entry.title = title.toStdString();
+                entry.username = username.toStdString();
+                entry.notes = notes.toStdString();
+                entry.totp_secret = totpSecret.toStdString();
+                entry.entry_type = entryType.toStdString();
+                entry.lastModified = QDateTime::currentSecsSinceEpoch();
+                
+                bool success = m_vault->updateEntry(entry, password.toStdString());
+                if (success) {
+                    emit entryUpdated();
+                    resetAutoLockTimer();
+                }
+                return success;
+            }
         }
-        return success;
+        emit errorOccurred("Entry not found");
+        return false;
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Error updating entry: %1").arg(e.what()));
         return false;
@@ -346,18 +369,29 @@ bool VaultQmlWrapper::duplicateEntry(int entryId) {
     if (!m_vault || m_vault->isLocked()) return false;
     
     try {
-        auto entry = m_vault->getEntryById(entryId);
-        entry.title = entry.title + " (Copy)";
-        entry.id = -1; // New entry
-        entry.createdAt = QDateTime::currentSecsSinceEpoch();
-        entry.lastModified = entry.createdAt;
-        
-        bool success = m_vault->addEntry(entry, entry.password);
-        if (success) {
-            emit entryAdded();
-            resetAutoLockTimer();
+        // Get all entries and find the one with matching ID
+        auto entries = m_vault->getEntries();
+        for (const auto& entry : entries) {
+            if (entry.id == entryId) {
+                // Get the decrypted password
+                std::string decryptedPassword = m_vault->getDecryptedPassword(entryId);
+                
+                CipherMesh::Core::VaultEntry newEntry = entry;
+                newEntry.title = entry.title + " (Copy)";
+                newEntry.id = -1; // New entry
+                newEntry.createdAt = QDateTime::currentSecsSinceEpoch();
+                newEntry.lastModified = newEntry.createdAt;
+                
+                bool success = m_vault->addEntry(newEntry, decryptedPassword);
+                if (success) {
+                    emit entryAdded();
+                    resetAutoLockTimer();
+                }
+                return success;
+            }
         }
-        return success;
+        emit errorOccurred("Entry not found");
+        return false;
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Error duplicating entry: %1").arg(e.what()));
         return false;
@@ -394,13 +428,19 @@ QVariantList VaultQmlWrapper::getLocations(int entryId) {
     if (!m_vault || m_vault->isLocked()) return list;
     
     try {
-        auto entry = m_vault->getEntryById(entryId);
-        for (const auto& loc : entry.locations) {
-            QVariantMap map;
-            map["id"] = loc.id;
-            map["type"] = QString::fromStdString(loc.type);
-            map["value"] = QString::fromStdString(loc.value);
-            list.append(map);
+        // Get all entries and find the one with matching ID
+        auto entries = m_vault->getEntries();
+        for (const auto& entry : entries) {
+            if (entry.id == entryId) {
+                for (const auto& loc : entry.locations) {
+                    QVariantMap map;
+                    map["id"] = loc.id;
+                    map["type"] = QString::fromStdString(loc.type);
+                    map["value"] = QString::fromStdString(loc.value);
+                    list.append(map);
+                }
+                break;
+            }
         }
         resetAutoLockTimer();
     } catch (const std::exception& e) {
@@ -413,13 +453,28 @@ bool VaultQmlWrapper::addLocation(int entryId, const QString& type, const QStrin
     if (!m_vault || m_vault->isLocked()) return false;
     
     try {
-        CipherMesh::Core::Location loc(-1, type.toStdString(), value.toStdString());
-        bool success = m_vault->addLocation(entryId, loc);
-        if (success) {
-            emit entryUpdated();
-            resetAutoLockTimer();
+        // Get all entries and find the one with matching ID
+        auto entries = m_vault->getEntries();
+        for (auto& entry : entries) {
+            if (entry.id == entryId) {
+                // Get the decrypted password to re-encrypt
+                std::string decryptedPassword = m_vault->getDecryptedPassword(entryId);
+                
+                // Add new location
+                CipherMesh::Core::Location loc(-1, type.toStdString(), value.toStdString());
+                entry.locations.push_back(loc);
+                entry.lastModified = QDateTime::currentSecsSinceEpoch();
+                
+                bool success = m_vault->updateEntry(entry, decryptedPassword);
+                if (success) {
+                    emit entryUpdated();
+                    resetAutoLockTimer();
+                }
+                return success;
+            }
         }
-        return success;
+        emit errorOccurred("Entry not found");
+        return false;
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Error adding location: %1").arg(e.what()));
         return false;
@@ -430,13 +485,41 @@ bool VaultQmlWrapper::updateLocation(int entryId, int locationId, const QString&
     if (!m_vault || m_vault->isLocked()) return false;
     
     try {
-        CipherMesh::Core::Location loc(locationId, type.toStdString(), value.toStdString());
-        bool success = m_vault->updateLocation(entryId, loc);
-        if (success) {
-            emit entryUpdated();
-            resetAutoLockTimer();
+        // Get all entries and find the one with matching ID
+        auto entries = m_vault->getEntries();
+        for (auto& entry : entries) {
+            if (entry.id == entryId) {
+                // Get the decrypted password to re-encrypt
+                std::string decryptedPassword = m_vault->getDecryptedPassword(entryId);
+                
+                // Find and update the location
+                bool found = false;
+                for (auto& loc : entry.locations) {
+                    if (loc.id == locationId) {
+                        loc.type = type.toStdString();
+                        loc.value = value.toStdString();
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    emit errorOccurred("Location not found");
+                    return false;
+                }
+                
+                entry.lastModified = QDateTime::currentSecsSinceEpoch();
+                
+                bool success = m_vault->updateEntry(entry, decryptedPassword);
+                if (success) {
+                    emit entryUpdated();
+                    resetAutoLockTimer();
+                }
+                return success;
+            }
         }
-        return success;
+        emit errorOccurred("Entry not found");
+        return false;
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Error updating location: %1").arg(e.what()));
         return false;
@@ -447,12 +530,37 @@ bool VaultQmlWrapper::deleteLocation(int entryId, int locationId) {
     if (!m_vault || m_vault->isLocked()) return false;
     
     try {
-        bool success = m_vault->deleteLocation(entryId, locationId);
-        if (success) {
-            emit entryUpdated();
-            resetAutoLockTimer();
+        // Get all entries and find the one with matching ID
+        auto entries = m_vault->getEntries();
+        for (auto& entry : entries) {
+            if (entry.id == entryId) {
+                // Get the decrypted password to re-encrypt
+                std::string decryptedPassword = m_vault->getDecryptedPassword(entryId);
+                
+                // Find and delete the location
+                auto it = std::remove_if(entry.locations.begin(), entry.locations.end(),
+                    [locationId](const CipherMesh::Core::Location& loc) {
+                        return loc.id == locationId;
+                    });
+                
+                if (it == entry.locations.end()) {
+                    emit errorOccurred("Location not found");
+                    return false;
+                }
+                
+                entry.locations.erase(it, entry.locations.end());
+                entry.lastModified = QDateTime::currentSecsSinceEpoch();
+                
+                bool success = m_vault->updateEntry(entry, decryptedPassword);
+                if (success) {
+                    emit entryUpdated();
+                    resetAutoLockTimer();
+                }
+                return success;
+            }
         }
-        return success;
+        emit errorOccurred("Entry not found");
+        return false;
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Error deleting location: %1").arg(e.what()));
         return false;
