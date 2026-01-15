@@ -743,6 +743,14 @@ bool Database::deleteGroup(const std::string& name) {
     return q.exec();
 }
 
+bool Database::renameGroup(const std::string& oldName, const std::string& newName) {
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE groups SET name = :newName WHERE name = :oldName");
+    q.bindValue(":newName", QString::fromStdString(newName));
+    q.bindValue(":oldName", QString::fromStdString(oldName));
+    return q.exec();
+}
+
 std::string Database::getGroupOwner(int groupId) {
     QSqlQuery q(m_db);
     q.prepare("SELECT owner_id FROM groups WHERE id = :id");
