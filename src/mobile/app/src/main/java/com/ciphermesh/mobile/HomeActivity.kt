@@ -107,6 +107,9 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         adapter = CustomAdapter(this, arrayListOf())
         listView.adapter = adapter
+        
+        // [NEW] Check for pending invites on startup
+        checkPendingInvitesOnStartup()
 
         // 5. List Logic
         listView.setOnItemClickListener { _, _, position, _ ->
@@ -411,7 +414,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, displayList)
         
         MaterialAlertDialogBuilder(this)
-            .setTitle("Pending Invites")
+            .setTitle("Pending Invites (${rawInvites.size})")
             .setAdapter(adapter) { dialog, position ->
                 val parts = rawInvites[position].split("|")
                 val inviteId = parts[0].toIntOrNull() ?: return@setAdapter
@@ -420,18 +423,40 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     .setTitle("Respond")
                     .setMessage(displayList[position])
                     .setPositiveButton("Accept") { _, _ ->
-                        vault.respondToInvite(inviteId, true)
-                        Toast.makeText(this, "Group Joined!", Toast.LENGTH_SHORT).show()
-                        loadGroups() 
+                        try {
+                            vault.respondToInvite(inviteId, true)
+                            Toast.makeText(this, "Group Joined!", Toast.LENGTH_SHORT).show()
+                            loadGroups() 
+                        } catch (e: Exception) {
+                            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
                     }
                     .setNegativeButton("Reject") { _, _ ->
-                        vault.respondToInvite(inviteId, false)
-                        Toast.makeText(this, "Ignored", Toast.LENGTH_SHORT).show()
+                        try {
+                            vault.respondToInvite(inviteId, false)
+                            Toast.makeText(this, "Ignored", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
                     }
                     .show()
             }
             .setPositiveButton("Close", null)
             .show()
+    }
+    
+    // [NEW] Check for pending invites on app startup
+    private fun checkPendingInvitesOnStartup() {
+        try {
+            val rawInvites = vault.getPendingInvites()
+            if (rawInvites.isNotEmpty()) {
+                // Show a toast notification
+                Toast.makeText(this, "📨 You have ${rawInvites.size} pending invite(s)!\nCheck the 'Pending Invites' menu", Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            // Silently fail - don't crash on startup
+            android.util.Log.e("HomeActivity", "Error checking pending invites", e)
+        }
     }
 
     override fun onNavigationItemSelected(item: MenuItem): Boolean {

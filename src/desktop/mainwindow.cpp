@@ -290,13 +290,19 @@ void MainWindow::updateIcons() {
 
 void MainWindow::handleIncomingInvite(const QString& senderId, const QString& groupName)
 {
-    if (!m_vault || !m_p2pService) return;
+    qDebug() << "📩 [INVITE] handleIncomingInvite from=" << senderId << "group=" << groupName;
+    
+    if (!m_vault || !m_p2pService) {
+        qWarning() << "⚠️  [INVITE] Vault or P2P service not initialized";
+        return;
+    }
+    
     auto existing = m_vault->getPendingInvites();
     for(const auto& inv : existing) {
         if(inv.senderId == senderId.toStdString() && inv.groupName == groupName.toStdString()) {
             // If we already accepted this invite, request the data now that sender is online
             if (inv.status == "accepted") {
-                qDebug() << "DEBUG: Received invite-request for already-accepted invite. Requesting data...";
+                qDebug() << "🔄 [INVITE] Already accepted - requesting data from" << senderId;
                 m_p2pService->requestData(senderId.toStdString(), groupName.toStdString());
             }
             return;
@@ -310,6 +316,8 @@ void MainWindow::handleIncomingInvite(const QString& senderId, const QString& gr
     std::string payload = QJsonDocument(placeholder).toJson(QJsonDocument::Compact).toStdString();
 
     m_vault->storePendingInvite(senderId.toStdString(), groupName.toStdString(), payload);
+    qDebug() << "💾 [INVITE] Stored invite in database";
+    
     loadGroups();
     QMessageBox::information(this, "Group Invite", 
         QString("User <b>%1</b> wants to share group <b>'%2'</b>.<br>It has been added to your inbox.")
@@ -335,13 +343,13 @@ void MainWindow::handleInviteCancelled(const QString& senderId) {
 void MainWindow::handlePeerOnline(const QString& userId) {
     if (!m_vault || !m_p2pService) return;
     
-    qDebug() << "DEBUG: Peer came online:" << userId;
+    qDebug() << "🟢 [PEER] Peer came online:" << userId;
     
     // Check if we have any accepted invites from this user
     auto invites = m_vault->getPendingInvites();
     for (const auto& invite : invites) {
         if (invite.senderId == userId.toStdString() && invite.status == "accepted") {
-            qDebug() << "DEBUG: Found accepted invite from" << userId << "- requesting data";
+            qDebug() << "🔄 [PEER] Found accepted invite from" << userId << "- requesting data";
             
             // Request the data since sender is now online
             m_p2pService->requestData(invite.senderId, invite.groupName);
@@ -1674,18 +1682,20 @@ void MainWindow::restoreOutgoingInvites() {
 void MainWindow::handleInviteResponse(const QString& userId, const QString& groupName, bool accepted) {
     if (!m_vault) return;
     
-    qDebug() << "DEBUG: Received invite response from" << userId << "for group" << groupName << "- Accepted:" << accepted;
+    qDebug() << "📬 [RESPONSE] Received invite response from" << userId << "for group" << groupName << "- Accepted:" << accepted;
     
     try {
         if (accepted) {
             m_vault->updateGroupMemberStatus(groupName.toStdString(), userId.toStdString(), "accepted");
+            Toast::show(this, QString("✅ %1 accepted your invite to '%2'").arg(userId, groupName));
         } else {
             m_vault->removeGroupMember(groupName.toStdString(), userId.toStdString());
+            Toast::show(this, QString("❌ %1 rejected your invite to '%2'").arg(userId, groupName));
         }
         loadGroups();
-        qDebug() << "DEBUG: Updated member status for" << userId << "in group" << groupName;
+        qDebug() << "✅ [RESPONSE] Updated member status for" << userId << "in group" << groupName;
     } catch (const std::exception& e) {
-        qWarning() << "ERROR: Failed to update member status:" << e.what();
+        qWarning() << "❌ [RESPONSE] Failed to update member status:" << e.what();
     }
 }
 

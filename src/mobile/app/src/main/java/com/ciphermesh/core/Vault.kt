@@ -5,6 +5,11 @@ interface SignalingCallback {
     fun sendSignalingMessage(targetId: String, type: String, payload: String)
 }
 
+// [NEW] Callback for UI notifications of incoming invites
+interface InviteCallback {
+    fun onIncomingInvite(senderId: String, groupName: String)
+}
+
 class Vault {
     companion object {
         init {
@@ -54,6 +59,9 @@ class Vault {
 
     // 4. Register the P2PManager callback so C++ can reply
     external fun registerSignalingCallback(callback: SignalingCallback)
+    
+    // [NEW] Register UI callback for invite notifications
+    external fun registerInviteCallback(callback: InviteCallback)
     
     // 5. Trigger an invite from the UI -> C++
     external fun sendP2PInvite(groupName: String, targetUserId: String)

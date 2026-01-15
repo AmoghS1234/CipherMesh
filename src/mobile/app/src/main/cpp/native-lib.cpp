@@ -17,16 +17,9 @@ JavaVM* g_jvm = nullptr;
 jobject g_callbackObj = nullptr;
 jmethodID g_sendMethod = nullptr;
 
-// [FIX] Thread-safe storage for invites
-struct PendingInvite {
-    int id;
-    std::string sender;
-    std::string group;
-    std::string payload;
-};
-std::vector<PendingInvite> g_pendingInvites;
-std::mutex g_inviteMutex; // Locks the vector
-int g_inviteCounter = 1;
+// [FIX] Callback for notifying UI of incoming invites
+jobject g_uiCallbackObj = nullptr;
+jmethodID g_onInviteMethod = nullptr;
 
 // --- Helpers ---
 
@@ -38,34 +31,60 @@ std::string generateRandomSuffix() {
     return id;
 }
 
-// [FIX] More robust parser that handles spaces
+// [FIX] More robust parser that handles spaces and validates JSON
 std::string extractJsonValueJNI(const std::string& json, const std::string& key) {
+    if (json.empty() || key.empty()) {
+        LOGE("⚠️  [JSON] Empty input to parser");
+        return "";
+    }
+    
     // Find "key"
     std::string keyPattern = "\"" + key + "\"";
     size_t keyPos = json.find(keyPattern);
-    if (keyPos == std::string::npos) return "";
+    if (keyPos == std::string::npos) {
+        LOGD("⚠️  [JSON] Key '%s' not found", key.c_str());
+        return "";
+    }
     
     // Find colon after key
     size_t colonPos = json.find(":", keyPos);
-    if (colonPos == std::string::npos) return "";
+    if (colonPos == std::string::npos) {
+        LOGE("⚠️  [JSON] Malformed JSON - no colon after key '%s'", key.c_str());
+        return "";
+    }
     
     // Find value start (skip whitespace/quotes)
     size_t start = colonPos + 1;
-    while (start < json.length() && (json[start] == ' ' || json[start] == '\"')) {
+    while (start < json.length() && (json[start] == ' ' || json[start] == '\t' || json[start] == '\n')) {
         start++;
     }
     
+    if (start >= json.length()) {
+        LOGE("⚠️  [JSON] Unexpected end of JSON after key '%s'", key.c_str());
+        return "";
+    }
+    
+    bool isString = (json[start] == '\"');
+    if (isString) start++; // Skip opening quote
+    
     // Find value end
     size_t end;
-    if (json.find("\"", start) != std::string::npos && json[start-1] == '\"') {
+    if (isString) {
         // It's a string value, find closing quote
         end = json.find("\"", start);
+        if (end == std::string::npos) {
+            LOGE("⚠️  [JSON] Unclosed string for key '%s'", key.c_str());
+            return "";
+        }
     } else {
         // It's a number/boolean, find comma or bracket
         end = json.find_first_of(",}", start);
+        if (end == std::string::npos) {
+            LOGE("⚠️  [JSON] Malformed JSON - no delimiter after key '%s'", key.c_str());
+            return "";
+        }
     }
     
-    if (end == std::string::npos) return "";
     return json.substr(start, end - start);
 }
 
@@ -149,61 +168,119 @@ extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_register
     g_callbackObj = env->NewGlobalRef(callback);
     jclass cls = env->GetObjectClass(callback);
     g_sendMethod = env->GetMethodID(cls, "sendSignalingMessage", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+    LOGD("✅ [P2P] Registered signaling callback");
 }
 
-// [FIX] Thread-safe Receive
+// [NEW] Register UI callback for invite notifications
+extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_registerInviteCallback(JNIEnv* env, jobject, jobject callback) {
+    if (g_uiCallbackObj) env->DeleteGlobalRef(g_uiCallbackObj);
+    g_uiCallbackObj = env->NewGlobalRef(callback);
+    jclass cls = env->GetObjectClass(callback);
+    g_onInviteMethod = env->GetMethodID(cls, "onIncomingInvite", "(Ljava/lang/String;Ljava/lang/String;)V");
+    LOGD("✅ [UI] Registered invite callback");
+}
+
+// [FIX] Thread-safe Receive with persistent storage and UI callback
 extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_receiveSignalingMessage(JNIEnv* env, jobject, jstring json) {
     const char* c_json = env->GetStringUTFChars(json, 0);
     std::string msg(c_json);
     std::string type = extractJsonValueJNI(msg, "type");
+    std::string sender = extractJsonValueJNI(msg, "sender");
+    
+    LOGD("📩 [INVITE] receiveSignalingMessage type=%s sender=%s", type.c_str(), sender.c_str());
 
-    if (type == "offer") {
-        std::string sender = extractJsonValueJNI(msg, "sender");
+    if (type == "offer" && !sender.empty()) {
         std::string sdp = extractJsonValueJNI(msg, "sdp");
         
-        // Lock before writing to vector
-        std::lock_guard<std::mutex> lock(g_inviteMutex);
-        g_pendingInvites.push_back({g_inviteCounter++, sender, "Shared Group", sdp});
-        LOGD("Stored Invite from %s", sender.c_str());
+        // [FIX] Store in database instead of volatile vector
+        if (g_vault && !g_vault->isLocked()) {
+            std::string groupName = "Shared Group"; // Default name, will be updated when group data arrives
+            g_vault->storePendingInvite(sender, groupName, sdp);
+            LOGD("💾 [INVITE] Stored invite from %s in database", sender.c_str());
+            
+            // [FIX] Notify UI layer of incoming invite
+            if (g_uiCallbackObj && g_onInviteMethod) {
+                jstring jSender = env->NewStringUTF(sender.c_str());
+                jstring jGroup = env->NewStringUTF(groupName.c_str());
+                env->CallVoidMethod(g_uiCallbackObj, g_onInviteMethod, jSender, jGroup);
+                env->DeleteLocalRef(jSender);
+                env->DeleteLocalRef(jGroup);
+                LOGD("🔔 [INVITE] Notified UI of invite from %s", sender.c_str());
+            } else {
+                LOGD("⚠️  [INVITE] UI callback not registered - invite stored but user not notified");
+            }
+        } else {
+            LOGE("❌ [INVITE] Cannot store invite - vault locked or null");
+        }
     }
     
-    // Also pass to WebRTC core
+    // Also pass to WebRTC core for handshake processing
     if (!g_p2p && g_vault && !g_vault->isLocked()) initP2P();
-    if (g_p2p) g_p2p->handleSignalingMessage(msg);
+    if (g_p2p) {
+        g_p2p->handleSignalingMessage(msg);
+        LOGD("✅ [INVITE] Passed to WebRTCService for processing");
+    }
 
     env->ReleaseStringUTFChars(json, c_json);
 }
 
-// [FIX] Thread-safe Get
+// [FIX] Get invites from database
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_ciphermesh_mobile_core_Vault_getPendingInvites(JNIEnv* env, jobject) {
-    std::lock_guard<std::mutex> lock(g_inviteMutex); // Lock while reading
+    if (!g_vault || g_vault->isLocked()) {
+        jclass strCls = env->FindClass("java/lang/String");
+        return env->NewObjectArray(0, strCls, nullptr);
+    }
+    
+    auto invites = g_vault->getPendingInvites();
+    LOGD("📋 [INVITE] getPendingInvites found %zu invites", invites.size());
     
     jclass strCls = env->FindClass("java/lang/String");
-    jobjectArray res = env->NewObjectArray(g_pendingInvites.size(), strCls, nullptr);
+    jobjectArray res = env->NewObjectArray(invites.size(), strCls, nullptr);
     
-    for (size_t i = 0; i < g_pendingInvites.size(); ++i) {
-        std::string row = std::to_string(g_pendingInvites[i].id) + "|" + g_pendingInvites[i].sender + "|" + g_pendingInvites[i].group;
+    for (size_t i = 0; i < invites.size(); ++i) {
+        std::string row = std::to_string(invites[i].id) + "|" + invites[i].senderId + "|" + invites[i].groupName;
         env->SetObjectArrayElement(res, i, env->NewStringUTF(row.c_str()));
     }
     return res;
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_respondToInvite(JNIEnv* env, jobject, jint inviteId, jboolean accept) {
-    std::lock_guard<std::mutex> lock(g_inviteMutex);
+    LOGD("🎯 [INVITE] respondToInvite id=%d accept=%s", inviteId, accept ? "YES" : "NO");
     
-    for (auto it = g_pendingInvites.begin(); it != g_pendingInvites.end(); ) {
-        if (it->id == inviteId) {
-            if (accept && g_vault) {
-                g_vault->addGroup(it->group);
-                // Trigger actual WebRTC response
-                if(g_p2p) {
-                    // Logic to accept P2P offer would go here
-                    // g_p2p->acceptOffer(it->sender, it->sdp);
+    if (!g_vault || g_vault->isLocked()) {
+        LOGE("❌ [INVITE] Cannot respond - vault locked");
+        return;
+    }
+    
+    // Get invite details from database
+    auto invites = g_vault->getPendingInvites();
+    for (const auto& inv : invites) {
+        if (inv.id == inviteId) {
+            if (accept) {
+                // Create group locally
+                g_vault->addGroup(inv.groupName);
+                LOGD("✅ [INVITE] Created group '%s'", inv.groupName.c_str());
+                
+                // [FIX] Send P2P acceptance response
+                if (g_p2p) {
+                    g_p2p->respondToInvite(inv.senderId, true);
+                    LOGD("📤 [INVITE] Sent acceptance to %s", inv.senderId.c_str());
+                } else {
+                    LOGE("⚠️  [INVITE] P2P service not initialized - cannot send response");
                 }
+                
+                // Update status in database to 'accepted' so we can request data when peer comes online
+                g_vault->updatePendingInviteStatus(inviteId, "accepted");
+            } else {
+                // Send rejection
+                if (g_p2p) {
+                    g_p2p->respondToInvite(inv.senderId, false);
+                    LOGD("📤 [INVITE] Sent rejection to %s", inv.senderId.c_str());
+                }
+                // Delete invite from database
+                g_vault->deletePendingInvite(inviteId);
             }
-            it = g_pendingInvites.erase(it);
-        } else {
-            ++it;
+            break;
         }
     }
 }
@@ -212,9 +289,13 @@ extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_sendP2PI
     const char* gName = env->GetStringUTFChars(groupName, 0);
     const char* tId = env->GetStringUTFChars(targetId, 0);
     
+    LOGD("📤 [INVITE] sendP2PInvite group='%s' to='%s'", gName, tId);
+    
     if (g_p2p) {
         g_p2p->inviteUser(gName, tId, {}, {});
-        LOGD("Triggered P2P invite to %s", tId);
+        LOGD("✅ [INVITE] Triggered P2P invite to %s", tId);
+    } else {
+        LOGE("❌ [INVITE] P2P service not initialized");
     }
     
     env->ReleaseStringUTFChars(groupName, gName);

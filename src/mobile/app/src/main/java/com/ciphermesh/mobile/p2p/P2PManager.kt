@@ -3,13 +3,14 @@ package com.ciphermesh.mobile.p2p
 import android.app.Activity
 import android.util.Log
 import android.widget.Toast
+import com.ciphermesh.mobile.core.InviteCallback
 import com.ciphermesh.mobile.core.SignalingCallback
 import com.ciphermesh.mobile.core.Vault
 import okhttp3.*
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-class P2PManager(private val activity: Activity, private val vault: Vault) : SignalingCallback {
+class P2PManager(private val activity: Activity, private val vault: Vault) : SignalingCallback, InviteCallback {
 
     private val SIGNALING_URL = "wss://ciphermesh-signal-server.onrender.com" 
     
@@ -22,6 +23,9 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
     fun connect() {
         // [CRITICAL] Register this class so C++ can call sendSignalingMessage
         vault.registerSignalingCallback(this)
+        
+        // [NEW] Register for invite notifications
+        vault.registerInviteCallback(this)
 
         val request = Request.Builder().url(SIGNALING_URL).build()
         Log.d("P2P", "Connecting to $SIGNALING_URL")
@@ -37,15 +41,31 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 Log.d("P2P", "📩 Received: $text")
-                // Pass everything to C++ logic
-                vault.receiveSignalingMessage(text)
-                
-                // Also handle UI updates manually for now
-                activity.runOnUiThread { handleUiMessage(text) }
+                try {
+                    // Pass everything to C++ logic
+                    vault.receiveSignalingMessage(text)
+                    
+                    // Also handle UI updates manually for now
+                    activity.runOnUiThread { 
+                        try {
+                            handleUiMessage(text)
+                        } catch (e: Exception) {
+                            Log.e("P2P", "Error in handleUiMessage", e)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("P2P", "Error processing signaling message", e)
+                    activity.runOnUiThread {
+                        Toast.makeText(activity, "P2P Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e("P2P", "❌ Connection Failed: ${t.message}")
+                Log.e("P2P", "❌ Connection Failed: ${t.message}", t)
+                activity.runOnUiThread {
+                    Toast.makeText(activity, "P2P Connection Lost", Toast.LENGTH_SHORT).show()
+                }
             }
         })
     }
@@ -101,10 +121,25 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
         try {
             val json = JSONObject(jsonStr)
             val type = json.optString("type")
+            Log.d("P2P", "🔄 [INVITE] Received signaling message type=$type")
             if (type == "offer") {
                 val sender = json.optString("sender")
-                Toast.makeText(activity, "Incoming Invite from $sender", Toast.LENGTH_LONG).show()
+                Log.d("P2P", "📩 [INVITE] Processing offer from $sender")
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) { 
+            Log.e("P2P", "Error parsing signaling message", e)
+        }
+    }
+    
+    // [NEW] Implement InviteCallback - called from C++ when invite received
+    override fun onIncomingInvite(senderId: String, groupName: String) {
+        Log.d("P2P", "🔔 [INVITE] onIncomingInvite from=$senderId group=$groupName")
+        activity.runOnUiThread {
+            // Show notification that invite was received
+            Toast.makeText(activity, "📨 Group invite from $senderId\nGroup: $groupName\nCheck 'Pending Invites' menu", Toast.LENGTH_LONG).show()
+            
+            // You can also trigger a notification here or update a badge
+            // For now, the user can access invites via the navigation menu
+        }
     }
 }

@@ -130,24 +130,46 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
     m_channels[peerId] = dc;
 
     dc->onOpen([this, peerId]() {
-        LOGI("DataChannel OPEN with %s", peerId.c_str());
+        LOGI("🔓 [P2P] DataChannel OPEN with %s", peerId.c_str());
         // If we have a pending invite, send the request now
         if (m_pendingInvites.count(peerId)) {
             std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
             m_channels[peerId]->send(msg);
+            LOGI("📤 [P2P] Sent invite-request for group '%s' to %s", m_pendingInvites[peerId].c_str(), peerId.c_str());
         }
     });
 
     dc->onMessage([this, peerId](auto data) {
         if (std::holds_alternative<std::string>(data)) {
             std::string msg = std::get<std::string>(data);
-            LOGI("Received P2P Msg from %s: %s", peerId.c_str(), msg.c_str());
+            LOGI("📨 [P2P] Received message from %s: %s", peerId.c_str(), msg.c_str());
             
             std::string type = extractJsonValue(msg, "type");
+            
             if (type == "invite-request") {
-                // Notify UI
                 std::string group = extractJsonValue(msg, "group");
-                // TODO: Call Java callback
+                LOGI("📩 [P2P] Invite request for group '%s' from %s", group.c_str(), peerId.c_str());
+                // Notify via callback (if registered)
+                if (onIncomingInvite) {
+                    onIncomingInvite(peerId, group);
+                } else {
+                    LOGE("⚠️  [P2P] onIncomingInvite callback not registered!");
+                }
+            }
+            else if (type == "invite-accept") {
+                LOGI("✅ [P2P] Invite accepted by %s", peerId.c_str());
+                if (onInviteResponse) {
+                    onInviteResponse(peerId, m_pendingInvites[peerId], true);
+                }
+            }
+            else if (type == "invite-reject") {
+                LOGI("❌ [P2P] Invite rejected by %s", peerId.c_str());
+                if (onInviteResponse) {
+                    onInviteResponse(peerId, m_pendingInvites[peerId], false);
+                }
+            }
+            else {
+                LOGI("ℹ️  [P2P] Unknown message type: %s", type.c_str());
             }
         }
     });
@@ -159,24 +181,35 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
     std::string type = extractJsonValue(message, "type");
     std::string sender = extractJsonValue(message, "sender");
     
-    if (sender.empty()) return;
+    LOGI("📥 [SIGNAL] handleSignalingMessage type=%s sender=%s", type.c_str(), sender.c_str());
+    
+    if (sender.empty()) {
+        LOGE("⚠️  [SIGNAL] Message missing sender field");
+        return;
+    }
 
     if (type == "user-online") {
-        LOGI("Peer Online: %s", sender.c_str());
-        if (m_pendingInvites.count(sender)) retryPendingInviteFor(sender);
+        LOGI("🟢 [SIGNAL] Peer Online: %s", sender.c_str());
+        if (m_pendingInvites.count(sender)) {
+            LOGI("🔄 [SIGNAL] Retrying pending invite for %s", sender.c_str());
+            retryPendingInviteFor(sender);
+        }
     } 
     else if (type == "offer") {
         std::string sdp = extractJsonValue(message, "sdp");
+        LOGI("📨 [SIGNAL] Received offer from %s", sender.c_str());
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
             m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
             if(m_peers[sender]->localDescription().has_value() == false) {
                  m_peers[sender]->setLocalDescription(); // Triggers Answer generation
+                 LOGI("✅ [SIGNAL] Generating answer for %s", sender.c_str());
             }
         }
     }
     else if (type == "answer") {
         std::string sdp = extractJsonValue(message, "sdp");
+        LOGI("📨 [SIGNAL] Received answer from %s", sender.c_str());
         if(m_peers.count(sender)) {
             m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
         }
@@ -184,9 +217,13 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
     else if (type == "ice-candidate") {
         std::string cand = extractJsonValue(message, "candidate");
         std::string mid = extractJsonValue(message, "mid"); // Optional often
+        LOGI("📨 [SIGNAL] Received ICE candidate from %s", sender.c_str());
         if(m_peers.count(sender)) {
             m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, mid));
         }
+    }
+    else {
+        LOGI("ℹ️  [SIGNAL] Unknown message type: %s", type.c_str());
     }
 }
 
@@ -213,9 +250,13 @@ void WebRTCService::cancelInvite(const std::string& userId) {
     if(m_peers.count(userId)) m_peers.erase(userId);
 }
 void WebRTCService::respondToInvite(const std::string& senderId, bool accept) {
+    LOGI("🎯 [P2P] respondToInvite to=%s accept=%s", senderId.c_str(), accept ? "YES" : "NO");
     if(m_channels.count(senderId)) {
         std::string msg = accept ? "{\"type\":\"invite-accept\"}" : "{\"type\":\"invite-reject\"}";
         m_channels[senderId]->send(msg);
+        LOGI("📤 [P2P] Sent response to %s", senderId.c_str());
+    } else {
+        LOGE("⚠️  [P2P] No data channel to %s - cannot send response", senderId.c_str());
     }
 }
 void WebRTCService::requestData(const std::string&, const std::string&) {}
@@ -310,35 +351,72 @@ void WebRTCService::sendOnlinePing() {
 
 void WebRTCService::onWsTextMessageReceived(const QString& message) {
     QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8());
-    if (doc.isNull() || !doc.isObject()) return;
+    if (doc.isNull() || !doc.isObject()) {
+        qWarning() << "⚠️  [SIGNAL] Received invalid JSON:" << message;
+        return;
+    }
     QJsonObject obj = doc.object();
     QString type = obj["type"].toString();
+    QString sender = obj["sender"].toString();
+    
+    qDebug() << "📥 [SIGNAL] Received type=" << type << "sender=" << sender;
 
     if (type == "offer") handleOffer(obj);
     else if (type == "answer") handleAnswer(obj);
     else if (type == "ice-candidate") handleCandidate(obj);
     else if (type == "user-online") {
         QString user = obj["user"].toString();
+        qDebug() << "🟢 [SIGNAL] Peer online:" << user;
         if (onPeerOnline) onPeerOnline(user.toStdString());
-        if (m_pendingInvites.contains(user)) retryPendingInviteFor(user);
+        if (m_pendingInvites.contains(user)) {
+            qDebug() << "🔄 [SIGNAL] Retrying pending invite for" << user;
+            retryPendingInviteFor(user);
+        }
+    }
+    else {
+        qDebug() << "ℹ️  [SIGNAL] Unknown message type:" << type;
     }
 }
 
 void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& message) {
     QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8());
-    if (doc.isNull()) return;
+    if (doc.isNull()) {
+        qWarning() << "⚠️  [P2P] Invalid JSON from" << remoteId << ":" << message;
+        return;
+    }
     QJsonObject obj = doc.object();
     QString type = obj["type"].toString();
+    
+    qDebug() << "📨 [P2P] Received from" << remoteId << "type=" << type;
 
     if (type == "invite-request") {
-        if (onIncomingInvite) onIncomingInvite(remoteId.toStdString(), obj["group"].toString().toStdString());
+        QString groupName = obj["group"].toString();
+        qDebug() << "📩 [P2P] Invite request for group" << groupName << "from" << remoteId;
+        if (onIncomingInvite) {
+            onIncomingInvite(remoteId.toStdString(), groupName.toStdString());
+        } else {
+            qWarning() << "⚠️  [P2P] onIncomingInvite callback not registered!";
+        }
     } 
     else if (type == "invite-accept") {
+        qDebug() << "✅ [P2P] Invite accepted by" << remoteId;
         if (m_pendingInvites.contains(remoteId)) {
-            sendGroupData(remoteId.toStdString(), m_pendingInvites[remoteId].toStdString(), m_pendingKeys[remoteId], m_pendingEntries[remoteId]);
+            QString groupName = m_pendingInvites[remoteId];
+            sendGroupData(remoteId.toStdString(), groupName.toStdString(), m_pendingKeys[remoteId], m_pendingEntries[remoteId]);
             m_pendingInvites.remove(remoteId);
-            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), obj["group"].toString().toStdString(), true);
+            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), true);
         }
+    }
+    else if (type == "invite-reject") {
+        qDebug() << "❌ [P2P] Invite rejected by" << remoteId;
+        if (m_pendingInvites.contains(remoteId)) {
+            QString groupName = m_pendingInvites[remoteId];
+            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), false);
+            m_pendingInvites.remove(remoteId);
+        }
+    }
+    else {
+        qDebug() << "ℹ️  [P2P] Unknown P2P message type:" << type;
     }
 }
 
