@@ -329,7 +329,88 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val btnInvite = dialogView.findViewById<Button>(R.id.btnInvite)
         val membersLayout = dialogView.findViewById<LinearLayout>(R.id.layoutMembersList)
 
-        // ... (Keep Member List loading logic) ...
+        // [FIX] Load and display current group members
+        fun loadMembersList() {
+            membersLayout.removeAllViews()
+            
+            try {
+                val membersList = vault.getGroupMembers(currentGroup)
+                
+                if (membersList.isNotEmpty()) {
+                    for (memberStr in membersList) {
+                        val parts = memberStr.split("|")
+                        if (parts.size >= 3) {
+                            val userId = parts[0]
+                            val role = parts[1]      // "owner", "admin", "member"
+                            val status = parts[2]    // "accepted", "pending"
+                            
+                            // Create member view
+                            val memberView = LinearLayout(this)
+                            memberView.layoutParams = LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT
+                            )
+                            memberView.orientation = LinearLayout.HORIZONTAL
+                            memberView.setPadding(16, 12, 16, 12)
+                            
+                            // Member text (ID + status badge)
+                            val memberText = TextView(this)
+                            val displayText = when {
+                                status == "pending" -> "$userId (Invite Sent) 🕐"
+                                role == "owner" -> "$userId ★ Owner"
+                                role == "admin" -> "$userId 🛡️ Admin"
+                                else -> userId
+                            }
+                            memberText.text = displayText
+                            memberText.textSize = 14f
+                            memberText.layoutParams = LinearLayout.LayoutParams(
+                                0, 
+                                LinearLayout.LayoutParams.WRAP_CONTENT, 
+                                1f
+                            )
+                            
+                            memberView.addView(memberText)
+                            
+                            // Remove/Cancel button (only for owner, not for self)
+                            if (isGroupOwner && userId != vault.getUserId()) {
+                                val btnRemove = Button(this)
+                                btnRemove.text = if (status == "pending") "Cancel" else "Remove"
+                                btnRemove.layoutParams = LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.WRAP_CONTENT, 
+                                    LinearLayout.LayoutParams.WRAP_CONTENT
+                                )
+                                btnRemove.setOnClickListener {
+                                    if (vault.removeUser(currentGroup, userId)) {
+                                        Toast.makeText(this, if (status == "pending") "Invite cancelled" else "User removed", Toast.LENGTH_SHORT).show()
+                                        loadMembersList() // Refresh list
+                                    } else {
+                                        Toast.makeText(this, "Failed to remove user", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                memberView.addView(btnRemove)
+                            }
+                            
+                            membersLayout.addView(memberView)
+                        }
+                    }
+                } else {
+                    val emptyText = TextView(this)
+                    emptyText.text = "No members yet. Invite someone!"
+                    emptyText.setPadding(16, 12, 16, 12)
+                    emptyText.textSize = 14f
+                    membersLayout.addView(emptyText)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("HomeActivity", "Error loading members", e)
+                val errorText = TextView(this)
+                errorText.text = "Error loading members"
+                errorText.setPadding(16, 12, 16, 12)
+                membersLayout.addView(errorText)
+            }
+        }
+        
+        // Initial load
+        loadMembersList()
 
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Manage '$currentGroup'")
@@ -347,7 +428,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     runOnUiThread {
                         Toast.makeText(this, "Invite Sent!", Toast.LENGTH_SHORT).show()
                         inputId.setText("")
-                        dialog.dismiss() 
+                        loadMembersList() // Refresh member list to show pending invite
                     }
                 }.start()
             } else {
