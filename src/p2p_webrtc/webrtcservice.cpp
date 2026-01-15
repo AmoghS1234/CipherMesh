@@ -108,21 +108,22 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         setupDataChannel(dc, peerId);
     });
 
-    // 4. Create Offer Logic (only if we are the Offerer)
+    // 4. Register onLocalDescription BEFORE setLocalDescription to avoid race condition
+    pc->onLocalDescription([this, peerId](auto desc) {
+        std::string type = desc.typeString(); // "offer" or "answer"
+        std::string sdp = std::string(desc);
+        LOGI("📤 [P2P] Sending %s to %s (SDP length: %zu)", type.c_str(), peerId.c_str(), sdp.length());
+        sendSignalingMessage(peerId, type, sdp);
+    });
+
+    // 5. Create Offer Logic (only if we are the Offerer) - MUST be after onLocalDescription
     if (isOfferer) {
         auto dc = pc->createDataChannel("ciphermesh-data");
         setupDataChannel(dc, peerId);
 
-        pc->setLocalDescription(); // This triggers gathering -> onLocalDescription
+        LOGI("🔄 [P2P] Creating offer for %s...", peerId.c_str());
+        pc->setLocalDescription(); // This triggers gathering -> onLocalDescription callback above
     }
-
-    // 5. Send Description (Offer/Answer) when ready
-    pc->onLocalDescription([this, peerId](auto desc) {
-        std::string type = desc.typeString(); // "offer" or "answer"
-        std::string sdp = std::string(desc);
-        LOGI("Sending %s to %s", type.c_str(), peerId.c_str());
-        sendSignalingMessage(peerId, type, sdp);
-    });
 }
 
 void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const std::string& peerId) {
