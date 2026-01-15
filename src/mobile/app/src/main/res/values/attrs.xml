@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <attr name="colorWindowBg" format="color" />
+    <attr name="colorSurface" format="color" />
+    <attr name="colorTextPrimary" format="color" />
+    <attr name="colorTextSecondary" format="color" />
+    
+    <attr name="colorActionPrimary" format="color" />
+    <attr name="colorActionNew" format="color" />
+    <attr name="colorActionDelete" format="color" />
+    <attr name="colorActionInvite" format="color" />
+    <attr name="colorHighlight" format="color" />
+    
+    <attr name="colorInputBackground" format="color" />
+    <attr name="colorInputBorder" format="color" />
+    <attr name="textInputStyle" format="reference" />
+</resources>

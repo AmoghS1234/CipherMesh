@@ -9,17 +9,16 @@
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QStackedWidget>
-#include <QFile>
-#include <sqlite3.h>
 #include <string>
 #include <vector>
 #include <cctype>
 #include <cstdio>
 
+// [CHANGED] Constructor simplified
 UnlockDialog::UnlockDialog(CipherMesh::Core::Vault* vault, QWidget *parent)
     : QDialog(parent),
-      m_vault(vault),
-      m_vaultPath("ciphermesh.db") {
+      m_vault(vault) { // No path argument needed
+      
     setWindowTitle("CipherMesh - Unlock");
     setModal(true);
     setMinimumWidth(500);
@@ -39,29 +38,20 @@ UnlockDialog::UnlockDialog(CipherMesh::Core::Vault* vault, QWidget *parent)
     createUnlockView();
     createCreateView();
     
+    // Check initialization using the Vault's logic
     if (isVaultInitialized()) {
         m_stack->setCurrentIndex(0);
         m_unlockPasswordEdit->setFocus();
     } else {
         m_stack->setCurrentIndex(1);
-        m_createPasswordEdit->setFocus();
+        m_createUsernameEdit->setFocus(); // Focus username for new accounts
     }
 }
 
 UnlockDialog::~UnlockDialog() {}
 
 bool UnlockDialog::isVaultInitialized() {
-    if (!QFile::exists(QString::fromStdString(m_vaultPath))) return false;
-    sqlite3* db = nullptr;
-    if (sqlite3_open(m_vaultPath.c_str(), &db) != SQLITE_OK) return false;
-    sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT value FROM vault_metadata WHERE key = 'key_canary';";
-    bool success = false;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK)
-        if (sqlite3_step(stmt) == SQLITE_ROW) success = true;
-    sqlite3_finalize(stmt);
-    sqlite3_close(db);
-    return success;
+    return m_vault->hasUsers();
 }
 
 void UnlockDialog::createUnlockView() {
@@ -69,10 +59,8 @@ void UnlockDialog::createUnlockView() {
     QVBoxLayout* layout = new QVBoxLayout(view);
     layout->setContentsMargins(40, 40, 40, 40);
     layout->setSpacing(20);
-    
     layout->addStretch();
     
-    // Icon/Title section
     QLabel* iconLabel = new QLabel("🔒", this);
     iconLabel->setAlignment(Qt::AlignCenter);
     iconLabel->setStyleSheet("font-size: 48px;");
@@ -114,10 +102,8 @@ void UnlockDialog::createCreateView() {
     QVBoxLayout* mainLayout = new QVBoxLayout(view);
     mainLayout->setContentsMargins(40, 40, 40, 40);
     mainLayout->setSpacing(20);
-    
     mainLayout->addStretch();
     
-    // Icon/Welcome section
     QLabel* iconLabel = new QLabel("🔐", this);
     iconLabel->setAlignment(Qt::AlignCenter);
     iconLabel->setStyleSheet("font-size: 48px;");
@@ -168,7 +154,6 @@ void UnlockDialog::createCreateView() {
     mainLayout->addWidget(createButton);
     
     mainLayout->addStretch();
-    
     m_stack->addWidget(view);
     
     connect(createButton, &QPushButton::clicked, this, &UnlockDialog::onCreateClicked);
@@ -179,7 +164,9 @@ void UnlockDialog::createCreateView() {
 
 void UnlockDialog::onUnlockClicked() {
     std::string password = m_unlockPasswordEdit->text().toStdString();
-    if (m_vault->loadVault(m_vaultPath, password)) {
+    
+    // [CHANGED] Use m_vault->getDBPath() to ensure we read the correct file
+    if (m_vault->loadVault(m_vault->getDBPath(), password)) {
         CipherMesh::Core::Crypto::secureWipe(password);
         m_unlockPasswordEdit->clear();
         accept();
@@ -214,24 +201,16 @@ void UnlockDialog::onCreateClicked() {
         return;
     }
     
-    // Sanitize username: remove spaces, convert to lowercase, keep only alphanumeric
     std::string sanitized;
     for (char c : username) {
-        if (std::isalnum(c)) {
-            sanitized += std::tolower(c);
-        }
+        if (std::isalnum(c)) sanitized += std::tolower(c);
     }
-    if (sanitized.empty()) {
-        sanitized = "user";
-    }
-    // Limit to 12 characters
-    if (sanitized.length() > 12) {
-        sanitized = sanitized.substr(0, 12);
-    }
+    if (sanitized.empty()) sanitized = "user";
+    if (sanitized.length() > 12) sanitized = sanitized.substr(0, 12);
     
     try {
-        if (m_vault->createNewVault(m_vaultPath, p1)) {
-            // Generate user ID: username_<16 hex chars>
+        // [CHANGED] Use m_vault->getDBPath()
+        if (m_vault->createNewVault(m_vault->getDBPath(), p1)) {
             std::vector<unsigned char> randomBytes = CipherMesh::Core::Crypto::randomBytes(8);
             std::string hexSuffix;
             for (unsigned char byte : randomBytes) {
@@ -241,7 +220,6 @@ void UnlockDialog::onCreateClicked() {
             }
             std::string userId = sanitized + "_" + hexSuffix;
             
-            // Store username and user ID in vault
             m_vault->setUserId(userId);
             
             CipherMesh::Core::Crypto::secureWipe(p1);

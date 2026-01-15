@@ -1,9 +1,0 @@
-<RCC>
-    <qresource prefix="/">
-        <file>Main.qml</file>
-        <file>UnlockScreen.qml</file>
-        <file>VaultListScreen.qml</file>
-        <file>EntryDetailScreen.qml</file>
-        <file>SettingsScreen.qml</file>
-    </qresource>
-</RCC>

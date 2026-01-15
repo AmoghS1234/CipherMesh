@@ -18,6 +18,10 @@ public:
     virtual void inviteUser(const std::string& groupName, const std::string& userEmail, 
                             const std::vector<unsigned char>& groupKey,
                             const std::vector<CipherMesh::Core::VaultEntry>& entries) = 0;
+                            
+    // ADDED: Missing method needed by VaultQmlWrapper
+    virtual void sendInvite(const std::string& recipientId, const std::string& groupName) = 0;
+
     virtual void cancelInvite(const std::string& userId) = 0;
     virtual void respondToInvite(const std::string& senderId, bool accept) = 0;
     virtual void requestData(const std::string& senderId, const std::string& groupName) = 0;
@@ -35,8 +39,6 @@ public:
     std::function<void(std::string, std::string, std::vector<unsigned char>, std::vector<CipherMesh::Core::VaultEntry>)> onGroupDataReceived;
     std::function<void(std::string)> onPeerOnline;
     
-    // SECURITY UPDATE: Request now includes the Requester's Public Key
-    // Callback signature: (requesterId, groupName, requesterPublicKey)
     std::function<void(std::string, std::string, std::string)> onDataRequested;
     
     std::function<void(std::string, bool)> onUserStatusResult;

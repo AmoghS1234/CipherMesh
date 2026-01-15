@@ -98,7 +98,8 @@ void PasswordGeneratorDialog::setupUi() {
     m_symbolCheck = new QCheckBox("Symbols", this);
     m_symbolCheck->setChecked(true);
     m_symbolEdit = new QLineEdit(this);
-    m_symbolEdit->setText(QString::fromStdString(CipherMesh::Core::Crypto::PasswordOptions().customSymbols));
+    // [FIX] Correct Namespace: Core::PasswordOptions
+    m_symbolEdit->setText(QString::fromStdString(CipherMesh::Core::PasswordOptions().customSymbols));
     m_symbolEdit->setMinimumHeight(40);
     optionsLayout->addRow(m_symbolCheck, m_symbolEdit);
     
@@ -114,20 +115,15 @@ void PasswordGeneratorDialog::setupUi() {
     connect(regenButton, &QPushButton::clicked, this, &PasswordGeneratorDialog::generatePassword);
     connect(m_lengthSlider, &QSlider::valueChanged, this, &PasswordGeneratorDialog::onSliderChanged);
     
-    // Use checkStateChanged for Qt 6.7+ (where stateChanged is deprecated), otherwise use stateChanged
 #if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
     connect(m_upperCheck, &QCheckBox::checkStateChanged, this, &PasswordGeneratorDialog::generatePassword);
     connect(m_lowerCheck, &QCheckBox::checkStateChanged, this, &PasswordGeneratorDialog::generatePassword);
     connect(m_numberCheck, &QCheckBox::checkStateChanged, this, &PasswordGeneratorDialog::generatePassword);
-    
-    // --- UPDATED SYMBOL CONNECTIONS ---
     connect(m_symbolCheck, &QCheckBox::checkStateChanged, this, &PasswordGeneratorDialog::onSymbolCheckChanged);
 #else
     connect(m_upperCheck, &QCheckBox::stateChanged, this, &PasswordGeneratorDialog::generatePassword);
     connect(m_lowerCheck, &QCheckBox::stateChanged, this, &PasswordGeneratorDialog::generatePassword);
     connect(m_numberCheck, &QCheckBox::stateChanged, this, &PasswordGeneratorDialog::generatePassword);
-    
-    // --- UPDATED SYMBOL CONNECTIONS ---
     connect(m_symbolCheck, &QCheckBox::stateChanged, this, &PasswordGeneratorDialog::onSymbolCheckChanged);
 #endif
     connect(m_symbolEdit, &QLineEdit::textChanged, this, &PasswordGeneratorDialog::generatePassword);
@@ -151,17 +147,17 @@ void PasswordGeneratorDialog::onSymbolCheckChanged(int state) {
 }
 
 void PasswordGeneratorDialog::generatePassword() {
-    CipherMesh::Core::Crypto::PasswordOptions options;
+    // [FIX] Correct Namespace: Core::PasswordOptions
+    CipherMesh::Core::PasswordOptions options;
     options.length = m_lengthSlider->value();
     options.useUppercase = m_upperCheck->isChecked();
     options.useLowercase = m_lowerCheck->isChecked();
     options.useNumbers = m_numberCheck->isChecked();
 
-    // --- UPDATED SYMBOL LOGIC ---
     if (m_symbolCheck->isChecked()) {
         options.customSymbols = m_symbolEdit->text().toStdString();
     } else {
-        options.customSymbols = ""; // Send an empty string
+        options.customSymbols = ""; 
     }
 
     try {
@@ -184,7 +180,6 @@ void PasswordGeneratorDialog::updateStrengthMeter() {
     m_strengthLabel->setText(info.text);
     m_strengthLabel->setStyleSheet(QString("color: %1; font-weight: bold;").arg(info.color.name()));
     
-    // Dynamically color the progress bar chunk based on strength
     QString chunkColor = info.color.name();
     m_strengthBar->setStyleSheet(QString(
         "QProgressBar::chunk { background-color: %1; }"

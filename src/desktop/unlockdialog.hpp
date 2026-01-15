@@ -13,6 +13,7 @@ class UnlockDialog : public QDialog {
     Q_OBJECT
 
 public:
+    // [CHANGED] Removed dbPath argument. The vault already knows it.
     explicit UnlockDialog(CipherMesh::Core::Vault* vault, QWidget *parent = nullptr);
     ~UnlockDialog();
 
@@ -26,13 +27,13 @@ private:
     void createCreateView();
 
     CipherMesh::Core::Vault* m_vault;
-    std::string m_vaultPath;
+    // [REMOVED] std::string m_vaultPath; <-- No longer needed
 
     QStackedWidget* m_stack;
     QLineEdit* m_unlockPasswordEdit;
-    QLabel* m_unlockMessageLabel;
     QLineEdit* m_createUsernameEdit;
     QLineEdit* m_createPasswordEdit;
     QLineEdit* m_confirmPasswordEdit;
+    QLabel* m_unlockMessageLabel;
     QLabel* m_createMessageLabel;
 };

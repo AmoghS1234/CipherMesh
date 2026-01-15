@@ -43,7 +43,7 @@
 #include <string>
 #include <vector>
 #include <QMetaObject> 
-
+#include <QDebug>
 #include <QPushButton>
 #include <QLineEdit>
 #include <QSplitter>
@@ -62,7 +62,7 @@
 #include <QFile>
 #include <QDir>
 
-// --- ICON DEFINITIONS ---
+// --- ICON DEFINITIONS (SVGs) ---
 const QByteArray g_folderIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>)";
 const QByteArray g_keyIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 15c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z"/></svg>)";
 const QByteArray g_plusIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>)";
@@ -79,12 +79,13 @@ const QByteArray g_eyeOffIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" vi
 const QString INVITE_SUFFIX = " (Invite)";
 const QString COPY_SUFFIX = " (Copy)";
 
-MainWindow::MainWindow(const QString& userId, QWidget *parent)
+// [FIX] Constructor accepts Vault pointer only
+MainWindow::MainWindow(CipherMesh::Core::Vault* vault, QWidget *parent)
     : QMainWindow(parent),
-      m_vault(nullptr),
+      m_vault(vault),
       m_p2pService(nullptr), 
       m_isPasswordVisible(false),
-      m_currentUserId(userId),
+      // m_currentUserId is initialized in body now
       m_actionIconColor("#ffffff"),
       m_uiIconColor("#e0e0e0"),
       m_autoLockTimer(nullptr),
@@ -92,22 +93,34 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
       m_totpRefreshTimer(nullptr),
       m_breachChecker(nullptr)
 {
+    qDebug() << "[MAIN] Constructor Started";
+    if (!m_vault) {
+        qCritical() << "[MAIN] FATAL: Vault pointer is NULL!";
+    } else {
+        qDebug() << "[MAIN] Vault pointer valid.";
+        // [FIX] Fetch ID from vault
+        m_currentUserId = QString::fromStdString(m_vault->getUserId());
+    }
+
     setWindowTitle("CipherMesh - (Locked) - " + m_currentUserId);
     
     // Initialize breach checker
+    qDebug() << "[MAIN] Init BreachChecker";
     m_breachChecker = new BreachChecker(this);
     
-    // Set a more reasonable default size and make it resizable
     resize(1000, 650);
     setMinimumSize(800, 500);
     
     // Setup auto-lock timer
+    qDebug() << "[MAIN] Setup AutoLock";
     setupAutoLockTimer();
     
+    qDebug() << "[MAIN] Starting P2P Thread";
     m_p2pThread = new QThread(this);
     m_p2pThread->setObjectName("P2PWorkerThread");
     
     // Render.com URL
+    qDebug() << "[MAIN] Creating WebRTC Service";
     WebRTCService* p2pWorker = new WebRTCService("wss://ciphermesh-signal-server.onrender.com", m_currentUserId.toStdString(), nullptr); 
 
     p2pWorker->onIncomingInvite = [this](const std::string& senderId, const std::string& groupName) {
@@ -160,16 +173,25 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
     p2pWorker->moveToThread(m_p2pThread);
     connect(m_p2pThread, &QThread::started, p2pWorker, &WebRTCService::startSignaling);
     
+    qDebug() << "[MAIN] Starting P2P";
     m_p2pThread->start();
+    
+    // [FIX] Valid assignment now because header type is correct
     m_p2pService = p2pWorker;
 
     connect(m_p2pThread, &QThread::finished, p2pWorker, &QObject::deleteLater);
     connect(this, &QObject::destroyed, m_p2pThread, &QThread::quit);
     connect(m_p2pThread, &QThread::finished, m_p2pThread, &QObject::deleteLater);
 
+    qDebug() << "[MAIN] Call setupUi";
     setupUi();
+    
+    qDebug() << "[MAIN] Call setupKeyboardShortcuts";
     setupKeyboardShortcuts();
+    
+    qDebug() << "[MAIN] Call updateIcons";
     updateIcons();
+    
     updateWindowTitle();
     m_detailsStack->setCurrentIndex(0);
     
@@ -180,6 +202,18 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
     
     // Install event filter to detect user activity
     qApp->installEventFilter(this);
+
+    // [FIX] Perform post-unlock initialization if vault is ready
+    if (m_vault && !m_vault->isLocked()) {
+        qDebug() << "[MAIN] Call postUnlockInit";
+        postUnlockInit(); 
+    } else {
+        if (!m_vault) {
+             qCritical() << "[MAIN] Vault is null during init check";
+             QMessageBox::critical(this, "Error", "Failed to receive unlocked vault.");
+        }
+    }
+    qDebug() << "[MAIN] Constructor Finished";
 }
 
 MainWindow::~MainWindow()
@@ -199,16 +233,6 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         resetAutoLockTimer();
     }
     return QMainWindow::eventFilter(obj, event);
-}
-
-void MainWindow::setVault(CipherMesh::Core::Vault* vault)
-{
-    m_vault = vault;
-    if (m_vault && !m_vault->isLocked()) {
-        postUnlockInit(); 
-    } else {
-        QMessageBox::critical(this, "Error", "Failed to receive unlocked vault.");
-    }
 }
 
 void MainWindow::onSettingsButtonClicked()
@@ -242,6 +266,9 @@ void MainWindow::setTheme(const QString& themeId, const QString& styleSheet) {
 }
 
 void MainWindow::updateIcons() {
+    qDebug() << "[UI] updateIcons started";
+    if (!m_newGroupButton) { qCritical() << "m_newGroupButton is null!"; return; }
+    
     m_newGroupButton->setIcon(loadSvgIcon(g_plusIconSvg, m_actionIconColor));
     m_newEntryButton->setIcon(loadSvgIcon(g_plusIconSvg, m_actionIconColor));
     m_editEntryButton->setIcon(loadSvgIcon(g_pencilIconSvg, m_actionIconColor));
@@ -258,6 +285,7 @@ void MainWindow::updateIcons() {
     if(m_vault && !m_vault->isLocked()) {
         loadGroups(); 
     }
+    qDebug() << "[UI] updateIcons finished";
 }
 
 void MainWindow::handleIncomingInvite(const QString& senderId, const QString& groupName)
@@ -345,7 +373,6 @@ void MainWindow::handleGroupData(const QString& senderId,
     // 2. Otherwise assume it's encrypted (Android-to-Desktop or Production)
     else {
         try {
-            // ⚠️ FIX: DO NOT RE-ENCODE.
             // The encryptedKeyData vector already contains the ASCII characters of the Base64 string.
             // Just convert the vector directly to a string.
             std::string base64Ciphertext(encryptedKeyData.begin(), encryptedKeyData.end());
@@ -362,8 +389,6 @@ void MainWindow::handleGroupData(const QString& senderId,
         }
     }
 
-    // ... (The rest of the function remains exactly the same) ...
-    
     // Logic to handle invite cleanup
     int inviteIdToDelete = -1;
     auto invites = m_vault->getPendingInvites();
@@ -469,6 +494,7 @@ void MainWindow::onLocationDoubleClicked(QListWidgetItem* item) {
 
 void MainWindow::setupUi()
 {
+    qDebug() << "[UI] setupUi Started";
     // --- Menu Bar (create first for proper layout) ---
     QMenuBar* menuBar = new QMenuBar(this);
     setMenuBar(menuBar);
@@ -498,7 +524,7 @@ void MainWindow::setupUi()
     
     // --- Recently Accessed Menu ---
     m_recentMenu = menuBar->addMenu("&Recent");
-    updateRecentMenu();
+    // Don't call updateRecentMenu here yet, wait for vault load
     
     // --- Group Pane ---
     QWidget* groupPaneWidget = new QWidget(this);
@@ -674,6 +700,7 @@ void MainWindow::setupUi()
     
     connect(m_locationsList, &QListWidget::itemDoubleClicked, this, &MainWindow::onLocationDoubleClicked);
 
+    // [FIX] Initialize m_notesEdit here
     m_notesEdit = new QTextEdit(this);
     m_notesEdit->setReadOnly(true);
     m_notesEdit->setMaximumHeight(120);
@@ -809,6 +836,8 @@ void MainWindow::setupUi()
     
     connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged); 
     connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onSettingsButtonClicked); 
+    
+    qDebug() << "[UI] setupUi Finished";
 }
 
 void MainWindow::setupKeyboardShortcuts()
@@ -854,11 +883,13 @@ void MainWindow::updateWindowTitle()
 // --- UPDATED POST-UNLOCK INIT (Sends Public Key) ---
 void MainWindow::postUnlockInit()
 {
+    qDebug() << "[MAIN] postUnlockInit started";
     updateWindowTitle();
     
     // Inject Public Key into Service
     if (m_p2pService) {
         // dynamic_cast requires complete type (webrtcservice.hpp included)
+        // [FIX] cast namespaced pointer
         WebRTCService* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
         if (webrtcService && m_vault) {
             std::string myPubKey = m_vault->getIdentityPublicKey();
@@ -867,10 +898,16 @@ void MainWindow::postUnlockInit()
         }
     }
     
+    qDebug() << "[MAIN] loading Groups";
     loadGroups();
+    
+    qDebug() << "[MAIN] restoring invites";
     restoreOutgoingInvites(); 
+    
     if (m_groupListWidget->count() > 0) m_groupListWidget->setCurrentRow(0);
     resetAutoLockTimer();
+    updateRecentMenu(); // Call this here to fill the menu
+    qDebug() << "[MAIN] postUnlockInit finished";
 }
 
 void MainWindow::loadGroups()
@@ -1084,8 +1121,8 @@ void MainWindow::onEntrySelected(QListWidgetItem* current)
         QDateTime created = QDateTime::fromSecsSinceEpoch(entry.createdAt);
         timestampLines << QString("Created: %1").arg(created.toString("MMM dd, yyyy hh:mm"));
     }
-    if (entry.lastModified > 0) {
-        QDateTime modified = QDateTime::fromSecsSinceEpoch(entry.lastModified);
+    if (entry.updatedAt > 0) {
+        QDateTime modified = QDateTime::fromSecsSinceEpoch(entry.updatedAt);
         timestampLines << QString("Modified: %1").arg(modified.toString("MMM dd, yyyy hh:mm"));
     }
     if (entry.lastAccessed > 0) {
@@ -1109,9 +1146,9 @@ void MainWindow::loadEntries(const std::vector<CipherMesh::Core::VaultEntry>& en
         QString displayText = QString::fromStdString(entry.title);
         
         // Add visual indicator for entry type
-        if (entry.entry_type == "secure_note") {
+        if (entry.entryType == "secure_note") {
             displayText = "📝 " + displayText;
-        } else if (!entry.totp_secret.empty()) {
+        } else if (!entry.totpSecret.empty()) {
             displayText = "🔐 " + displayText; // Show lock with key for 2FA-enabled passwords
         } else {
             displayText = "🔑 " + displayText;
@@ -1375,8 +1412,8 @@ void MainWindow::onDeleteGroupClicked()
         return;
     }
     QMessageBox::StandardButton reply = QMessageBox::question(this, "Delete Group",
-                                                      QString("Are you sure you want to permanently delete the group '%1' and all its entries?").arg(groupName),
-                                                      QMessageBox::Yes | QMessageBox::No);
+                                                              QString("Are you sure you want to permanently delete the group '%1' and all its entries?").arg(groupName),
+                                                              QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         try {
             if (m_vault->deleteGroup(groupName.toStdString())) {
@@ -1411,8 +1448,8 @@ void MainWindow::onDeleteEntryClicked()
     }
     QString entryTitle = m_entryListWidget->currentItem()->text();
     QMessageBox::StandardButton reply = QMessageBox::question(this, "Delete Entry",
-                                                      QString("Are you sure you want to permanently delete the entry '%1'?").arg(entryTitle),
-                                                      QMessageBox::Yes | QMessageBox::No);
+                                                              QString("Are you sure you want to permanently delete the entry '%1'?").arg(entryTitle),
+                                                              QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         try {
             if (m_vault->deleteEntry(entryId)) {
@@ -1527,13 +1564,21 @@ void MainWindow::onLockVault()
         
         m_vault->lock();
         this->hide();
-        QApplication::quit(); 
+        // Do NOT quit here if we want to loop back to the unlock dialog in main.cpp
+        // Instead, we close the window.
+        this->close(); 
     }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    QApplication::quit();
+    // If the vault is locked, we accept the close event which will terminate the loop in main.cpp unless handled there.
+    // In our main.cpp loop logic:
+    // w->show(); QApplication::exec();
+    // When main window closes, exec returns.
+    // We check vault.isLocked().
+    
+    // So just accept the event.
     event->accept();
 }
 
@@ -1786,7 +1831,7 @@ void MainWindow::refreshTOTPCode() {
     const CipherMesh::Core::VaultEntry& entry = it.value();
     
     // Check if entry has a TOTP secret
-    if (entry.totp_secret.empty()) {
+    if (entry.totpSecret.empty()) {
         m_totpCodeLabel->setText("------");
         m_totpCodeLabel->setStyleSheet("color: #666; padding: 4px;");
         m_totpTimerBar->hide();
@@ -1796,7 +1841,7 @@ void MainWindow::refreshTOTPCode() {
     
     // Generate TOTP code
     try {
-        std::string code = CipherMesh::Utils::TOTP::generateCode(entry.totp_secret);
+        std::string code = CipherMesh::Utils::TOTP::generateCode(entry.totpSecret);
         
         // Check if code generation failed
         if (code.empty()) {

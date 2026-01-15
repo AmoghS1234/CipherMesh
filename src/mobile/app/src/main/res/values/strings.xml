@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">CipherMesh</string>
+
+    <string name="appbar_scrolling_view_behavior">com.google.android.material.appbar.AppBarLayout$ScrollingViewBehavior</string>
+
+    <string name="navigation_drawer_open">Open navigation drawer</string>
+    <string name="navigation_drawer_close">Close navigation drawer</string>
+
+    <string name="action_settings">Settings</string>
+    <string name="title_activity_home">CipherMesh</string>
+
+    <string name="menu_groups">Groups</string>
+    <string name="menu_add_group">New Group</string>
+    <string name="menu_theme">Change Theme</string>
+    <string name="menu_settings">Settings</string>
+    <string name="menu_lock">Lock Vault</string>
+
+</resources>

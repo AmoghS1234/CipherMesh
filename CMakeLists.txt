@@ -1,52 +1,88 @@
 cmake_minimum_required(VERSION 3.16)
-project(CipherMesh VERSION 0.1 LANGUAGES CXX)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)   
+project(CipherMesh VERSION 0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(BUILD_SHARED_LIBS OFF)
 
-set(NO_LOGGING ON CACHE BOOL "" FORCE)
-set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
-set(NO_TESTS ON CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(USE_MBEDTLS ON CACHE BOOL "" FORCE)
-set(USE_OPENSSL OFF CACHE BOOL "" FORCE)
-set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
-set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+# --- FIX: Stop Install Rule Errors ---
+set(CMAKE_SKIP_INSTALL_RULES ON)
 
-add_compile_definitions(MBEDTLS_SSL_DTLS_SRTP)
+if(NOT ANDROID)
+    set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTORCC ON)
+    set(CMAKE_AUTOUIC ON)
+endif()
 
 include(FetchContent)
 
-if(NOT DEFINED sodium_INCLUDE_DIR OR NOT DEFINED sodium_LIBRARY_RELEASE)
-    message(FATAL_ERROR "Prebuilt libsodium not provided.  Set sodium_INCLUDE_DIR and sodium_LIBRARY_RELEASE.")
+# --- 1. Libsodium ---
+if(ANDROID)
+    message(STATUS "Android: Fetching libsodium via Git...")
+    set(SODIUM_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(SODIUM_DISABLE_TESTS ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        sodium
+        GIT_REPOSITORY https://github.com/robinlinden/libsodium-cmake.git
+        GIT_TAG        master
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(sodium)
+    set(SODIUM_INCLUDE_DIR "${sodium_SOURCE_DIR}/libsodium/src/libsodium/include")
+    if(NOT TARGET libsodium)
+        add_library(libsodium ALIAS sodium)
+    endif()
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(Sodium REQUIRED IMPORTED_TARGET libsodium)
+    if(NOT TARGET libsodium)
+        add_library(libsodium INTERFACE)
+        target_link_libraries(libsodium INTERFACE PkgConfig::Sodium)
+    endif()
+    set(SODIUM_INCLUDE_DIR ${Sodium_INCLUDE_DIRS})
 endif()
 
-add_library(sodium STATIC IMPORTED GLOBAL)
-set_target_properties(sodium PROPERTIES
-    IMPORTED_LOCATION "${sodium_LIBRARY_RELEASE}"
-    INTERFACE_INCLUDE_DIRECTORIES "${sodium_INCLUDE_DIR}"
-)
+# --- 2. OpenSSL ---
+if(ANDROID)
+    message(STATUS "Android: Fetching OpenSSL...")
+    set(WITH_APPS OFF CACHE BOOL "" FORCE)
+    set(WITH_TESTS OFF CACHE BOOL "" FORCE)
+    set(OPENSSL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        openssl-cmake
+        GIT_REPOSITORY https://github.com/janbar/openssl-cmake.git
+        GIT_TAG master
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(openssl-cmake)
+    if(NOT TARGET OpenSSL::SSL)
+        add_library(OpenSSL::SSL ALIAS ssl)
+    endif()
+    if(NOT TARGET OpenSSL::Crypto)
+        add_library(OpenSSL::Crypto ALIAS crypto)
+    endif()
+    set(OPENSSL_INCLUDE_DIR "${openssl-cmake_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+    set(OPENSSL_FOUND TRUE CACHE BOOL "" FORCE)
+    set(OpenSSL_FOUND TRUE CACHE BOOL "" FORCE)
+    set(OPENSSL_CRYPTO_LIBRARY crypto CACHE FILEPATH "" FORCE)
+    set(OPENSSL_SSL_LIBRARY ssl CACHE FILEPATH "" FORCE)
+    set(OPENSSL_LIBRARIES OpenSSL::SSL OpenSSL::Crypto CACHE INTERNAL "" FORCE)
+else()
+    find_package(OpenSSL REQUIRED)
+endif()
 
-message(STATUS "Using prebuilt libsodium:  ${sodium_LIBRARY_RELEASE}")
+# --- 3. LibDataChannel ---
+set(USE_MBEDTLS OFF CACHE BOOL "" FORCE)
+set(USE_OPENSSL ON CACHE BOOL "" FORCE)
+set(USE_NICE OFF CACHE BOOL "" FORCE)
 
-FetchContent_Declare(
-    mbedtls
-    GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
-    GIT_TAG v3.6.0
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(mbedtls)
+# [FIX] Enable WebSockets for Signaling!
+set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
 
-# MbedTLS provides targets: mbedtls, mbedx509, mbedcrypto
-# Set variables that libdatachannel's FindMbedTLS expects
-set(MbedTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
-set(MBEDTLS_INCLUDE_DIRS "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
-set(MbedTLS_LIBRARY mbedtls CACHE STRING "" FORCE)
-set(MbedCrypto_LIBRARY mbedcrypto CACHE STRING "" FORCE)
-set(MbedX509_LIBRARY mbedx509 CACHE STRING "" FORCE)
-set(MBEDTLS_LIBRARY mbedtls CACHE STRING "" FORCE)
-set(MBEDX509_LIBRARY mbedx509 CACHE STRING "" FORCE)
-set(MBEDCRYPTO_LIBRARY mbedcrypto CACHE STRING "" FORCE)
+set(NO_MEDIA ON CACHE BOOL "" FORCE)
+set(NO_TESTS ON CACHE BOOL "" FORCE)
+set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     LibDataChannel
@@ -56,88 +92,103 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(LibDataChannel)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent Quick WebSockets)
+# --- 4. SQLite / Qt ---
+if(NOT ANDROID)
+    find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent Quick WebSockets Widgets Svg)
+endif()
 
-add_library(ciphermesh-core STATIC
+if(ANDROID)
+    message(STATUS "Android: Fetching SQLite3 Source...")
+    FetchContent_Declare(
+        sqlite3_src
+        URL https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip
+    )
+    FetchContent_GetProperties(sqlite3_src)
+    if(NOT sqlite3_src_POPULATED)
+        FetchContent_Populate(sqlite3_src)
+    endif()
+    set(SQLITE_ROOT "${sqlite3_src_SOURCE_DIR}")
+    if(EXISTS "${SQLITE_ROOT}/sqlite3.c")
+        set(SQLITE_SOURCE "${SQLITE_ROOT}/sqlite3.c")
+    elseif(EXISTS "${SQLITE_ROOT}/sqlite-amalgamation-3450100/sqlite3.c")
+        set(SQLITE_ROOT "${SQLITE_ROOT}/sqlite-amalgamation-3450100")
+        set(SQLITE_SOURCE "${SQLITE_ROOT}/sqlite3.c")
+    endif()
+    if(NOT TARGET sqlite3)
+        add_library(sqlite3 STATIC "${SQLITE_SOURCE}")
+        target_include_directories(sqlite3 PUBLIC "${SQLITE_ROOT}")
+        target_compile_definitions(sqlite3 PRIVATE SQLITE_THREADSAFE=1 SQLITE_TEMP_STORE=3)
+    endif()
+    set(ANDROID_SQLITE_INCLUDE_DIR "${SQLITE_ROOT}")
+else()
+    find_package(SQLite3 REQUIRED)
+    if(NOT TARGET sqlite3)
+        add_library(sqlite3 INTERFACE)
+        target_link_libraries(sqlite3 INTERFACE SQLite::SQLite3)
+    endif()
+endif()
+
+# --- 5. Core Library ---
+set(CORE_SOURCES
     src/core/crypto.cpp
     src/core/vault.cpp
     src/core/database.cpp
+    src/utils/totp.cpp
+    src/utils/passwordstrength.cpp
+    
+    # [FIX] Moved P2P sources here so they compile on Android too
     src/p2p/ip2pservice.cpp
     src/p2p_webrtc/webrtcservice.cpp
 )
+
+add_library(ciphermesh-core STATIC ${CORE_SOURCES})
 
 target_include_directories(ciphermesh-core PUBLIC
     src/core
     src/p2p
     src/p2p_webrtc
-    ${MbedTLS_INCLUDE_DIR}
-)
-
-target_include_directories(ciphermesh-core PUBLIC
-    $<TARGET_PROPERTY:sodium,INTERFACE_INCLUDE_DIRECTORIES>
-)
-
-target_compile_options(ciphermesh-core PRIVATE -Wno-macro-redefined)
-
-target_link_libraries(ciphermesh-core PRIVATE
-    Qt6::Core
-    Qt6::Network
-    Qt6::Sql
-    Qt6::Concurrent
-    Qt6::WebSockets
-    LibDataChannel::LibDataChannelStatic
-    sodium
-    mbedtls
-    mbedx509
-    mbedcrypto
+    src/utils
+    ${SODIUM_INCLUDE_DIR}
+    ${OPENSSL_INCLUDE_DIR}
 )
 
 if(ANDROID)
-    qt_add_executable(CipherMesh-Mobile
-        MANUAL_FINALIZATION
-        src/mobile/main_mobile.cpp
-        src/mobile/vaultqmlwrapper.cpp
-        src/utils/totp.cpp
-        src/utils/passwordstrength.cpp
-        src/mobile/qml.qrc
-    )
-
-    target_include_directories(CipherMesh-Mobile PRIVATE
-        src/utils
-    )
-
-    target_link_libraries(CipherMesh-Mobile PRIVATE
-        ciphermesh-core
-        -Wl,--whole-archive
-        sodium
-        mbedtls
-        mbedx509
-        mbedcrypto
-        -Wl,--no-whole-archive
-        LibDataChannel::LibDataChannelStatic
-        Qt6::Quick
-        Qt6::Core
-        Qt6::Network
-        Qt6::WebSockets
-    )
-
-    set_target_properties(CipherMesh-Mobile PROPERTIES
-        QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mobile/android
-    )
-
-    qt_finalize_executable(CipherMesh-Mobile)
+    target_include_directories(ciphermesh-core PRIVATE "${ANDROID_SQLITE_INCLUDE_DIR}")
 endif()
 
-if(NOT ANDROID AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/desktop/main.cpp")
-    find_package(Qt6 COMPONENTS Widgets QUIET)
-    if(Qt6Widgets_FOUND)
-        add_executable(CipherMesh-Desktop
-            src/desktop/main.cpp
-            src/desktop/mainwindow.cpp
-        )
+# [FIX] Changed PRIVATE to PUBLIC so 'ciphermesh_jni' can find rtc/rtc.hpp
+target_link_libraries(ciphermesh-core PUBLIC
+    LibDataChannel::LibDataChannelStatic
+)
+
+target_link_libraries(ciphermesh-core PRIVATE
+    libsodium
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    sqlite3
+)
+
+if(ANDROID)
+    target_link_libraries(ciphermesh-core PRIVATE log)
+else()
+    target_link_libraries(ciphermesh-core PRIVATE
+        Qt6::Core Qt6::Network Qt6::Sql Qt6::Concurrent Qt6::WebSockets
+    )
+endif()
+
+# --- 6. Targets ---
+if(ANDROID)
+    add_library(ciphermesh_jni SHARED src/mobile/app/src/main/cpp/native-lib.cpp)
+    target_link_options(ciphermesh_jni PRIVATE "-Wl,-z,max-page-size=16384")
+    target_link_libraries(ciphermesh_jni PRIVATE ciphermesh-core log android)
+else()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/desktop/main.cpp")
+        file(GLOB_RECURSE DESKTOP_SOURCES "src/desktop/*.cpp" "src/desktop/*.hpp" "src/desktop/*.h")
+        qt_add_executable(CipherMesh-Desktop ${DESKTOP_SOURCES})
         target_link_libraries(CipherMesh-Desktop PRIVATE
             ciphermesh-core
-            Qt6::Widgets
+            Qt6::Quick Qt6::Core Qt6::Network Qt6::WebSockets Qt6::Widgets Qt6::Svg
+            LibDataChannel::LibDataChannelStatic libsodium OpenSSL::SSL OpenSSL::Crypto sqlite3
         )
     endif()
 endif()

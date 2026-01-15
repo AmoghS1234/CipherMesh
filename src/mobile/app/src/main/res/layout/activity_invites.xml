@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="?attr/colorWindowBg">
+
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/toolbarInvites"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorSurface"
+        app:title="Pending Invites"
+        app:titleTextColor="?attr/colorTextPrimary" />
+
+    <ListView
+        android:id="@+id/listInvites"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:divider="?attr/colorInputBorder"
+        android:dividerHeight="1dp"
+        android:padding="8dp" />
+
+    <TextView
+        android:id="@+id/txtNoInvites"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:text="No pending invites"
+        android:textColor="?attr/colorTextSecondary"
+        android:visibility="gone" />
+</LinearLayout>
