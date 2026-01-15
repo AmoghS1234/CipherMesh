@@ -240,15 +240,58 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     // --- Dialogs ---
 
     private fun showGroupOptionsDialog(groupName: String) {
-        val options = arrayOf("Manage / Share", "Delete Group")
+        val options = arrayOf("Manage / Share", "Rename Group", "Delete Group")
         MaterialAlertDialogBuilder(this)
             .setTitle("Options for '$groupName'")
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> showManageGroupDialog()
-                    1 -> showDeleteGroupConfirmation(groupName)
+                    1 -> showRenameGroupDialog(groupName)
+                    2 -> showDeleteGroupConfirmation(groupName)
                 }
             }
+            .show()
+    }
+    
+    private fun showRenameGroupDialog(oldName: String) {
+        if (oldName == "Personal") {
+            Toast.makeText(this, "Cannot rename 'Personal' group", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        val input = EditText(this)
+        input.hint = "New group name"
+        input.setText(oldName)
+        input.selectAll()
+        
+        val container = android.widget.FrameLayout(this)
+        container.setPadding(60, 40, 60, 20)
+        container.addView(input)
+        
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Rename Group")
+            .setView(container)
+            .setPositiveButton("Rename") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isEmpty()) {
+                    Toast.makeText(this, "Name cannot be empty", Toast.LENGTH_SHORT).show()
+                } else if (newName == oldName) {
+                    Toast.makeText(this, "Name unchanged", Toast.LENGTH_SHORT).show()
+                } else if (vault.groupExists(newName)) {
+                    Toast.makeText(this, "Group '$newName' already exists", Toast.LENGTH_SHORT).show()
+                } else {
+                    if (vault.renameGroup(oldName, newName)) {
+                        Toast.makeText(this, "Group renamed to '$newName'", Toast.LENGTH_SHORT).show()
+                        if (currentGroup == oldName) {
+                            currentGroup = newName
+                        }
+                        loadGroups()
+                    } else {
+                        Toast.makeText(this, "Rename failed", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 

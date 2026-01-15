@@ -182,6 +182,13 @@ bool Database::deleteGroup(const std::string& name) {
     return q.exec(); 
 }
 
+bool Database::renameGroup(const std::string& oldName, const std::string& newName) {
+    SqlStatement q(m_db_handle, "UPDATE groups SET name = ? WHERE name = ?");
+    q.bind(1, newName);
+    q.bind(2, oldName);
+    return q.exec();
+}
+
 std::string Database::getGroupOwner(int groupId) {
     SqlStatement q(m_db_handle, "SELECT owner_id FROM groups WHERE id = ?");
     q.bind(1, groupId);

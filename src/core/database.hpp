@@ -46,6 +46,7 @@ public:
     int getGroupId(const std::string& name);
     int getGroupIdForEntry(int entryId);
     bool deleteGroup(const std::string& name);
+    bool renameGroup(const std::string& oldName, const std::string& newName);
     std::string getGroupOwner(int groupId);
 
     // -- Group Members --

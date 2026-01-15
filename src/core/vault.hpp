@@ -50,6 +50,7 @@ namespace Core {
         bool addGroup(const std::string& groupName);
         bool addGroup(const std::string& groupName, const std::vector<unsigned char>& key);
         bool deleteGroup(const std::string& groupName);
+        bool renameGroup(const std::string& oldName, const std::string& newName);
         bool groupExists(const std::string& groupName);
         bool setActiveGroup(const std::string& groupName);
         int getActiveGroupId() const { return m_activeGroupId; }

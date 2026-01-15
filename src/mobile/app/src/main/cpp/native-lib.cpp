@@ -21,6 +21,72 @@ jmethodID g_sendMethod = nullptr;
 jobject g_uiCallbackObj = nullptr;
 jmethodID g_onInviteMethod = nullptr;
 
+// [NEW] Helper function to call Java invite callback from C++
+void notifyInviteToJava(const std::string& senderId, const std::string& groupName) {
+    if (!g_jvm || !g_uiCallbackObj || !g_onInviteMethod) {
+        LOGD("⚠️  [INVITE] UI callback not set - cannot notify Java");
+        return;
+    }
+    
+    JNIEnv* env;
+    bool attached = false;
+    if (g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    
+    if (!g_vault || g_vault->isLocked()) {
+        LOGE("❌ [INVITE] Vault locked - cannot store invite");
+        if (attached) g_jvm->DetachCurrentThread();
+        return;
+    }
+    
+    // Check for duplicate group name and add number suffix if needed
+    std::string finalGroupName = groupName;
+    auto existingGroups = g_vault->getGroupNames();
+    bool isDuplicate = false;
+    for (const auto& existing : existingGroups) {
+        if (existing == groupName) {
+            isDuplicate = true;
+            break;
+        }
+    }
+    
+    if (isDuplicate) {
+        int suffix = 2;
+        while (true) {
+            std::string testName = groupName + " (" + std::to_string(suffix) + ")";
+            bool found = false;
+            for (const auto& existing : existingGroups) {
+                if (existing == testName) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                finalGroupName = testName;
+                break;
+            }
+            suffix++;
+        }
+        LOGD("📝 [INVITE] Group name '%s' exists, using '%s'", groupName.c_str(), finalGroupName.c_str());
+    }
+    
+    // Store in database
+    g_vault->storePendingInvite(senderId, finalGroupName, "");
+    LOGD("💾 [INVITE] Stored invite from %s for group '%s'", senderId.c_str(), finalGroupName.c_str());
+    
+    // Notify UI
+    jstring jSender = env->NewStringUTF(senderId.c_str());
+    jstring jGroup = env->NewStringUTF(finalGroupName.c_str());
+    env->CallVoidMethod(g_uiCallbackObj, g_onInviteMethod, jSender, jGroup);
+    env->DeleteLocalRef(jSender);
+    env->DeleteLocalRef(jGroup);
+    LOGD("🔔 [INVITE] Notified UI of invite from %s for group '%s'", senderId.c_str(), finalGroupName.c_str());
+    
+    if (attached) g_jvm->DetachCurrentThread();
+}
+
 // --- Helpers ---
 
 std::string generateRandomSuffix() {
@@ -123,6 +189,12 @@ void initP2P() {
         if (!userId.empty()) {
             g_p2p = new WebRTCService("wss://ciphermesh-signal-server.onrender.com", userId);
             g_p2p->onSendSignaling = sendToKotlin;
+            
+            // [NEW] Register callback for incoming invites
+            g_p2p->onIncomingInvite = [](const std::string& senderId, const std::string& groupName) {
+                LOGD("🔔 [P2P] onIncomingInvite callback triggered: sender=%s group=%s", senderId.c_str(), groupName.c_str());
+                notifyInviteToJava(senderId, groupName);
+            };
         }
     }
 }
@@ -190,28 +262,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_receiveS
     LOGD("📩 [INVITE] receiveSignalingMessage type=%s sender=%s", type.c_str(), sender.c_str());
 
     if (type == "offer" && !sender.empty()) {
-        std::string sdp = extractJsonValueJNI(msg, "sdp");
-        
-        // [FIX] Store in database instead of volatile vector
-        if (g_vault && !g_vault->isLocked()) {
-            std::string groupName = "Shared Group"; // Default name, will be updated when group data arrives
-            g_vault->storePendingInvite(sender, groupName, sdp);
-            LOGD("💾 [INVITE] Stored invite from %s in database", sender.c_str());
-            
-            // [FIX] Notify UI layer of incoming invite
-            if (g_uiCallbackObj && g_onInviteMethod) {
-                jstring jSender = env->NewStringUTF(sender.c_str());
-                jstring jGroup = env->NewStringUTF(groupName.c_str());
-                env->CallVoidMethod(g_uiCallbackObj, g_onInviteMethod, jSender, jGroup);
-                env->DeleteLocalRef(jSender);
-                env->DeleteLocalRef(jGroup);
-                LOGD("🔔 [INVITE] Notified UI of invite from %s", sender.c_str());
-            } else {
-                LOGD("⚠️  [INVITE] UI callback not registered - invite stored but user not notified");
-            }
-        } else {
-            LOGE("❌ [INVITE] Cannot store invite - vault locked or null");
-        }
+        // [FIX] Don't store invite yet - wait for invite-request with actual group name
+        // Just log that we received the offer for WebRTC handshake
+        LOGD("📨 [SIGNAL] Received WebRTC offer from %s - handshake will begin", sender.c_str());
     }
     
     // Also pass to WebRTC core for handshake processing
@@ -311,6 +364,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_ciphermesh_mobile_core_Vault_getDi
 extern "C" JNIEXPORT jobjectArray JNICALL Java_com_ciphermesh_mobile_core_Vault_getGroupNames(JNIEnv* env, jobject) { std::vector<std::string> v; if(g_vault && !g_vault->isLocked()) v=g_vault->getGroupNames(); jclass s=env->FindClass("java/lang/String"); jobjectArray a=env->NewObjectArray(v.size(),s,0); for(int i=0;i<v.size();++i) env->SetObjectArrayElement(a,i,env->NewStringUTF(v[i].c_str())); return a; }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_ciphermesh_mobile_core_Vault_addGroup(JNIEnv* env, jobject, jstring n) { if(!g_vault||g_vault->isLocked()) return false; const char* c=env->GetStringUTFChars(n,0); bool r=g_vault->addGroup(c); env->ReleaseStringUTFChars(n,c); return r; }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_ciphermesh_mobile_core_Vault_deleteGroup(JNIEnv* env, jobject, jstring n) { if(!g_vault||g_vault->isLocked()) return false; const char* c=env->GetStringUTFChars(n,0); bool r=g_vault->deleteGroup(c); env->ReleaseStringUTFChars(n,c); return r; }
+extern "C" JNIEXPORT jboolean JNICALL Java_com_ciphermesh_mobile_core_Vault_renameGroup(JNIEnv* env, jobject, jstring oldN, jstring newN) { if(!g_vault||g_vault->isLocked()) return false; const char* cOld=env->GetStringUTFChars(oldN,0); const char* cNew=env->GetStringUTFChars(newN,0); bool r=g_vault->renameGroup(cOld, cNew); env->ReleaseStringUTFChars(oldN,cOld); env->ReleaseStringUTFChars(newN,cNew); return r; }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_ciphermesh_mobile_core_Vault_setActiveGroup(JNIEnv* env, jobject, jstring n) { if(!g_vault||g_vault->isLocked()) return false; const char* c=env->GetStringUTFChars(n,0); bool r=g_vault->setActiveGroup(c); env->ReleaseStringUTFChars(n,c); return r; }
 extern "C" JNIEXPORT jboolean JNICALL Java_com_ciphermesh_mobile_core_Vault_groupExists(JNIEnv* env, jobject, jstring n) { if(!g_vault) return false; const char* c=env->GetStringUTFChars(n,0); bool r=g_vault->groupExists(c); env->ReleaseStringUTFChars(n,c); return r; }
 extern "C" JNIEXPORT jstring JNICALL Java_com_ciphermesh_mobile_core_Vault_getGroupOwner(JNIEnv* env, jobject, jstring n) { if(!g_vault||g_vault->isLocked()) return env->NewStringUTF(""); const char* c=env->GetStringUTFChars(n,0); std::string s=g_vault->getGroupOwner(g_vault->getGroupId(c)); env->ReleaseStringUTFChars(n,c); return env->NewStringUTF(s.c_str()); }

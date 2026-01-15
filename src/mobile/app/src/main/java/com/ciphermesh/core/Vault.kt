@@ -32,7 +32,8 @@ class Vault {
     // --- Groups ---
     external fun getGroupNames(): Array<String>
     external fun addGroup(groupName: String): Boolean
-    external fun deleteGroup(groupName: String): Boolean 
+    external fun deleteGroup(groupName: String): Boolean
+    external fun renameGroup(oldName: String, newName: String): Boolean
     external fun setActiveGroup(groupName: String): Boolean
     external fun groupExists(groupName: String): Boolean
     external fun getGroupOwner(groupName: String): String

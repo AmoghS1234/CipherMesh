@@ -1046,13 +1046,16 @@ void MainWindow::onGroupContextMenuRequested(const QPoint &pos)
     
     QMenu contextMenu(this);
     QAction* shareAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "Share Group...");
+    QAction* renameAction = contextMenu.addAction(loadSvgIcon(g_pencilIconSvg, m_uiIconColor), "Rename Group...");
     QAction* deleteAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Delete Group...");
 
     connect(shareAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
+    connect(renameAction, &QAction::triggered, this, &MainWindow::onRenameGroupClicked);
     connect(deleteAction, &QAction::triggered, this, &MainWindow::onDeleteGroupClicked);
 
     if (m_groupListWidget->count() <= 1 || item->text() == "Personal") {
         deleteAction->setEnabled(false);
+        renameAction->setEnabled(false);
     }
 
     contextMenu.exec(m_groupListWidget->mapToGlobal(pos));
@@ -1453,6 +1456,49 @@ void MainWindow::onDeleteGroupClicked()
             }
         } catch (const std::exception& e) {
             QMessageBox::critical(this, "Error", e.what());
+        }
+    }
+}
+
+void MainWindow::onRenameGroupClicked()
+{
+    if (!m_vault) return;
+    QString oldName = getSelectedGroupName();
+    if (oldName.isEmpty()) {
+        QMessageBox::warning(this, "Error", "No group selected.");
+        return;
+    }
+    if (oldName == "Personal") {
+        QMessageBox::warning(this, "Error", "Cannot rename the 'Personal' group.");
+        return;
+    }
+    
+    bool ok;
+    QString newName = QInputDialog::getText(this, "Rename Group",
+                                           QString("Enter new name for '%1':").arg(oldName),
+                                           QLineEdit::Normal,
+                                           oldName, &ok);
+    
+    if (ok && !newName.isEmpty()) {
+        if (newName == oldName) {
+            Toast::show(this, "Name unchanged");
+            return;
+        }
+        
+        try {
+            if (m_vault->groupExists(newName.toStdString())) {
+                QMessageBox::warning(this, "Error", QString("A group named '%1' already exists.").arg(newName));
+                return;
+            }
+            
+            if (m_vault->renameGroup(oldName.toStdString(), newName.toStdString())) {
+                Toast::show(this, QString("✅ Group renamed to '%1'").arg(newName));
+                loadGroups();
+            } else {
+                QMessageBox::warning(this, "Error", "Failed to rename group.");
+            }
+        } catch (const std::exception& e) {
+            QMessageBox::critical(this, "Error", QString("Failed to rename group: %1").arg(e.what()));
         }
     }
 }

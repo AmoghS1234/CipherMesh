@@ -47,6 +47,7 @@ private slots:
     void onGroupSelected(QListWidgetItem* current);
     void onGroupContextMenuRequested(const QPoint &pos);
     void onDeleteGroupClicked();
+    void onRenameGroupClicked();
     void onShareGroupClicked();
 
     // Entries

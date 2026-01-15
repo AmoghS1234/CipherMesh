@@ -445,5 +445,12 @@ std::vector<VaultEntry> Vault::findEntriesByLocation(const std::string& location
 std::vector<VaultEntry> Vault::searchEntries(const std::string& searchTerm) { return {}; }
 bool Vault::deleteGroup(const std::string& groupName) { return m_db->deleteGroup(groupName); }
 
+bool Vault::renameGroup(const std::string& oldName, const std::string& newName) {
+    checkLocked();
+    if (!groupExists(oldName)) return false;
+    if (groupExists(newName)) return false; // New name already exists
+    return m_db->renameGroup(oldName, newName);
+}
+
 } // namespace Core
 } // namespace CipherMesh
