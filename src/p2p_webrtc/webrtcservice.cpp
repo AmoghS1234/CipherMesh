@@ -158,18 +158,25 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             }
             else if (type == "invite-accept") {
                 LOGI("✅ [P2P] Invite accepted by %s", peerId.c_str());
-                if (onInviteResponse) {
-                    onInviteResponse(peerId, m_pendingInvites[peerId], true);
-                }
-                // Send group data now
+                // Send group data now if we have pending invite
                 if (m_pendingInvites.count(peerId)) {
-                    sendGroupData(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], m_pendingEntries[peerId]);
+                    std::string groupName = m_pendingInvites[peerId];
+                    if (onInviteResponse) {
+                        onInviteResponse(peerId, groupName, true);
+                    }
+                    sendGroupData(peerId, groupName, m_pendingKeys[peerId], m_pendingEntries[peerId]);
+                } else {
+                    LOGE("⚠️  [P2P] Received invite-accept but no pending invite for %s", peerId.c_str());
                 }
             }
             else if (type == "invite-reject") {
                 LOGI("❌ [P2P] Invite rejected by %s", peerId.c_str());
-                if (onInviteResponse) {
-                    onInviteResponse(peerId, m_pendingInvites[peerId], false);
+                if (m_pendingInvites.count(peerId)) {
+                    if (onInviteResponse) {
+                        onInviteResponse(peerId, m_pendingInvites[peerId], false);
+                    }
+                } else {
+                    LOGE("⚠️  [P2P] Received invite-reject but no pending invite for %s", peerId.c_str());
                 }
             }
             else if (type == "data-request") {
@@ -287,7 +294,7 @@ void WebRTCService::cancelInvite(const std::string& userId) {
 }
 void WebRTCService::respondToInvite(const std::string& senderId, bool accept) {
     LOGI("🎯 [P2P] respondToInvite to=%s accept=%s", senderId.c_str(), accept ? "YES" : "NO");
-    if(m_channels.count(senderId)) {
+    if(m_channels.count(senderId) && m_channels[senderId]) {
         std::string msg = accept ? "{\"type\":\"invite-accept\"}" : "{\"type\":\"invite-reject\"}";
         m_channels[senderId]->send(msg);
         LOGI("📤 [P2P] Sent response to %s", senderId.c_str());

@@ -1481,8 +1481,7 @@ void MainWindow::onRenameGroupClicked()
     
     if (ok && !newName.isEmpty()) {
         if (newName == oldName) {
-            Toast::show(this, "Name unchanged");
-            return;
+            return; // Name unchanged, just return
         }
         
         try {
@@ -1492,7 +1491,9 @@ void MainWindow::onRenameGroupClicked()
             }
             
             if (m_vault->renameGroup(oldName.toStdString(), newName.toStdString())) {
-                Toast::show(this, QString("✅ Group renamed to '%1'").arg(newName));
+                auto* toast = new CipherMesh::GUI::Toast(QString("✅ Group renamed to '%1'").arg(newName), 
+                                                         CipherMesh::GUI::ToastType::Success, this);
+                toast->show();
                 loadGroups();
             } else {
                 QMessageBox::warning(this, "Error", "Failed to rename group.");
@@ -1755,10 +1756,14 @@ void MainWindow::handleInviteResponse(const QString& userId, const QString& grou
     try {
         if (accepted) {
             m_vault->updateGroupMemberStatus(groupName.toStdString(), userId.toStdString(), "accepted");
-            Toast::show(this, QString("✅ %1 accepted your invite to '%2'").arg(userId, groupName));
+            auto* toast = new CipherMesh::GUI::Toast(QString("✅ %1 accepted your invite to '%2'").arg(userId, groupName),
+                                                     CipherMesh::GUI::ToastType::Success, this);
+            toast->show();
         } else {
             m_vault->removeGroupMember(groupName.toStdString(), userId.toStdString());
-            Toast::show(this, QString("❌ %1 rejected your invite to '%2'").arg(userId, groupName));
+            auto* toast = new CipherMesh::GUI::Toast(QString("❌ %1 rejected your invite to '%2'").arg(userId, groupName),
+                                                     CipherMesh::GUI::ToastType::Warning, this);
+            toast->show();
         }
         loadGroups();
         qDebug() << "✅ [RESPONSE] Updated member status for" << userId << "in group" << groupName;
