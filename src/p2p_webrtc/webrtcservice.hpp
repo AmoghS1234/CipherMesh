@@ -51,6 +51,9 @@ public:
     void setAuthenticated(bool auth);
     void onRetryTimer();
     void broadcastSync(const std::string& payload);
+    
+    // [FIX] Made public so native-lib.cpp can call it
+    void handleSignalingMessage(const std::string& message);
 
     // Callbacks
     std::function<void(bool)> onConnectionStateChange;
@@ -85,7 +88,6 @@ private:
     void setupPeerConnection(const std::string& peerId, bool isOfferer);
     
     void setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const std::string& peerId);
-    void handleSignalingMessage(const std::string& message);
     void sendSignalingMessage(const std::string& targetId, const std::string& type, const std::string& payload);
     void retryPendingInviteFor(const std::string& remoteId);
 };
