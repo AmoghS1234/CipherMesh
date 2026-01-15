@@ -421,16 +421,28 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         btnInvite.setOnClickListener {
             val targetId = inputId.text.toString().trim()
             if (targetId.isNotEmpty()) {
-                // [FIX] Run heavy P2P logic in background thread to prevent FREEZING
-                Toast.makeText(this, "Sending invite...", Toast.LENGTH_SHORT).show()
-                Thread {
-                    vault.sendP2PInvite(currentGroup, targetId)
-                    runOnUiThread {
-                        Toast.makeText(this, "Invite Sent!", Toast.LENGTH_SHORT).show()
-                        inputId.setText("")
-                        loadMembersList() // Refresh member list to show pending invite
-                    }
-                }.start()
+                try {
+                    // [FIX] Run heavy P2P logic in background thread to prevent FREEZING
+                    Toast.makeText(this, "Sending invite...", Toast.LENGTH_SHORT).show()
+                    Thread {
+                        try {
+                            vault.sendP2PInvite(currentGroup, targetId)
+                            runOnUiThread {
+                                Toast.makeText(this, "Invite Sent!", Toast.LENGTH_SHORT).show()
+                                inputId.setText("")
+                                loadMembersList() // Refresh member list to show pending invite
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("HomeActivity", "Error sending P2P invite", e)
+                            runOnUiThread {
+                                Toast.makeText(this, "Failed to send invite: ${e.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }.start()
+                } catch (e: Exception) {
+                    android.util.Log.e("HomeActivity", "Error starting invite thread", e)
+                    Toast.makeText(this, "Failed to send invite: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             } else {
                 Toast.makeText(this, "Enter a User ID", Toast.LENGTH_SHORT).show()
             }

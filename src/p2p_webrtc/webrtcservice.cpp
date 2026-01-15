@@ -70,146 +70,213 @@ void WebRTCService::disconnect() {
 void WebRTCService::inviteUser(const std::string& groupName, const std::string& userEmail, 
                                const std::vector<unsigned char>& groupKey, 
                                const std::vector<CipherMesh::Core::VaultEntry>& entries) {
-    LOGI("Inviting user: %s to group: %s", userEmail.c_str(), groupName.c_str());
+    if (groupName.empty() || userEmail.empty()) {
+        LOGE("❌ [P2P] inviteUser called with empty groupName or userEmail");
+        return;
+    }
     
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_pendingInvites[userEmail] = groupName;
-    m_pendingKeys[userEmail] = groupKey;
-    m_pendingEntries[userEmail] = entries;
-    
-    // Start the Handshake
-    setupPeerConnection(userEmail, true); // true = We are Offerer
-    // Note: createAndSendOffer called implicitly by setupPeerConnection callback logic or explicitly here
+    try {
+        LOGI("Inviting user: %s to group: %s", userEmail.c_str(), groupName.c_str());
+        
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingInvites[userEmail] = groupName;
+        m_pendingKeys[userEmail] = groupKey;
+        m_pendingEntries[userEmail] = entries;
+        
+        // Start the Handshake
+        setupPeerConnection(userEmail, true); // true = We are Offerer
+        // Note: createAndSendOffer called implicitly by setupPeerConnection callback logic or explicitly here
+    } catch (const std::exception& e) {
+        LOGE("❌ [P2P] CRITICAL: inviteUser failed for %s to group %s: %s", 
+             userEmail.c_str(), groupName.c_str(), e.what());
+    }
 }
 
 void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOfferer) {
     if (m_peers.count(peerId)) return;
 
-    rtc::Configuration config;
-    config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+    try {
+        rtc::Configuration config;
+        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
 
-    auto pc = std::make_shared<rtc::PeerConnection>(config);
-    m_peers[peerId] = pc;
+        auto pc = std::make_shared<rtc::PeerConnection>(config);
+        if (!pc) {
+            LOGE("❌ [P2P] Failed to create PeerConnection for %s", peerId.c_str());
+            return;
+        }
+        m_peers[peerId] = pc;
 
-    // 1. Handle ICE Candidates
-    pc->onLocalCandidate([this, peerId](auto candidate) {
-        LOGI("Generated ICE Candidate for %s", peerId.c_str());
-        sendSignalingMessage(peerId, "ice-candidate", std::string(candidate.candidate()));
-    });
+        // 1. Handle ICE Candidates
+        pc->onLocalCandidate([this, peerId](auto candidate) {
+            try {
+                LOGI("Generated ICE Candidate for %s", peerId.c_str());
+                sendSignalingMessage(peerId, "ice-candidate", std::string(candidate.candidate()));
+            } catch (const std::exception& e) {
+                LOGE("❌ [P2P] ICE candidate error for %s: %s", peerId.c_str(), e.what());
+            }
+        });
 
-    // 2. Handle Connection State
-    pc->onStateChange([this, peerId](rtc::PeerConnection::State state) {
-        LOGI("PC State Change for %s: %d", peerId.c_str(), (int)state);
-    });
+        // 2. Handle Connection State
+        pc->onStateChange([this, peerId](rtc::PeerConnection::State state) {
+            LOGI("PC State Change for %s: %d", peerId.c_str(), (int)state);
+        });
 
-    // 3. Handle Data Channel (if we are receiver)
-    pc->onDataChannel([this, peerId](auto dc) {
-        LOGI("Received DataChannel from %s", peerId.c_str());
-        setupDataChannel(dc, peerId);
-    });
+        // 3. Handle Data Channel (if we are receiver)
+        pc->onDataChannel([this, peerId](auto dc) {
+            try {
+                LOGI("Received DataChannel from %s", peerId.c_str());
+                if (dc) {
+                    setupDataChannel(dc, peerId);
+                } else {
+                    LOGE("❌ [P2P] Null DataChannel received from %s", peerId.c_str());
+                }
+            } catch (const std::exception& e) {
+                LOGE("❌ [P2P] DataChannel setup error: %s", e.what());
+            }
+        });
 
-    // 4. Register onLocalDescription BEFORE setLocalDescription to avoid race condition
-    pc->onLocalDescription([this, peerId](auto desc) {
-        std::string type = desc.typeString(); // "offer" or "answer"
-        std::string sdp = std::string(desc);
-        LOGI("📤 [P2P] Sending %s to %s (SDP length: %zu)", type.c_str(), peerId.c_str(), sdp.length());
-        sendSignalingMessage(peerId, type, sdp);
-    });
+        // 4. Register onLocalDescription BEFORE setLocalDescription to avoid race condition
+        pc->onLocalDescription([this, peerId](auto desc) {
+            try {
+                std::string type = desc.typeString(); // "offer" or "answer"
+                std::string sdp = std::string(desc);
+                LOGI("📤 [P2P] Sending %s to %s (SDP length: %zu)", type.c_str(), peerId.c_str(), sdp.length());
+                sendSignalingMessage(peerId, type, sdp);
+            } catch (const std::exception& e) {
+                LOGE("❌ [P2P] Local description error for %s: %s", peerId.c_str(), e.what());
+            }
+        });
 
-    // 5. Create Offer Logic (only if we are the Offerer) - MUST be after onLocalDescription
-    if (isOfferer) {
-        auto dc = pc->createDataChannel("ciphermesh-data");
-        setupDataChannel(dc, peerId);
+        // 5. Create Offer Logic (only if we are the Offerer) - MUST be after onLocalDescription
+        if (isOfferer) {
+            auto dc = pc->createDataChannel("ciphermesh-data");
+            if (!dc) {
+                LOGE("❌ [P2P] Failed to create DataChannel for %s", peerId.c_str());
+                return;
+            }
+            setupDataChannel(dc, peerId);
 
-        LOGI("🔄 [P2P] Creating offer for %s...", peerId.c_str());
-        pc->setLocalDescription(); // This triggers gathering -> onLocalDescription callback above
+            LOGI("🔄 [P2P] Creating offer for %s...", peerId.c_str());
+            pc->setLocalDescription(); // This triggers gathering -> onLocalDescription callback above
+        }
+    } catch (const std::exception& e) {
+        LOGE("❌ [P2P] CRITICAL: setupPeerConnection failed for %s: %s", peerId.c_str(), e.what());
+        // Clean up partial state
+        m_peers.erase(peerId);
     }
 }
 
 void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const std::string& peerId) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_channels[peerId] = dc;
+    if (!dc) {
+        LOGE("❌ [P2P] setupDataChannel called with null DataChannel for %s", peerId.c_str());
+        return;
+    }
 
-    dc->onOpen([this, peerId]() {
-        LOGI("🔓 [P2P] DataChannel OPEN with %s", peerId.c_str());
-        // If we have a pending invite, send the request now
-        if (m_pendingInvites.count(peerId)) {
-            std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
-            m_channels[peerId]->send(msg);
-            LOGI("📤 [P2P] Sent invite-request for group '%s' to %s", m_pendingInvites[peerId].c_str(), peerId.c_str());
-        }
-    });
+    try {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_channels[peerId] = dc;
 
-    dc->onMessage([this, peerId](auto data) {
-        if (std::holds_alternative<std::string>(data)) {
-            std::string msg = std::get<std::string>(data);
-            LOGI("📨 [P2P] Received message from %s: %s", peerId.c_str(), msg.c_str());
-            
-            std::string type = extractJsonValue(msg, "type");
-            
-            if (type == "invite-request") {
-                std::string group = extractJsonValue(msg, "group");
-                LOGI("📩 [P2P] Invite request for group '%s' from %s", group.c_str(), peerId.c_str());
-                // Notify via callback (if registered)
-                if (onIncomingInvite) {
-                    onIncomingInvite(peerId, group);
-                } else {
-                    LOGE("⚠️  [P2P] onIncomingInvite callback not registered!");
-                }
-            }
-            else if (type == "invite-accept") {
-                LOGI("✅ [P2P] Invite accepted by %s", peerId.c_str());
-                // Send group data now if we have pending invite
+        dc->onOpen([this, peerId]() {
+            try {
+                LOGI("🔓 [P2P] DataChannel OPEN with %s", peerId.c_str());
+                // If we have a pending invite, send the request now
                 if (m_pendingInvites.count(peerId)) {
-                    std::string groupName = m_pendingInvites[peerId];
-                    if (onInviteResponse) {
-                        onInviteResponse(peerId, groupName, true);
+                    std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
+                    if (m_channels.count(peerId) && m_channels[peerId]) {
+                        m_channels[peerId]->send(msg);
+                        LOGI("📤 [P2P] Sent invite-request for group '%s' to %s", m_pendingInvites[peerId].c_str(), peerId.c_str());
+                    } else {
+                        LOGE("❌ [P2P] Channel not available for %s", peerId.c_str());
                     }
-                    sendGroupData(peerId, groupName, m_pendingKeys[peerId], m_pendingEntries[peerId]);
-                } else {
-                    LOGE("⚠️  [P2P] Received invite-accept but no pending invite for %s", peerId.c_str());
                 }
+            } catch (const std::exception& e) {
+                LOGE("❌ [P2P] Error in onOpen for %s: %s", peerId.c_str(), e.what());
             }
-            else if (type == "invite-reject") {
-                LOGI("❌ [P2P] Invite rejected by %s", peerId.c_str());
-                if (m_pendingInvites.count(peerId)) {
-                    if (onInviteResponse) {
-                        onInviteResponse(peerId, m_pendingInvites[peerId], false);
+        });
+
+        dc->onMessage([this, peerId](auto data) {
+            try {
+                if (std::holds_alternative<std::string>(data)) {
+                    std::string msg = std::get<std::string>(data);
+                    LOGI("📨 [P2P] Received message from %s: %s", peerId.c_str(), msg.c_str());
+            
+                    std::string type = extractJsonValue(msg, "type");
+                    
+                    if (type == "invite-request") {
+                        std::string group = extractJsonValue(msg, "group");
+                        LOGI("📩 [P2P] Invite request for group '%s' from %s", group.c_str(), peerId.c_str());
+                        // Notify via callback (if registered)
+                        if (onIncomingInvite) {
+                            onIncomingInvite(peerId, group);
+                        } else {
+                            LOGE("⚠️  [P2P] onIncomingInvite callback not registered!");
+                        }
                     }
-                } else {
-                    LOGE("⚠️  [P2P] Received invite-reject but no pending invite for %s", peerId.c_str());
+                    else if (type == "invite-accept") {
+                        LOGI("✅ [P2P] Invite accepted by %s", peerId.c_str());
+                        // Send group data now if we have pending invite
+                        if (m_pendingInvites.count(peerId)) {
+                            std::string groupName = m_pendingInvites[peerId];
+                            if (onInviteResponse) {
+                                onInviteResponse(peerId, groupName, true);
+                            }
+                            sendGroupData(peerId, groupName, m_pendingKeys[peerId], m_pendingEntries[peerId]);
+                        } else {
+                            LOGE("⚠️  [P2P] Received invite-accept but no pending invite for %s", peerId.c_str());
+                        }
+                    }
+                    else if (type == "invite-reject") {
+                        LOGI("❌ [P2P] Invite rejected by %s", peerId.c_str());
+                        if (m_pendingInvites.count(peerId)) {
+                            if (onInviteResponse) {
+                                onInviteResponse(peerId, m_pendingInvites[peerId], false);
+                            }
+                        } else {
+                            LOGE("⚠️  [P2P] Received invite-reject but no pending invite for %s", peerId.c_str());
+                        }
+                    }
+                    else if (type == "data-request") {
+                        std::string group = extractJsonValue(msg, "group");
+                        LOGI("📥 [P2P] Data request for group '%s' from %s", group.c_str(), peerId.c_str());
+                        // Notify via callback
+                        if (onDataRequested) {
+                            onDataRequested(peerId, group, "");
+                        }
+                    }
+                    else if (type == "group-data") {
+                        std::string group = extractJsonValue(msg, "group");
+                        LOGI("📥 [P2P] Received group data for '%s' from %s", group.c_str(), peerId.c_str());
+                        // Notify via callback
+                        if (onGroupDataReceived) {
+                            // For now pass empty vectors - full implementation would deserialize
+                            onGroupDataReceived(peerId, group, {}, {});
+                        }
+                    }
+                    else if (type == "sync-update") {
+                        std::string group = extractJsonValue(msg, "group");
+                        LOGI("🔄 [SYNC] Received sync update for group '%s' from %s", group.c_str(), peerId.c_str());
+                        // Notify via callback for sync
+                        if (onGroupDataReceived) {
+                            onGroupDataReceived(peerId, group, {}, {});
+                        }
+                    }
+                    else {
+                        LOGI("ℹ️  [P2P] Unknown message type: %s", type.c_str());
+                    }
                 }
+            } catch (const std::exception& e) {
+                LOGE("❌ [P2P] Error processing message from %s: %s", peerId.c_str(), e.what());
             }
-            else if (type == "data-request") {
-                std::string group = extractJsonValue(msg, "group");
-                LOGI("📥 [P2P] Data request for group '%s' from %s", group.c_str(), peerId.c_str());
-                // Notify via callback
-                if (onDataRequested) {
-                    onDataRequested(peerId, group, "");
-                }
-            }
-            else if (type == "group-data") {
-                std::string group = extractJsonValue(msg, "group");
-                LOGI("📥 [P2P] Received group data for '%s' from %s", group.c_str(), peerId.c_str());
-                // Notify via callback
-                if (onGroupDataReceived) {
-                    // For now pass empty vectors - full implementation would deserialize
-                    onGroupDataReceived(peerId, group, {}, {});
-                }
-            }
-            else if (type == "sync-update") {
-                std::string group = extractJsonValue(msg, "group");
-                LOGI("🔄 [SYNC] Received sync update for group '%s' from %s", group.c_str(), peerId.c_str());
-                // Notify via callback for sync
-                if (onGroupDataReceived) {
-                    onGroupDataReceived(peerId, group, {}, {});
-                }
-            }
-            else {
-                LOGI("ℹ️  [P2P] Unknown message type: %s", type.c_str());
-            }
-        }
-    });
+        });
+
+        dc->onClosed([this, peerId]() {
+            LOGI("🔒 [P2P] DataChannel CLOSED with %s", peerId.c_str());
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_channels.erase(peerId);
+        });
+    } catch (const std::exception& e) {
+        LOGE("❌ [P2P] CRITICAL: setupDataChannel failed for %s: %s", peerId.c_str(), e.what());
+    }
 }
 
 // --- Signaling Handling (Incoming from Kotlin) ---
