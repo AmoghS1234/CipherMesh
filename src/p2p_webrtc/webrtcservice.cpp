@@ -273,9 +273,10 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
 void WebRTCService::sendSignalingMessage(const std::string& targetId, const std::string& type, const std::string& payload) {
     // Call back into Kotlin to send over WebSocket
     if (onSendSignaling) {
+        LOGI("📤 [SIGNAL] Sending %s to %s (payload length: %zu)", type.c_str(), targetId.c_str(), payload.length());
         onSendSignaling(targetId, type, payload);
     } else {
-        LOGE("Cannot send signaling: Callback not registered!");
+        LOGE("❌ [SIGNAL] CRITICAL ERROR: onSendSignaling callback NOT registered! Cannot send %s to %s", type.c_str(), targetId.c_str());
     }
 }
 

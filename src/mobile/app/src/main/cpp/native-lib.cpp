@@ -163,7 +163,14 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 }
 
 void sendToKotlin(const std::string& target, const std::string& type, const std::string& payload) {
-    if (!g_jvm || !g_callbackObj || !g_sendMethod) return;
+    if (!g_jvm || !g_callbackObj || !g_sendMethod) {
+        LOGE("❌ [SIGNAL] sendToKotlin FAILED: g_jvm=%p g_callbackObj=%p g_sendMethod=%p", 
+             (void*)g_jvm, (void*)g_callbackObj, (void*)g_sendMethod);
+        return;
+    }
+    
+    LOGD("📤 [SIGNAL] sendToKotlin: Sending %s to %s", type.c_str(), target.c_str());
+    
     JNIEnv* env;
     bool attached = false;
     if (g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
@@ -176,6 +183,8 @@ void sendToKotlin(const std::string& target, const std::string& type, const std:
     jstring jPayload = env->NewStringUTF(payload.c_str());
 
     env->CallVoidMethod(g_callbackObj, g_sendMethod, jTarget, jType, jPayload);
+    
+    LOGD("✅ [SIGNAL] sendToKotlin: Successfully called Kotlin callback");
 
     env->DeleteLocalRef(jTarget);
     env->DeleteLocalRef(jType);
@@ -189,6 +198,7 @@ void initP2P() {
         std::string userId = g_vault->getUserId();
         if (!userId.empty()) {
             g_p2p = new WebRTCService("wss://ciphermesh-signal-server.onrender.com", userId);
+            g_p2p->connect();  // [FIX] Critical: Enable P2P service
             g_p2p->onSendSignaling = sendToKotlin;
             
             // [NEW] Register callback for incoming invites
