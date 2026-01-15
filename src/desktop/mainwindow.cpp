@@ -345,7 +345,29 @@ void MainWindow::handlePeerOnline(const QString& userId) {
     
     qDebug() << "🟢 [PEER] Peer came online:" << userId;
     
-    // Check if we have any accepted invites from this user
+    // [NEW] Check if we have any pending invites TO this user (we're the sender)
+    // This happens when we invited them while they were offline
+    bool foundPendingOutgoing = false;
+    auto groupMembers = m_vault->getGroupNames();
+    for (const auto& groupName : groupMembers) {
+        auto members = m_vault->getGroupMembers(groupName);
+        for (const auto& member : members) {
+            if (member.userId == userId.toStdString() && member.status == "pending") {
+                qDebug() << "📤 [PEER] Found pending invite to" << userId << "for group" << QString::fromStdString(groupName);
+                qDebug() << "🔄 [PEER] Re-sending invite now that peer is online";
+                
+                // Re-trigger invite
+                auto key = m_vault->getGroupKey(groupName);
+                auto entries = m_vault->exportGroupEntries(groupName);
+                m_p2pService->inviteUser(groupName, userId.toStdString(), key, entries);
+                foundPendingOutgoing = true;
+                break;
+            }
+        }
+        if (foundPendingOutgoing) break;
+    }
+    
+    // Check if we have any accepted invites FROM this user (we're the recipient)
     auto invites = m_vault->getPendingInvites();
     for (const auto& invite : invites) {
         if (invite.senderId == userId.toStdString() && invite.status == "accepted") {

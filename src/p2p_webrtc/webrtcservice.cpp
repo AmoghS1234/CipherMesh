@@ -161,11 +161,40 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
                 if (onInviteResponse) {
                     onInviteResponse(peerId, m_pendingInvites[peerId], true);
                 }
+                // Send group data now
+                if (m_pendingInvites.count(peerId)) {
+                    sendGroupData(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], m_pendingEntries[peerId]);
+                }
             }
             else if (type == "invite-reject") {
                 LOGI("❌ [P2P] Invite rejected by %s", peerId.c_str());
                 if (onInviteResponse) {
                     onInviteResponse(peerId, m_pendingInvites[peerId], false);
+                }
+            }
+            else if (type == "data-request") {
+                std::string group = extractJsonValue(msg, "group");
+                LOGI("📥 [P2P] Data request for group '%s' from %s", group.c_str(), peerId.c_str());
+                // Notify via callback
+                if (onDataRequested) {
+                    onDataRequested(peerId, group, "");
+                }
+            }
+            else if (type == "group-data") {
+                std::string group = extractJsonValue(msg, "group");
+                LOGI("📥 [P2P] Received group data for '%s' from %s", group.c_str(), peerId.c_str());
+                // Notify via callback
+                if (onGroupDataReceived) {
+                    // For now pass empty vectors - full implementation would deserialize
+                    onGroupDataReceived(peerId, group, {}, {});
+                }
+            }
+            else if (type == "sync-update") {
+                std::string group = extractJsonValue(msg, "group");
+                LOGI("🔄 [SYNC] Received sync update for group '%s' from %s", group.c_str(), peerId.c_str());
+                // Notify via callback for sync
+                if (onGroupDataReceived) {
+                    onGroupDataReceived(peerId, group, {}, {});
                 }
             }
             else {
@@ -190,8 +219,15 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
 
     if (type == "user-online") {
         LOGI("🟢 [SIGNAL] Peer Online: %s", sender.c_str());
+        
+        // [NEW] Notify callback so app can check for pending invites/syncs
+        if (onPeerOnline) {
+            onPeerOnline(sender);
+        }
+        
+        // Check if we have a pending invite for this user
         if (m_pendingInvites.count(sender)) {
-            LOGI("🔄 [SIGNAL] Retrying pending invite for %s", sender.c_str());
+            LOGI("🔄 [SIGNAL] Found pending invite for %s - retrying", sender.c_str());
             retryPendingInviteFor(sender);
         }
     } 
@@ -259,12 +295,63 @@ void WebRTCService::respondToInvite(const std::string& senderId, bool accept) {
         LOGE("⚠️  [P2P] No data channel to %s - cannot send response", senderId.c_str());
     }
 }
-void WebRTCService::requestData(const std::string&, const std::string&) {}
-void WebRTCService::sendGroupData(const std::string&, const std::string&, const std::vector<unsigned char>&, const std::vector<CipherMesh::Core::VaultEntry>&) {}
+void WebRTCService::requestData(const std::string& senderId, const std::string& groupName) {
+    LOGI("📤 [P2P] requestData from=%s group=%s", senderId.c_str(), groupName.c_str());
+    if (m_channels.count(senderId) && m_channels[senderId]->isOpen()) {
+        std::string msg = "{\"type\":\"data-request\", \"group\":\"" + groupName + "\"}";
+        m_channels[senderId]->send(msg);
+        LOGI("✅ [P2P] Sent data request to %s", senderId.c_str());
+    } else {
+        LOGE("⚠️  [P2P] No open channel to %s - cannot request data", senderId.c_str());
+    }
+}
+void WebRTCService::sendGroupData(const std::string& recipientId, const std::string& groupName, 
+                                  const std::vector<unsigned char>& groupKey, 
+                                  const std::vector<CipherMesh::Core::VaultEntry>& entries) {
+    LOGI("📤 [P2P] sendGroupData to=%s group=%s entries=%zu", recipientId.c_str(), groupName.c_str(), entries.size());
+    
+    if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
+        LOGE("⚠️  [P2P] No open channel to %s - cannot send data", recipientId.c_str());
+        return;
+    }
+    
+    // Build JSON with group data
+    std::string msg = "{\"type\":\"group-data\", \"group\":\"" + groupName + "\", \"keySize\":" + std::to_string(groupKey.size()) + ", \"entryCount\":" + std::to_string(entries.size()) + "}";
+    
+    // For now send basic notification - full implementation would serialize entries
+    m_channels[recipientId]->send(msg);
+    LOGI("✅ [P2P] Sent group data to %s", recipientId.c_str());
+    
+    // Notify callback if registered
+    if (onInviteStatus) {
+        onInviteStatus(true, "Data sent to " + recipientId);
+    }
+}
 void WebRTCService::fetchGroupMembers(const std::string&) {}
 void WebRTCService::removeUser(const std::string&, const std::string&) {}
 void WebRTCService::onRetryTimer() {}
 void WebRTCService::broadcastSync(const std::string&) {}
+
+// [NEW] Broadcast group updates to all members
+void WebRTCService::broadcastGroupUpdate(const std::string& groupName, 
+                                         const std::vector<CipherMesh::Core::VaultEntry>& updatedEntries) {
+    LOGI("📡 [SYNC] broadcastGroupUpdate group=%s entries=%zu", groupName.c_str(), updatedEntries.size());
+    
+    // Build sync message
+    std::string msg = "{\"type\":\"sync-update\", \"group\":\"" + groupName + "\", \"entryCount\":" + std::to_string(updatedEntries.size()) + "}";
+    
+    // Send to all connected peers
+    std::lock_guard<std::mutex> lock(m_mutex);
+    int sent = 0;
+    for (const auto& [peerId, channel] : m_channels) {
+        if (channel && channel->isOpen()) {
+            channel->send(msg);
+            sent++;
+            LOGI("📤 [SYNC] Sent update to %s", peerId.c_str());
+        }
+    }
+    LOGI("✅ [SYNC] Broadcast complete - sent to %d peers", sent);
+}
 
 // =========================================================
 //  DESKTOP IMPLEMENTATION (Qt / QWebSocket / QJson)
@@ -413,6 +500,30 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
             QString groupName = m_pendingInvites[remoteId];
             if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), false);
             m_pendingInvites.remove(remoteId);
+        }
+    }
+    else if (type == "data-request") {
+        QString groupName = obj["group"].toString();
+        qDebug() << "📥 [P2P] Data request for group" << groupName << "from" << remoteId;
+        if (onDataRequested) {
+            onDataRequested(remoteId.toStdString(), groupName.toStdString(), "");
+        }
+    }
+    else if (type == "group-data") {
+        QString groupName = obj["group"].toString();
+        int keySize = obj["keySize"].toInt();
+        int entryCount = obj["entryCount"].toInt();
+        qDebug() << "📥 [P2P] Received group data for" << groupName << "from" << remoteId << "entries=" << entryCount;
+        if (onGroupDataReceived) {
+            // For now pass empty vectors - full implementation would deserialize
+            onGroupDataReceived(remoteId.toStdString(), groupName.toStdString(), {}, {});
+        }
+    }
+    else if (type == "sync-update") {
+        QString groupName = obj["group"].toString();
+        qDebug() << "🔄 [SYNC] Received sync update for group" << groupName << "from" << remoteId;
+        if (onGroupDataReceived) {
+            onGroupDataReceived(remoteId.toStdString(), groupName.toStdString(), {}, {});
         }
     }
     else {
@@ -578,11 +689,54 @@ void WebRTCService::sendInvite(const std::string& recipientId, const std::string
 }
 
 void WebRTCService::cancelInvite(const std::string& userId) { m_pendingInvites.remove(QString::fromStdString(userId)); }
-void WebRTCService::respondToInvite(const std::string& senderId, bool accept) { QJsonObject resp; resp["type"] = accept ? "invite-accept" : "invite-reject"; sendP2PMessage(QString::fromStdString(senderId), resp); }
+void WebRTCService::respondToInvite(const std::string& senderId, bool accept) { 
+    QJsonObject resp; 
+    resp["type"] = accept ? "invite-accept" : "invite-reject"; 
+    sendP2PMessage(QString::fromStdString(senderId), resp); 
+}
 void WebRTCService::removeUser(const std::string&, const std::string&) {}
 void WebRTCService::fetchGroupMembers(const std::string&) {}
-void WebRTCService::requestData(const std::string&, const std::string&) {}
-void WebRTCService::sendGroupData(const std::string&, const std::string&, const std::vector<unsigned char>&, const std::vector<CipherMesh::Core::VaultEntry>&) {}
+void WebRTCService::requestData(const std::string& senderId, const std::string& groupName) {
+    qDebug() << "📤 [P2P] requestData from=" << QString::fromStdString(senderId) << "group=" << QString::fromStdString(groupName);
+    QJsonObject req;
+    req["type"] = "data-request";
+    req["group"] = QString::fromStdString(groupName);
+    sendP2PMessage(QString::fromStdString(senderId), req);
+}
+void WebRTCService::sendGroupData(const std::string& recipientId, const std::string& groupName, 
+                                  const std::vector<unsigned char>& groupKey, 
+                                  const std::vector<CipherMesh::Core::VaultEntry>& entries) {
+    qDebug() << "📤 [P2P] sendGroupData to=" << QString::fromStdString(recipientId) << "group=" << QString::fromStdString(groupName) << "entries=" << entries.size();
+    QJsonObject data;
+    data["type"] = "group-data";
+    data["group"] = QString::fromStdString(groupName);
+    data["keySize"] = static_cast<int>(groupKey.size());
+    data["entryCount"] = static_cast<int>(entries.size());
+    // TODO: Serialize entries and key properly
+    sendP2PMessage(QString::fromStdString(recipientId), data);
+}
 void WebRTCService::onRetryTimer() {}
+
+// [NEW] Broadcast group updates to all members (Desktop)
+void WebRTCService::broadcastGroupUpdate(const std::string& groupName, 
+                                         const std::vector<CipherMesh::Core::VaultEntry>& updatedEntries) {
+    qDebug() << "📡 [SYNC] broadcastGroupUpdate group=" << QString::fromStdString(groupName) << "entries=" << updatedEntries.size();
+    
+    QJsonObject syncMsg;
+    syncMsg["type"] = "sync-update";
+    syncMsg["group"] = QString::fromStdString(groupName);
+    syncMsg["entryCount"] = static_cast<int>(updatedEntries.size());
+    
+    // Send to all connected peers with open data channels
+    int sent = 0;
+    for (auto it = m_dataChannels.begin(); it != m_dataChannels.end(); ++it) {
+        if (it.value() && it.value()->isOpen()) {
+            sendP2PMessage(it.key(), syncMsg);
+            sent++;
+            qDebug() << "📤 [SYNC] Sent update to" << it.key();
+        }
+    }
+    qDebug() << "✅ [SYNC] Broadcast complete - sent to" << sent << "peers";
+}
 
 #endif

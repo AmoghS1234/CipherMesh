@@ -39,6 +39,10 @@ public:
                        
     void fetchGroupMembers(const std::string& groupName) override;
     void removeUser(const std::string& groupName, const std::string& userId) override;
+    
+    // [NEW] Sync methods
+    void broadcastGroupUpdate(const std::string& groupName, 
+                             const std::vector<CipherMesh::Core::VaultEntry>& updatedEntries) override;
 
     // --- Connection Management ---
     void connect();
@@ -122,6 +126,10 @@ public:
                        
     void fetchGroupMembers(const std::string& groupName) override;
     void removeUser(const std::string& groupName, const std::string& userId) override;
+    
+    // [NEW] Sync methods
+    void broadcastGroupUpdate(const std::string& groupName, 
+                             const std::vector<CipherMesh::Core::VaultEntry>& updatedEntries) override;
     
     void queueInvite(const std::string& groupName, const std::string& userEmail, 
                      const std::vector<unsigned char>& groupKey,

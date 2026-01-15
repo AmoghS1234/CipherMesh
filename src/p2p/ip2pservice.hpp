@@ -30,6 +30,10 @@ public:
                                const std::vector<CipherMesh::Core::VaultEntry>& entries) = 0;
     virtual void fetchGroupMembers(const std::string& groupName) = 0;
     virtual void removeUser(const std::string& groupName, const std::string& userId) = 0;
+    
+    // [NEW] Sync methods for broadcasting changes
+    virtual void broadcastGroupUpdate(const std::string& groupName, 
+                                      const std::vector<CipherMesh::Core::VaultEntry>& updatedEntries) = 0;
 
     // --- Callbacks ---
     std::function<void(bool)> onConnectionStatusChanged;
