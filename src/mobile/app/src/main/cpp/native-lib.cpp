@@ -195,6 +195,48 @@ void initP2P() {
                 LOGD("🔔 [P2P] onIncomingInvite callback triggered: sender=%s group=%s", senderId.c_str(), groupName.c_str());
                 notifyInviteToJava(senderId, groupName);
             };
+            
+            // [NEW] Register callback for data requests
+            g_p2p->onDataRequested = [](const std::string& requesterId, const std::string& groupName, const std::string& requesterPubKey) {
+                LOGD("📥 [P2P] onDataRequested from=%s group=%s", requesterId.c_str(), groupName.c_str());
+                
+                if (!g_vault || g_vault->isLocked()) {
+                    LOGE("❌ [P2P] Cannot send data - vault locked");
+                    return;
+                }
+                
+                // Get group data
+                try {
+                    auto key = g_vault->getGroupKey(groupName);
+                    auto entries = g_vault->exportGroupEntries(groupName);
+                    
+                    if (g_p2p) {
+                        g_p2p->sendGroupData(requesterId, groupName, key, entries);
+                        LOGD("✅ [P2P] Sent group data to %s", requesterId.c_str());
+                    }
+                } catch (const std::exception& e) {
+                    LOGE("❌ [P2P] Error sending group data: %s", e.what());
+                }
+            };
+            
+            // [NEW] Register callback for peer online notifications
+            g_p2p->onPeerOnline = [](const std::string& userId) {
+                LOGD("🟢 [P2P] Peer online: %s", userId.c_str());
+                
+                // Check if we have pending accepted invites FROM this user
+                if (g_vault && !g_vault->isLocked()) {
+                    auto invites = g_vault->getPendingInvites();
+                    for (const auto& inv : invites) {
+                        if (inv.senderId == userId && inv.status == "accepted") {
+                            LOGD("🔄 [P2P] Found accepted invite from %s - requesting data", userId.c_str());
+                            if (g_p2p) {
+                                g_p2p->requestData(userId, inv.groupName);
+                            }
+                            break;
+                        }
+                    }
+                }
+            };
         }
     }
 }
