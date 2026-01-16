@@ -207,29 +207,24 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         setupDataChannel(dc, peerId);
     });
 
-    // 3. Send Description (Offer/Answer) when ICE gathering is complete
-    // IMPORTANT: Set this BEFORE setLocalDescription() to avoid race condition
-    pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
-        LOGI("ICE Gathering State for %s: %d", peerId.c_str(), (int)state);
-        
-        if (state == rtc::PeerConnection::GatheringState::Complete) {
-            LOGI("ICE gathering COMPLETE for %s", peerId.c_str());
-            // Now send the complete SDP with ICE candidates embedded
-            auto desc = pc->localDescription();
-            if (desc.has_value()) {
-                std::string type = desc->typeString();
-                std::string sdp = std::string(*desc);
-                LOGI("Sending %s to %s with ICE candidates", type.c_str(), peerId.c_str());
-                sendSignalingMessage(peerId, type, sdp);
-            }
-        }
-    });
-
-    // 4. Create Offer Logic (only if we are the Offerer)
+    // 3. Create Data Channel and send offer if we are the offerer
     if (isOfferer) {
         auto dc = pc->createDataChannel("ciphermesh-data");
         setupDataChannel(dc, peerId);
-
+        
+        // Set gathering state callback ONCE here for offerer
+        pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
+            if (state == rtc::PeerConnection::GatheringState::Complete) {
+                LOGI("ICE gathering COMPLETE for %s, sending offer", peerId.c_str());
+                auto desc = pc->localDescription();
+                if (desc.has_value()) {
+                    std::string type = desc->typeString();
+                    std::string sdp = std::string(*desc);
+                    sendSignalingMessage(peerId, type, sdp);
+                }
+            }
+        });
+        
         pc->setLocalDescription(); // This triggers gathering
     }
 }
@@ -737,19 +732,7 @@ void WebRTCService::createAndSendOffer(const QString& remoteId) {
     if (!m_peerConnections.contains(remoteId)) return;
     auto pc = m_peerConnections[remoteId];
     
-    pc->onGatheringStateChange([this, remoteId, pc](rtc::PeerConnection::GatheringState state) {
-        if (state == rtc::PeerConnection::GatheringState::Complete) {
-            QMetaObject::invokeMethod(this, [this, remoteId, pc]() {
-                auto desc = pc->localDescription();
-                if (desc.has_value()) {
-                    QJsonObject payload; payload["type"] = "offer";
-                    payload["sdp"] = QString::fromStdString(std::string(*desc));
-                    sendSignalingMessage(remoteId, payload);
-                }
-            }, Qt::QueuedConnection);
-        }
-    });
-
+    // Just trigger local description - the gathering callback is already set in setupPeerConnection
     pc->setLocalDescription();
 }
 
@@ -791,13 +774,30 @@ void WebRTCService::setupPeerConnection(const QString& remoteId, bool isOfferer)
         }, Qt::QueuedConnection);
     });
 
-    // [FIX] Add gathering state change handler to detect ICE failures
-    pc->onGatheringStateChange([this, remoteId](rtc::PeerConnection::GatheringState state) {
-        QMetaObject::invokeMethod(this, [this, remoteId, state]() {
+    // [FIX] Add gathering state change handler to detect ICE failures and send offer/answer
+    pc->onGatheringStateChange([this, remoteId, isOfferer](rtc::PeerConnection::GatheringState state) {
+        QMetaObject::invokeMethod(this, [this, remoteId, state, isOfferer]() {
             qDebug() << "WebRTC: ICE Gathering State for" << remoteId << ":" << (int)state;
             
             if (state == rtc::PeerConnection::GatheringState::Complete) {
                 qDebug() << "WebRTC: ICE gathering COMPLETE for" << remoteId;
+                
+                // Send offer or answer when gathering completes
+                if (m_peerConnections.contains(remoteId)) {
+                    auto pc = m_peerConnections[remoteId];
+                    auto desc = pc->localDescription();
+                    if (desc.has_value()) {
+                        QJsonObject payload;
+                        payload["type"] = isOfferer ? "offer" : "answer";
+                        payload["sdp"] = QString::fromStdString(std::string(*desc));
+                        sendSignalingMessage(remoteId, payload);
+                        
+                        // Flush early candidates for answers
+                        if (!isOfferer) {
+                            flushEarlyCandidatesFor(remoteId);
+                        }
+                    }
+                }
             }
         }, Qt::QueuedConnection);
     });
@@ -878,23 +878,8 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
             m_dataChannels.remove(senderId);
         }
         
-        setupPeerConnection(senderId, false);
+        setupPeerConnection(senderId, false); // false = answerer, callback already set in setupPeerConnection
         std::shared_ptr<rtc::PeerConnection> pc = m_peerConnections[senderId];
-        
-        pc->onGatheringStateChange([this, senderId, pc](rtc::PeerConnection::GatheringState state) {
-            if (state == rtc::PeerConnection::GatheringState::Complete) {
-                QMetaObject::invokeMethod(this, [this, senderId, pc]() {
-                    auto desc = pc->localDescription();
-                    if (desc.has_value()) {
-                        // [FIX] Manually fix SDP to replace actpass with passive in answer
-                        QJsonObject payload; payload["type"] = "answer";
-                        payload["sdp"] = QString::fromStdString(std::string(*desc));
-                        sendSignalingMessage(senderId, payload);
-                        flushEarlyCandidatesFor(senderId);
-                    }
-                }, Qt::QueuedConnection);
-            }
-        });
         
         try {
             pc->setRemoteDescription(rtc::Description(sdpOffer.toStdString(), "offer"));
