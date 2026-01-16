@@ -262,15 +262,23 @@ extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_respondT
     
     for (auto it = g_pendingInvites.begin(); it != g_pendingInvites.end(); ) {
         if (it->id == inviteId) {
-            if (accept && g_vault) {
-                g_vault->addGroup(it->group);
-                // Trigger actual WebRTC response
-                if(g_p2p) {
-                    // Logic to accept P2P offer would go here
-                    // g_p2p->acceptOffer(it->sender, it->sdp);
-                }
+            LOGD("Responding to invite %d from %s: %s", inviteId, it->sender.c_str(), accept ? "ACCEPT" : "REJECT");
+            
+            // Send WebRTC response
+            if (g_p2p) {
+                g_p2p->respondToInvite(it->sender, accept);
+                LOGD("Sent %s response to %s", accept ? "accept" : "reject", it->sender.c_str());
+            } else {
+                LOGE("Cannot respond to invite: P2P service not initialized");
             }
-            it = g_pendingInvites.erase(it);
+            
+            // If rejecting, remove from pending list immediately
+            // If accepting, the invite will be removed when group-data is received
+            if (!accept) {
+                it = g_pendingInvites.erase(it);
+            } else {
+                ++it;
+            }
         } else {
             ++it;
         }
@@ -281,10 +289,29 @@ extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_sendP2PI
     const char* gName = env->GetStringUTFChars(groupName, 0);
     const char* tId = env->GetStringUTFChars(targetId, 0);
     
-    if (g_p2p) {
-        g_p2p->inviteUser(gName, tId, {}, {});
-        LOGD("Triggered P2P invite to %s", tId);
+    if (g_p2p && g_vault && !g_vault->isLocked()) {
+        // Get the group key and entries from vault
+        std::vector<unsigned char> groupKey;
+        std::vector<CipherMesh::Core::VaultEntry> entries;
+        
+        try {
+            groupKey = g_vault->getGroupKey(gName);
+            entries = g_vault->exportGroupEntries(gName);
+            LOGD("Sending P2P invite to %s for group %s with %zu entries", tId, gName, entries.size());
+        } catch (const std::exception& e) {
+            LOGE("Failed to get group data: %s", e.what());
+            // Continue with empty data - at least send the invite
+        }
+        
+        g_p2p->inviteUser(gName, tId, groupKey, entries);
+        LOGD("Triggered P2P invite to %s for group %s", tId, gName);
+    } else {
+        LOGE("Cannot send invite: P2P not initialized or vault locked");
     }
+    
+    env->ReleaseStringUTFChars(groupName, gName);
+    env->ReleaseStringUTFChars(targetId, tId);
+}
     
     env->ReleaseStringUTFChars(groupName, gName);
     env->ReleaseStringUTFChars(targetId, tId);
