@@ -142,8 +142,6 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
             try {
                 std::string type = desc.typeString(); // "offer" or "answer"
                 std::string sdp = std::string(desc);
-                // Normalize SDP to ensure session-level ICE credentials for cross-platform compatibility
-                sdp = normalizeSDP(sdp);
                 LOGI("📤 [P2P] Sending %s to %s (SDP length: %zu)", type.c_str(), peerId.c_str(), sdp.length());
                 sendSignalingMessage(peerId, type, sdp);
             } catch (const std::exception& e) {
