@@ -386,6 +386,14 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
     else if (type == "answer") {
         std::string sdp = extractJsonValue(message, "sdp");
         if(m_peers.count(sender)) {
+            // [FIX] libdatachannel may send actpass in answers which violates spec
+            // Fix the SDP before applying it to avoid crash
+            size_t pos = sdp.find("a=setup:actpass");
+            if (pos != std::string::npos) {
+                sdp.replace(pos, 15, "a=setup:active ");
+                LOGI("Fixed received answer SDP - replaced actpass with active");
+            }
+            
             m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
             // [FIX] Flush any early ICE candidates that arrived before the answer
             flushEarlyCandidatesFor(sender);
@@ -889,7 +897,17 @@ void WebRTCService::handleAnswer(const QJsonObject& obj) {
     QString sdpAnswer = obj["sdp"].toString();
     QMetaObject::invokeMethod(this, [this, senderId, sdpAnswer]() {
         if (!m_peerConnections.contains(senderId)) return;
-        m_peerConnections[senderId]->setRemoteDescription(rtc::Description(sdpAnswer.toStdString(), "answer"));
+        
+        // [FIX] libdatachannel may send actpass in answers which violates spec
+        // Fix the SDP before applying it to avoid crash
+        std::string sdpStr = sdpAnswer.toStdString();
+        size_t pos = sdpStr.find("a=setup:actpass");
+        if (pos != std::string::npos) {
+            sdpStr.replace(pos, 15, "a=setup:active ");
+            qDebug() << "WebRTC: Fixed received answer SDP - replaced actpass with active";
+        }
+        
+        m_peerConnections[senderId]->setRemoteDescription(rtc::Description(sdpStr, "answer"));
         flushEarlyCandidatesFor(senderId);
     }, Qt::QueuedConnection);
 }
