@@ -91,24 +91,60 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
     auto pc = std::make_shared<rtc::PeerConnection>(config);
     m_peers[peerId] = pc;
 
+    // [FIX] Add error handlers for peer connection state changes
+    pc->onStateChange([this, peerId](rtc::PeerConnection::State state) {
+        LOGI("PC State Change for %s: %d", peerId.c_str(), (int)state);
+        
+        if (state == rtc::PeerConnection::State::Failed) {
+            LOGE("Peer connection FAILED for %s", peerId.c_str());
+            // Cleanup and potentially retry
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_channels.count(peerId)) {
+                m_channels.erase(peerId);
+            }
+            if (m_peers.count(peerId)) {
+                m_peers.erase(peerId);
+            }
+            
+            // Retry if we have a pending invite
+            if (m_pendingInvites.count(peerId)) {
+                LOGI("Retrying connection for %s", peerId.c_str());
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                retryPendingInviteFor(peerId);
+            }
+        } else if (state == rtc::PeerConnection::State::Closed) {
+            LOGI("Peer connection CLOSED for %s", peerId.c_str());
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_channels.count(peerId)) {
+                m_channels.erase(peerId);
+            }
+        } else if (state == rtc::PeerConnection::State::Connected) {
+            LOGI("Peer connection CONNECTED to %s", peerId.c_str());
+        }
+    });
+
+    // [FIX] Add gathering state change handler to detect ICE failures
+    pc->onGatheringStateChange([this, peerId](rtc::PeerConnection::GatheringState state) {
+        LOGI("ICE Gathering State for %s: %d", peerId.c_str(), (int)state);
+        
+        if (state == rtc::PeerConnection::GatheringState::Complete) {
+            LOGI("ICE gathering COMPLETE for %s", peerId.c_str());
+        }
+    });
+
     // 1. Handle ICE Candidates
     pc->onLocalCandidate([this, peerId](auto candidate) {
         LOGI("Generated ICE Candidate for %s", peerId.c_str());
         sendSignalingMessage(peerId, "ice-candidate", std::string(candidate.candidate()));
     });
 
-    // 2. Handle Connection State
-    pc->onStateChange([this, peerId](rtc::PeerConnection::State state) {
-        LOGI("PC State Change for %s: %d", peerId.c_str(), (int)state);
-    });
-
-    // 3. Handle Data Channel (if we are receiver)
+    // 2. Handle Data Channel (if we are receiver)
     pc->onDataChannel([this, peerId](auto dc) {
         LOGI("Received DataChannel from %s", peerId.c_str());
         setupDataChannel(dc, peerId);
     });
 
-    // 4. Create Offer Logic (only if we are the Offerer)
+    // 3. Create Offer Logic (only if we are the Offerer)
     if (isOfferer) {
         auto dc = pc->createDataChannel("ciphermesh-data");
         setupDataChannel(dc, peerId);
@@ -116,7 +152,7 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         pc->setLocalDescription(); // This triggers gathering -> onLocalDescription
     }
 
-    // 5. Send Description (Offer/Answer) when ready
+    // 4. Send Description (Offer/Answer) when ready
     pc->onLocalDescription([this, peerId](auto desc) {
         std::string type = desc.typeString(); // "offer" or "answer"
         std::string sdp = std::string(desc);
@@ -128,6 +164,25 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
 void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const std::string& peerId) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_channels[peerId] = dc;
+
+    // [FIX] Add data channel error handlers
+    dc->onError([this, peerId](std::string error) {
+        LOGE("DataChannel error for %s: %s", peerId.c_str(), error.c_str());
+    });
+    
+    dc->onClosed([this, peerId]() {
+        LOGI("DataChannel CLOSED for %s", peerId.c_str());
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_channels.count(peerId)) {
+            m_channels.erase(peerId);
+        }
+        
+        // Cleanup peer connection
+        if (m_peers.count(peerId)) {
+            m_peers[peerId]->close();
+            m_peers.erase(peerId);
+        }
+    });
 
     dc->onOpen([this, peerId]() {
         LOGI("DataChannel OPEN with %s", peerId.c_str());
@@ -282,15 +337,23 @@ void WebRTCService::onWsConnected() {
     if (onConnectionStatusChanged) onConnectionStatusChanged(true);
     m_reconnectAttempts = 0;
     
+    // [FIX] Ensure m_isAuthenticated is checked BEFORE sending registration
+    // This prevents race condition where registration is sent before vault is unlocked
     if (m_isAuthenticated) {
         QJsonObject registration;
         registration["type"] = "register";
+        // [FIX] Send both "id" and "userId" for backwards compatibility with signal server
         registration["id"] = m_localUserId;
+        registration["userId"] = m_localUserId;
         if (!m_identityPublicKey.empty()) registration["pubKey"] = QString::fromStdString(m_identityPublicKey);
 
         m_webSocket->sendTextMessage(QJsonDocument(registration).toJson(QJsonDocument::Compact));
+        qDebug() << "WebRTC: Registered user" << m_localUserId;
+        
         QTimer::singleShot(ONLINE_PING_DELAY_MS, this, &WebRTCService::sendOnlinePing);
         QTimer::singleShot(PENDING_INVITES_CHECK_DELAY_MS, this, &WebRTCService::checkAndSendPendingInvites);
+    } else {
+        qWarning() << "WebRTC: Connected but not authenticated - waiting for authentication";
     }
 }
 
@@ -379,6 +442,50 @@ void WebRTCService::setupPeerConnection(const QString& remoteId, bool isOfferer)
     auto pc = std::make_shared<rtc::PeerConnection>(getIceConfiguration());
     m_peerConnections[remoteId] = pc;
 
+    // [FIX] Add error handlers for peer connection state changes
+    pc->onStateChange([this, remoteId](rtc::PeerConnection::State state) {
+        QMetaObject::invokeMethod(this, [this, remoteId, state]() {
+            qDebug() << "WebRTC: PC State Change for" << remoteId << ":" << (int)state;
+            
+            if (state == rtc::PeerConnection::State::Failed) {
+                qCritical() << "WebRTC: Peer connection FAILED for" << remoteId;
+                // Cleanup and potentially retry
+                if (m_dataChannels.contains(remoteId)) {
+                    m_dataChannels.remove(remoteId);
+                }
+                if (m_peerConnections.contains(remoteId)) {
+                    m_peerConnections.remove(remoteId);
+                }
+                
+                // Retry if we have a pending invite
+                if (m_pendingInvites.contains(remoteId)) {
+                    qDebug() << "WebRTC: Retrying connection for" << remoteId;
+                    QTimer::singleShot(2000, this, [this, remoteId]() {
+                        retryPendingInviteFor(remoteId);
+                    });
+                }
+            } else if (state == rtc::PeerConnection::State::Closed) {
+                qDebug() << "WebRTC: Peer connection CLOSED for" << remoteId;
+                if (m_dataChannels.contains(remoteId)) {
+                    m_dataChannels.remove(remoteId);
+                }
+            } else if (state == rtc::PeerConnection::State::Connected) {
+                qDebug() << "WebRTC: Peer connection CONNECTED to" << remoteId;
+            }
+        }, Qt::QueuedConnection);
+    });
+
+    // [FIX] Add gathering state change handler to detect ICE failures
+    pc->onGatheringStateChange([this, remoteId](rtc::PeerConnection::GatheringState state) {
+        QMetaObject::invokeMethod(this, [this, remoteId, state]() {
+            qDebug() << "WebRTC: ICE Gathering State for" << remoteId << ":" << (int)state;
+            
+            if (state == rtc::PeerConnection::GatheringState::Complete) {
+                qDebug() << "WebRTC: ICE gathering COMPLETE for" << remoteId;
+            }
+        }, Qt::QueuedConnection);
+    });
+
     pc->onLocalCandidate([this, remoteId](const rtc::Candidate& candidate) {
         QMetaObject::invokeMethod(this, [this, remoteId, candidate]() {
             QJsonObject payload; payload["type"] = "ice-candidate";
@@ -390,14 +497,39 @@ void WebRTCService::setupPeerConnection(const QString& remoteId, bool isOfferer)
     auto setupDataChannel = [this, remoteId](std::shared_ptr<rtc::DataChannel> dc) {
         QMetaObject::invokeMethod(this, [this, remoteId, dc]() {
             m_dataChannels[remoteId] = dc;
+            
+            // [FIX] Add data channel error handlers
+            dc->onError([this, remoteId](std::string error) {
+                QMetaObject::invokeMethod(this, [this, remoteId, error]() {
+                    qCritical() << "WebRTC: DataChannel error for" << remoteId << ":" << QString::fromStdString(error);
+                }, Qt::QueuedConnection);
+            });
+            
+            dc->onClosed([this, remoteId]() {
+                QMetaObject::invokeMethod(this, [this, remoteId]() {
+                    qDebug() << "WebRTC: DataChannel CLOSED for" << remoteId;
+                    if (m_dataChannels.contains(remoteId)) {
+                        m_dataChannels.remove(remoteId);
+                    }
+                    
+                    // Cleanup peer connection
+                    if (m_peerConnections.contains(remoteId)) {
+                        m_peerConnections[remoteId]->close();
+                        m_peerConnections.remove(remoteId);
+                    }
+                }, Qt::QueuedConnection);
+            });
+            
             dc->onOpen([this, remoteId]() {
                  QMetaObject::invokeMethod(this, [this, remoteId]() {
+                    qDebug() << "WebRTC: DataChannel OPEN for" << remoteId;
                     if (m_pendingInvites.contains(remoteId)) {
                         QJsonObject req; req["type"] = "invite-request"; req["group"] = m_pendingInvites[remoteId];
                         sendP2PMessage(remoteId, req);
                     }
                 }, Qt::QueuedConnection);
             });
+            
             dc->onMessage([this, remoteId](std::variant<rtc::binary, rtc::string> message) {
                 QString msg;
                 if (std::holds_alternative<rtc::string>(message)) msg = QString::fromStdString(std::get<rtc::string>(message));
