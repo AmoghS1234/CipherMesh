@@ -312,10 +312,6 @@ extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_sendP2PI
     env->ReleaseStringUTFChars(groupName, gName);
     env->ReleaseStringUTFChars(targetId, tId);
 }
-    
-    env->ReleaseStringUTFChars(groupName, gName);
-    env->ReleaseStringUTFChars(targetId, tId);
-}
 
 // ... Standard Vault Methods ...
 extern "C" JNIEXPORT jboolean JNICALL Java_com_ciphermesh_mobile_core_Vault_verifyMasterPassword(JNIEnv* env, jobject, jstring p) { if(!g_vault) return false; const char* c=env->GetStringUTFChars(p,0); bool r=g_vault->verifyMasterPassword(c); env->ReleaseStringUTFChars(p,c); return r; }

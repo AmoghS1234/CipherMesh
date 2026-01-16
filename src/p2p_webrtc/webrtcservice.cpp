@@ -52,7 +52,7 @@ std::string unescapeString(const std::string& str) {
 // [NEW] JSON escape function for encoding strings
 std::string escapeJsonString(const std::string& str) {
     std::ostringstream escaped;
-    for (char c : str) {
+    for (unsigned char c : str) {  // Use unsigned char to handle all byte values correctly
         switch (c) {
             case '\"': escaped << "\\\""; break;
             case '\\': escaped << "\\\\"; break;
@@ -66,7 +66,7 @@ std::string escapeJsonString(const std::string& str) {
                     // Control character - use unicode escape
                     escaped << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)c;
                 } else {
-                    escaped << c;
+                    escaped << (char)c;  // Cast back to char for printing
                 }
         }
     }
@@ -980,6 +980,7 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
     qDebug() << "WebRTC: Group data sent successfully to" << recipient;
     
     // Clean up pending data
+    m_pendingInvites.remove(recipient);
     m_pendingKeys.erase(recipient);
     m_pendingEntries.erase(recipient);
 }
