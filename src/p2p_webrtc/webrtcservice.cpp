@@ -650,18 +650,32 @@ void WebRTCService::sendOnlinePing() {
 }
 
 void WebRTCService::onWsTextMessageReceived(const QString& message) {
+    qDebug() << "WebRTC: Received signaling message:" << message;
     QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8());
-    if (doc.isNull() || !doc.isObject()) return;
+    if (doc.isNull() || !doc.isObject()) {
+        qWarning() << "WebRTC: Failed to parse signaling message as JSON";
+        return;
+    }
     QJsonObject obj = doc.object();
     QString type = obj["type"].toString();
+    qDebug() << "WebRTC: Message type:" << type;
 
-    if (type == "offer") handleOffer(obj);
-    else if (type == "answer") handleAnswer(obj);
+    if (type == "offer") {
+        qDebug() << "WebRTC: Processing offer from" << obj["sender"].toString();
+        handleOffer(obj);
+    }
+    else if (type == "answer") {
+        qDebug() << "WebRTC: Processing answer from" << obj["sender"].toString();
+        handleAnswer(obj);
+    }
     else if (type == "ice-candidate") handleCandidate(obj);
     else if (type == "user-online") {
         QString user = obj["user"].toString();
+        qDebug() << "WebRTC: User online:" << user;
         if (onPeerOnline) onPeerOnline(user.toStdString());
         if (m_pendingInvites.contains(user)) retryPendingInviteFor(user);
+    } else {
+        qDebug() << "WebRTC: Unknown message type:" << type;
     }
 }
 
@@ -859,7 +873,12 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
     QString senderId = obj["sender"].toString();
     QString sdpOffer = obj["sdp"].toString();
     
+    qDebug() << "WebRTC: handleOffer called for sender:" << senderId;
+    qDebug() << "WebRTC: SDP offer length:" << sdpOffer.length();
+    
     QMetaObject::invokeMethod(this, [this, senderId, sdpOffer]() {
+        qDebug() << "WebRTC: Processing offer from" << senderId << "in main thread";
+        
         // [FIX] If we already have a peer connection for this user, close it first
         // This handles the case where both sides try to connect simultaneously
         if (m_peerConnections.contains(senderId)) {
@@ -869,15 +888,24 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
             m_dataChannels.remove(senderId);
         }
         
+        qDebug() << "WebRTC: Setting up peer connection for" << senderId << "as answerer";
         setupPeerConnection(senderId, false); // false = answerer, callback already set in setupPeerConnection
         std::shared_ptr<rtc::PeerConnection> pc = m_peerConnections[senderId];
         
+        if (!pc) {
+            qCritical() << "WebRTC: Failed to create peer connection for" << senderId;
+            return;
+        }
+        
         try {
+            qDebug() << "WebRTC: Setting remote description for" << senderId;
             pc->setRemoteDescription(rtc::Description(sdpOffer.toStdString(), "offer"));
+            qDebug() << "WebRTC: Remote description set, creating local description (answer)";
             // Create answer - libdatachannel will auto-generate it based on the offer
             pc->setLocalDescription();
+            qDebug() << "WebRTC: Local description set for" << senderId;
         } catch (const std::exception& e) {
-            qCritical() << "WebRTC: Error setting descriptions:" << e.what();
+            qCritical() << "WebRTC: Error setting descriptions for" << senderId << ":" << e.what();
         }
     }, Qt::QueuedConnection);
 }
