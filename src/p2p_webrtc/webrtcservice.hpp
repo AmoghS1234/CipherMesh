@@ -87,6 +87,7 @@ private:
     void setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const std::string& peerId);
     void sendSignalingMessage(const std::string& targetId, const std::string& type, const std::string& payload);
     void retryPendingInviteFor(const std::string& remoteId);
+    void flushEarlyCandidatesFor(const std::string& peerId);
 };
 
 // =========================================================

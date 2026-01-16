@@ -250,19 +250,35 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
             if(m_peers[sender]->localDescription().has_value() == false) {
                  m_peers[sender]->setLocalDescription(); // Triggers Answer generation
             }
+            // [FIX] Flush any early ICE candidates that arrived before the offer
+            flushEarlyCandidatesFor(sender);
         }
     }
     else if (type == "answer") {
         std::string sdp = extractJsonValue(message, "sdp");
         if(m_peers.count(sender)) {
             m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
+            // [FIX] Flush any early ICE candidates that arrived before the answer
+            flushEarlyCandidatesFor(sender);
         }
     }
     else if (type == "ice-candidate") {
         std::string cand = extractJsonValue(message, "candidate");
         std::string mid = extractJsonValue(message, "mid"); // Optional often
         if(m_peers.count(sender)) {
-            m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, mid));
+            // [FIX] Check if remote description is set before adding candidate
+            // If not, queue it for later to avoid "Got a remote candidate without remote description" exception
+            if (m_peers[sender]->remoteDescription().has_value()) {
+                try {
+                    m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, mid));
+                } catch (const std::exception& e) {
+                    LOGE("Failed to add ICE candidate from %s: %s", sender.c_str(), e.what());
+                }
+            } else {
+                // Queue this candidate for later processing
+                LOGI("Queueing early ICE candidate from %s", sender.c_str());
+                m_earlyCandidates[sender].push_back(message);
+            }
         }
     }
 }
@@ -280,6 +296,27 @@ void WebRTCService::retryPendingInviteFor(const std::string& remoteId) {
     if (m_peers.count(remoteId) == 0) {
         setupPeerConnection(remoteId, true);
     }
+}
+
+void WebRTCService::flushEarlyCandidatesFor(const std::string& peerId) {
+    if (m_earlyCandidates.count(peerId) == 0) return;
+    
+    LOGI("Flushing %zu early candidates for %s", m_earlyCandidates[peerId].size(), peerId.c_str());
+    
+    for (const auto& candidateMsg : m_earlyCandidates[peerId]) {
+        std::string cand = extractJsonValue(candidateMsg, "candidate");
+        std::string mid = extractJsonValue(candidateMsg, "mid");
+        
+        if (m_peers.count(peerId)) {
+            try {
+                m_peers[peerId]->addRemoteCandidate(rtc::Candidate(cand, mid));
+            } catch (const std::exception& e) {
+                LOGE("Failed to add queued ICE candidate: %s", e.what());
+            }
+        }
+    }
+    
+    m_earlyCandidates.erase(peerId);
 }
 
 // --- Required Stubs (Filled) ---
