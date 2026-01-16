@@ -186,15 +186,6 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         }
     });
 
-    // [FIX] Add gathering state change handler to detect ICE failures
-    pc->onGatheringStateChange([this, peerId](rtc::PeerConnection::GatheringState state) {
-        LOGI("ICE Gathering State for %s: %d", peerId.c_str(), (int)state);
-        
-        if (state == rtc::PeerConnection::GatheringState::Complete) {
-            LOGI("ICE gathering COMPLETE for %s", peerId.c_str());
-        }
-    });
-
     // 1. Handle ICE Candidates
     pc->onLocalCandidate([this, peerId](auto candidate) {
         LOGI("Generated ICE Candidate for %s", peerId.c_str());
