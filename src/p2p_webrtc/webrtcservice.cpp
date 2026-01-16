@@ -291,10 +291,14 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
                 
                 LOGI("Group: %s, Key length: %zu", groupName.c_str(), keyBase64.length());
                 
-                // For now, just log that we received it
-                // Full implementation requires JNI callback to Kotlin to save to vault
-                // This will be implemented in the next step
-                LOGI("Group data received successfully - implementation pending");
+                // Pass the entire JSON message to JNI layer for processing
+                // The JNI layer will parse it and save to the vault
+                if (onGroupDataReceived) {
+                    onGroupDataReceived(peerId, msg);
+                    LOGI("Group data passed to JNI callback");
+                } else {
+                    LOGE("onGroupDataReceived callback not set!");
+                }
             }
         }
     });

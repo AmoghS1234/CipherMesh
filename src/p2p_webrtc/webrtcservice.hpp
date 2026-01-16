@@ -56,6 +56,7 @@ public:
     std::function<void(const std::string&)> onSyncMessage;
     std::function<void(const std::string&)> onPeerOnline;
     std::function<void(const std::string& senderId, const std::string& groupName)> onIncomingInvite;
+    std::function<void(const std::string& senderId, const std::string& groupData)> onGroupDataReceived;
     
     // Callback for sending signaling messages back to Java
     std::function<void(const std::string&, const std::string&, const std::string&)> onSendSignaling;
