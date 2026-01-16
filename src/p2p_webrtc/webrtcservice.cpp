@@ -262,7 +262,15 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
         // If we have a pending invite, send the request now
         if (m_pendingInvites.count(peerId)) {
             std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
-            m_channels[peerId]->send(msg);
+            LOGI("Sending invite-request to %s for group %s", peerId.c_str(), m_pendingInvites[peerId].c_str());
+            if (m_channels.count(peerId) && m_channels[peerId]) {
+                m_channels[peerId]->send(msg);
+                LOGI("Invite-request sent successfully");
+            } else {
+                LOGE("Channel not available for %s", peerId.c_str());
+            }
+        } else {
+            LOGI("No pending invite for %s", peerId.c_str());
         }
     });
 
@@ -833,14 +841,20 @@ void WebRTCService::setupPeerConnection(const QString& remoteId, bool isOfferer)
                     qDebug() << "WebRTC: DataChannel OPEN for" << remoteId;
                     if (m_pendingInvites.contains(remoteId)) {
                         QJsonObject req; req["type"] = "invite-request"; req["group"] = m_pendingInvites[remoteId];
+                        qDebug() << "WebRTC: Sending invite-request for group:" << m_pendingInvites[remoteId];
                         sendP2PMessage(remoteId, req);
+                    } else {
+                        qDebug() << "WebRTC: No pending invite for" << remoteId;
                     }
                 }, Qt::QueuedConnection);
             });
             
             dc->onMessage([this, remoteId](std::variant<rtc::binary, rtc::string> message) {
                 QString msg;
-                if (std::holds_alternative<rtc::string>(message)) msg = QString::fromStdString(std::get<rtc::string>(message));
+                if (std::holds_alternative<rtc::string>(message)) {
+                    msg = QString::fromStdString(std::get<rtc::string>(message));
+                    qDebug() << "WebRTC: Received raw message from" << remoteId << ":" << msg;
+                }
                 if (!msg.isEmpty()) QMetaObject::invokeMethod(this, [this, remoteId, msg]() { try { handleP2PMessage(remoteId, msg); } catch (...) {} }, Qt::QueuedConnection);
             });
         }, Qt::QueuedConnection);
