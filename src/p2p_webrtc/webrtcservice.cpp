@@ -136,6 +136,17 @@ void WebRTCService::inviteUser(const std::string& groupName, const std::string& 
     LOGI("Inviting user: %s to group: %s", userEmail.c_str(), groupName.c_str());
     
     std::lock_guard<std::mutex> lock(m_mutex);
+    
+    // Clean up any existing connection to ensure fresh start
+    if (m_peers.count(userEmail)) {
+        LOGI("Cleaning up existing peer connection for %s before inviting", userEmail.c_str());
+        m_peers[userEmail]->close();
+        m_peers.erase(userEmail);
+    }
+    if (m_channels.count(userEmail)) {
+        m_channels.erase(userEmail);
+    }
+    
     m_pendingInvites[userEmail] = groupName;
     m_pendingKeys[userEmail] = groupKey;
     m_pendingEntries[userEmail] = entries;
