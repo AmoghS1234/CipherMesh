@@ -398,39 +398,79 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         // Fetch invites
         val rawInvites = vault.getPendingInvites()
         
-        // Debug Toast to confirm click worked
         if (rawInvites.isEmpty()) {
             Toast.makeText(this, "No Pending Invites", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val displayList = rawInvites.map { 
-            val p = it.split("|")
-            if (p.size >= 3) "From: ${p[1]}\nGroup: ${p[2]}" else "Unknown Invite"
-        }
-
-        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, displayList)
+        // Create a custom dialog with better UX
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.activity_invites, null)
+        val listView = dialogView.findViewById<ListView>(R.id.listInvites)
+        val emptyText = dialogView.findViewById<TextView>(R.id.txtNoInvites)
         
+        if (rawInvites.isEmpty()) {
+            listView.visibility = View.GONE
+            emptyText.visibility = View.VISIBLE
+        } else {
+            listView.visibility = View.VISIBLE
+            emptyText.visibility = View.GONE
+            
+            // Custom adapter for better UI
+            val inviteAdapter = object : ArrayAdapter<String>(this, R.layout.item_invite_row, rawInvites) {
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                    val view = convertView ?: LayoutInflater.from(context).inflate(R.layout.item_invite_row, parent, false)
+                    
+                    val parts = getItem(position)?.split("|") ?: return view
+                    if (parts.size < 3) return view
+                    
+                    val inviteId = parts[0].toIntOrNull() ?: return view
+                    val fromText = view.findViewById<TextView>(R.id.inviteFrom)
+                    val groupText = view.findViewById<TextView>(R.id.inviteGroup)
+                    val btnAccept = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnAccept)
+                    val btnReject = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnReject)
+                    
+                    fromText.text = "From: ${parts[1]}"
+                    groupText.text = parts[2]
+                    
+                    btnAccept.setOnClickListener {
+                        vault.respondToInvite(inviteId, true)
+                        Toast.makeText(context, "Invite Accepted!", Toast.LENGTH_SHORT).show()
+                        
+                        // Refresh the list
+                        remove(getItem(position))
+                        notifyDataSetChanged()
+                        
+                        // Reload groups to show the new one
+                        loadGroups()
+                        
+                        // Close dialog if no more invites
+                        if (count == 0) {
+                            (view.context as? HomeActivity)?.let { activity ->
+                                // Dialog will be closed by user
+                            }
+                        }
+                    }
+                    
+                    btnReject.setOnClickListener {
+                        vault.respondToInvite(inviteId, false)
+                        Toast.makeText(context, "Invite Rejected", Toast.LENGTH_SHORT).show()
+                        
+                        // Refresh the list
+                        remove(getItem(position))
+                        notifyDataSetChanged()
+                    }
+                    
+                    return view
+                }
+            }
+            
+            listView.adapter = inviteAdapter
+        }
+        
+        // Create dialog with custom view
         MaterialAlertDialogBuilder(this)
             .setTitle("Pending Invites")
-            .setAdapter(adapter) { dialog, position ->
-                val parts = rawInvites[position].split("|")
-                val inviteId = parts[0].toIntOrNull() ?: return@setAdapter
-                
-                MaterialAlertDialogBuilder(this)
-                    .setTitle("Respond")
-                    .setMessage(displayList[position])
-                    .setPositiveButton("Accept") { _, _ ->
-                        vault.respondToInvite(inviteId, true)
-                        Toast.makeText(this, "Group Joined!", Toast.LENGTH_SHORT).show()
-                        loadGroups() 
-                    }
-                    .setNegativeButton("Reject") { _, _ ->
-                        vault.respondToInvite(inviteId, false)
-                        Toast.makeText(this, "Ignored", Toast.LENGTH_SHORT).show()
-                    }
-                    .show()
-            }
+            .setView(dialogView)
             .setPositiveButton("Close", null)
             .show()
     }
