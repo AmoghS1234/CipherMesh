@@ -6,6 +6,8 @@
 #include <mutex>
 #include <chrono>
 #include <map>
+#include <sstream>
+#include <iomanip>
 
 // Check for Android Environment
 #if defined(__ANDROID__) || defined(ANDROID)
@@ -45,6 +47,30 @@ std::string unescapeString(const std::string& str) {
     }
     
     return result;
+}
+
+// [NEW] JSON escape function for encoding strings
+std::string escapeJsonString(const std::string& str) {
+    std::ostringstream escaped;
+    for (char c : str) {
+        switch (c) {
+            case '\"': escaped << "\\\""; break;
+            case '\\': escaped << "\\\\"; break;
+            case '\b': escaped << "\\b"; break;
+            case '\f': escaped << "\\f"; break;
+            case '\n': escaped << "\\n"; break;
+            case '\r': escaped << "\\r"; break;
+            case '\t': escaped << "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    // Control character - use unicode escape
+                    escaped << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)c;
+                } else {
+                    escaped << c;
+                }
+        }
+    }
+    return escaped.str();
 }
 
 std::string extractJsonValue(const std::string& json, const std::string& key) {
@@ -444,7 +470,7 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
     
     // Build JSON message manually (since we don't have Qt on Android)
     std::ostringstream json;
-    json << "{\"type\":\"group-data\",\"group\":\"" << groupName << "\",";
+    json << "{\"type\":\"group-data\",\"group\":\"" << escapeJsonString(groupName) << "\",";
     
     // Encode group key as base64
     static const char base64_chars[] = 
@@ -477,20 +503,20 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
     
     json << "\"key\":\"" << keyBase64 << "\",\"entries\":[";
     
-    // Serialize entries
+    // Serialize entries with proper JSON escaping
     for (size_t idx = 0; idx < entries.size(); idx++) {
         const auto& entry = entries[idx];
         if (idx > 0) json << ",";
         json << "{";
         json << "\"id\":" << entry.id << ",";
         json << "\"groupId\":" << entry.groupId << ",";
-        json << "\"title\":\"" << entry.title << "\",";
-        json << "\"username\":\"" << entry.username << "\",";
-        json << "\"password\":\"" << entry.password << "\",";
-        json << "\"url\":\"" << entry.url << "\",";
-        json << "\"notes\":\"" << entry.notes << "\",";
-        json << "\"totpSecret\":\"" << entry.totpSecret << "\",";
-        json << "\"entryType\":\"" << entry.entryType << "\",";
+        json << "\"title\":\"" << escapeJsonString(entry.title) << "\",";
+        json << "\"username\":\"" << escapeJsonString(entry.username) << "\",";
+        json << "\"password\":\"" << escapeJsonString(entry.password) << "\",";
+        json << "\"url\":\"" << escapeJsonString(entry.url) << "\",";
+        json << "\"notes\":\"" << escapeJsonString(entry.notes) << "\",";
+        json << "\"totpSecret\":\"" << escapeJsonString(entry.totpSecret) << "\",";
+        json << "\"entryType\":\"" << escapeJsonString(entry.entryType) << "\",";
         json << "\"createdAt\":" << entry.createdAt << ",";
         json << "\"updatedAt\":" << entry.updatedAt << ",";
         json << "\"lastAccessed\":" << entry.lastAccessed << ",";
