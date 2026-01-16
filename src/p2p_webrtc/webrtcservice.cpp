@@ -44,13 +44,19 @@ std::string buildJson(const std::string& type, const std::string& payloadKey, co
 
 // Normalize SDP to ensure ICE credentials are at session level for BUNDLE compatibility
 std::string normalizeSDP(const std::string& sdp) {
+    LOGI("🔍 [SDP] normalizeSDP called, SDP length: %zu", sdp.length());
+    
     // Find media line position
     size_t mediaPos = sdp.find("\r\nm=");
-    if (mediaPos == std::string::npos) return sdp;
+    if (mediaPos == std::string::npos) {
+        LOGI("🔍 [SDP] No \\r\\nm= found, returning unchanged");
+        return sdp;
+    }
     
     // Check if session-level ICE credentials already exist
     std::string sessionPart = sdp.substr(0, mediaPos);
     if (sessionPart.find("a=ice-ufrag:") != std::string::npos) {
+        LOGI("🔍 [SDP] Session-level ICE credentials already exist, returning unchanged");
         return sdp; // Already has session-level ICE credentials
     }
     
@@ -60,6 +66,8 @@ std::string normalizeSDP(const std::string& sdp) {
     size_t pwdPos = mediaPart.find("a=ice-pwd:");
     
     if (ufragPos == std::string::npos || pwdPos == std::string::npos) {
+        LOGE("❌ [SDP] No ICE credentials found in media section! ufragPos=%zu, pwdPos=%zu", ufragPos, pwdPos);
+        LOGE("❌ [SDP] Media part: %s", mediaPart.c_str());
         return sdp; // No ICE credentials found
     }
     
@@ -74,7 +82,8 @@ std::string normalizeSDP(const std::string& sdp) {
     // Insert ICE credentials at session level (after BUNDLE line, before media section)
     std::string normalized = sessionPart + "\r\n" + iceUfrag + "\r\n" + icePwd + mediaPart;
     
-    LOGI("📝 [SDP] Normalized SDP: added session-level ICE credentials");
+    LOGI("✅ [SDP] Normalized SDP: added session-level ICE credentials");
+    LOGI("🔍 [SDP] Normalized SDP: %s", normalized.c_str());
     return normalized;
 }
 
