@@ -308,46 +308,90 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
     } 
     else if (type == "offer") {
         std::string sdp = extractJsonValue(message, "sdp");
-        LOGI("📨 [SIGNAL] Received offer from %s", sender.c_str());
+        LOGI("📨 [SIGNAL] Received offer from %s (SDP length: %zu)", sender.c_str(), sdp.length());
+        
+        if (sdp.empty()) {
+            LOGE("❌ [SIGNAL] Received empty SDP in offer from %s", sender.c_str());
+            return;
+        }
+        
+        // Validate that SDP contains required ICE parameters
+        if (sdp.find("ice-ufrag") == std::string::npos || sdp.find("ice-pwd") == std::string::npos) {
+            LOGE("❌ [SIGNAL] Offer from %s missing ICE credentials (ice-ufrag/ice-pwd)", sender.c_str());
+            LOGE("❌ [SIGNAL] SDP content: %s", sdp.c_str());
+            return;
+        }
+        
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
-            m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
-            
-            // Add any early candidates that arrived before this offer
-            if (m_earlyCandidates.count(sender)) {
-                LOGI("📦 [ICE] Adding %zu queued candidates for %s", m_earlyCandidates[sender].size(), sender.c_str());
-                for (const auto& cand : m_earlyCandidates[sender]) {
-                    try {
-                        m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, ""));
-                    } catch (const std::exception& e) {
-                        LOGE("❌ [ICE] Failed to add queued candidate: %s", e.what());
+            try {
+                m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
+                LOGI("✅ [SIGNAL] Set remote offer for %s", sender.c_str());
+                
+                // Add any early candidates that arrived before this offer
+                if (m_earlyCandidates.count(sender)) {
+                    LOGI("📦 [ICE] Adding %zu queued candidates for %s", m_earlyCandidates[sender].size(), sender.c_str());
+                    for (const auto& cand : m_earlyCandidates[sender]) {
+                        try {
+                            m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, ""));
+                        } catch (const std::exception& e) {
+                            LOGE("❌ [ICE] Failed to add queued candidate: %s", e.what());
+                        }
                     }
+                    m_earlyCandidates.erase(sender);
                 }
+                
+                if(m_peers[sender]->localDescription().has_value() == false) {
+                     m_peers[sender]->setLocalDescription(); // Triggers Answer generation
+                     LOGI("✅ [SIGNAL] Generating answer for %s", sender.c_str());
+                }
+            } catch (const std::exception& e) {
+                LOGE("❌ [SIGNAL] CRITICAL: Failed to process offer from %s: %s", sender.c_str(), e.what());
+                LOGE("❌ [SIGNAL] Problematic SDP: %s", sdp.c_str());
+                // Clean up failed peer connection
+                m_peers.erase(sender);
                 m_earlyCandidates.erase(sender);
-            }
-            
-            if(m_peers[sender]->localDescription().has_value() == false) {
-                 m_peers[sender]->setLocalDescription(); // Triggers Answer generation
-                 LOGI("✅ [SIGNAL] Generating answer for %s", sender.c_str());
             }
         }
     }
     else if (type == "answer") {
         std::string sdp = extractJsonValue(message, "sdp");
-        LOGI("📨 [SIGNAL] Received answer from %s", sender.c_str());
+        LOGI("📨 [SIGNAL] Received answer from %s (SDP length: %zu)", sender.c_str(), sdp.length());
+        
+        if (sdp.empty()) {
+            LOGE("❌ [SIGNAL] Received empty SDP in answer from %s", sender.c_str());
+            return;
+        }
+        
+        // Validate that SDP contains required ICE parameters
+        if (sdp.find("ice-ufrag") == std::string::npos || sdp.find("ice-pwd") == std::string::npos) {
+            LOGE("❌ [SIGNAL] Answer from %s missing ICE credentials (ice-ufrag/ice-pwd)", sender.c_str());
+            LOGE("❌ [SIGNAL] SDP content: %s", sdp.c_str());
+            return;
+        }
+        
         if(m_peers.count(sender)) {
-            m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
-            
-            // Add any early candidates that arrived before this answer
-            if (m_earlyCandidates.count(sender)) {
-                LOGI("📦 [ICE] Adding %zu queued candidates for %s", m_earlyCandidates[sender].size(), sender.c_str());
-                for (const auto& cand : m_earlyCandidates[sender]) {
-                    try {
-                        m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, ""));
-                    } catch (const std::exception& e) {
-                        LOGE("❌ [ICE] Failed to add queued candidate: %s", e.what());
+            try {
+                m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
+                LOGI("✅ [SIGNAL] Set remote answer for %s", sender.c_str());
+                
+                // Add any early candidates that arrived before this answer
+                if (m_earlyCandidates.count(sender)) {
+                    LOGI("📦 [ICE] Adding %zu queued candidates for %s", m_earlyCandidates[sender].size(), sender.c_str());
+                    for (const auto& cand : m_earlyCandidates[sender]) {
+                        try {
+                            m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, ""));
+                        } catch (const std::exception& e) {
+                            LOGE("❌ [ICE] Failed to add queued candidate: %s", e.what());
+                        }
                     }
+                    m_earlyCandidates.erase(sender);
                 }
+            } catch (const std::exception& e) {
+                LOGE("❌ [SIGNAL] CRITICAL: Failed to set remote description for %s: %s", sender.c_str(), e.what());
+                LOGE("❌ [SIGNAL] Problematic SDP: %s", sdp.c_str());
+                // Clean up failed peer connection
+                m_peers.erase(sender);
                 m_earlyCandidates.erase(sender);
             }
         }
