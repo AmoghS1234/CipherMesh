@@ -144,15 +144,8 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         setupDataChannel(dc, peerId);
     });
 
-    // 3. Create Offer Logic (only if we are the Offerer)
-    if (isOfferer) {
-        auto dc = pc->createDataChannel("ciphermesh-data");
-        setupDataChannel(dc, peerId);
-
-        pc->setLocalDescription(); // This triggers gathering -> onLocalDescription
-    }
-
-    // 4. Send Description (Offer/Answer) when ICE gathering is complete
+    // 3. Send Description (Offer/Answer) when ICE gathering is complete
+    // IMPORTANT: Set this BEFORE setLocalDescription() to avoid race condition
     pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
         LOGI("ICE Gathering State for %s: %d", peerId.c_str(), (int)state);
         
@@ -168,6 +161,14 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
             }
         }
     });
+
+    // 4. Create Offer Logic (only if we are the Offerer)
+    if (isOfferer) {
+        auto dc = pc->createDataChannel("ciphermesh-data");
+        setupDataChannel(dc, peerId);
+
+        pc->setLocalDescription(); // This triggers gathering
+    }
 }
 
 void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const std::string& peerId) {
@@ -256,9 +257,9 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
             auto pc = m_peers[sender];
-            pc->setRemoteDescription(rtc::Description(sdp, type));
             
             // Set up handler to send answer after ICE gathering completes
+            // IMPORTANT: Must be set BEFORE setLocalDescription to avoid race
             pc->onGatheringStateChange([this, sender, pc](rtc::PeerConnection::GatheringState state) {
                 if (state == rtc::PeerConnection::GatheringState::Complete) {
                     LOGI("ICE gathering COMPLETE for %s (answer)", sender.c_str());
@@ -270,6 +271,8 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
                     }
                 }
             });
+            
+            pc->setRemoteDescription(rtc::Description(sdp, type));
             
             if(pc->localDescription().has_value() == false) {
                  pc->setLocalDescription(); // Triggers Answer generation and ICE gathering
