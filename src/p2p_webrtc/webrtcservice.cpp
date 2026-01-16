@@ -203,17 +203,18 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         auto dc = pc->createDataChannel("ciphermesh-data");
         setupDataChannel(dc, peerId);
         
-        pc->setLocalDescription(); // This triggers gathering
+        LOGI("Creating offer for %s", peerId.c_str());
+        pc->setLocalDescription(); // This triggers offer creation and gathering
         
-        // Send offer immediately (trickle ICE - candidates sent separately)
+        // setLocalDescription() is synchronous in libdatachannel - check immediately
         auto desc = pc->localDescription();
         if (desc.has_value()) {
             std::string type = desc->typeString();
             std::string sdp = std::string(*desc);
-            LOGI("Sending offer to %s (trickle ICE)", peerId.c_str());
+            LOGI("Sending offer to %s (type: %s, SDP length: %zu)", peerId.c_str(), type.c_str(), sdp.length());
             sendSignalingMessage(peerId, type, sdp);
         } else {
-            LOGE("Failed to get local description for offer to %s", peerId.c_str());
+            LOGE("ERROR: Failed to get local description for offer to %s - this should not happen!", peerId.c_str());
         }
     }
 }
