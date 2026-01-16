@@ -42,50 +42,7 @@ std::string buildJson(const std::string& type, const std::string& payloadKey, co
     return "{\"type\":\"" + type + "\", \"" + payloadKey + "\":\"" + payloadVal + "\"}";
 }
 
-// Normalize SDP to ensure ICE credentials are at session level for BUNDLE compatibility
-std::string normalizeSDP(const std::string& sdp) {
-    LOGI("🔍 [SDP] normalizeSDP called, SDP length: %zu", sdp.length());
-    
-    // Find media line position
-    size_t mediaPos = sdp.find("\r\nm=");
-    if (mediaPos == std::string::npos) {
-        LOGI("🔍 [SDP] No \\r\\nm= found, returning unchanged");
-        return sdp;
-    }
-    
-    // Check if session-level ICE credentials already exist
-    std::string sessionPart = sdp.substr(0, mediaPos);
-    if (sessionPart.find("a=ice-ufrag:") != std::string::npos) {
-        LOGI("🔍 [SDP] Session-level ICE credentials already exist, returning unchanged");
-        return sdp; // Already has session-level ICE credentials
-    }
-    
-    // Extract ICE credentials from media section
-    std::string mediaPart = sdp.substr(mediaPos);
-    size_t ufragPos = mediaPart.find("a=ice-ufrag:");
-    size_t pwdPos = mediaPart.find("a=ice-pwd:");
-    
-    if (ufragPos == std::string::npos || pwdPos == std::string::npos) {
-        LOGE("❌ [SDP] No ICE credentials found in media section! ufragPos=%zu, pwdPos=%zu", ufragPos, pwdPos);
-        LOGE("❌ [SDP] Media part: %s", mediaPart.c_str());
-        return sdp; // No ICE credentials found
-    }
-    
-    // Extract ice-ufrag line
-    size_t ufragEnd = mediaPart.find("\r\n", ufragPos);
-    std::string iceUfrag = mediaPart.substr(ufragPos, ufragEnd - ufragPos);
-    
-    // Extract ice-pwd line
-    size_t pwdEnd = mediaPart.find("\r\n", pwdPos);
-    std::string icePwd = mediaPart.substr(pwdPos, pwdEnd - pwdPos);
-    
-    // Insert ICE credentials at session level (after BUNDLE line, before media section)
-    std::string normalized = sessionPart + "\r\n" + iceUfrag + "\r\n" + icePwd + mediaPart;
-    
-    LOGI("✅ [SDP] Normalized SDP: added session-level ICE credentials");
-    LOGI("🔍 [SDP] Normalized SDP: %s", normalized.c_str());
-    return normalized;
-}
+
 
 // --- Implementation ---
 
@@ -362,30 +319,19 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
             return;
         }
         
-        // Validate that SDP contains required ICE parameters
-        if (sdp.find("ice-ufrag") == std::string::npos || sdp.find("ice-pwd") == std::string::npos) {
-            LOGE("❌ [SIGNAL] Offer from %s missing ICE credentials (ice-ufrag/ice-pwd)", sender.c_str());
-            LOGE("❌ [SIGNAL] SDP content: %s", sdp.c_str());
-            return;
-        }
-        
-        // Normalize SDP to ensure session-level ICE credentials for BUNDLE compatibility
-        sdp = normalizeSDP(sdp);
-        
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
             try {
-                // Android requires setLocalDescription() BEFORE setRemoteDescription()
-                // Call setLocalDescription() first (will trigger answer generation)
-                if(m_peers[sender]->localDescription().has_value() == false) {
-                     m_peers[sender]->setLocalDescription(); // Triggers Answer generation callback
-                     LOGI("✅ [SIGNAL] Generating answer for %s (called BEFORE setRemoteDescription)", sender.c_str());
-                }
-                
-                // Now set the remote offer
+                // Correct WebRTC flow: setRemoteDescription(offer) BEFORE setLocalDescription(answer)
                 rtc::Description desc(sdp, "offer");
                 m_peers[sender]->setRemoteDescription(desc);
                 LOGI("✅ [SIGNAL] Set remote offer for %s", sender.c_str());
+                
+                // Now generate answer by calling setLocalDescription()
+                if(m_peers[sender]->localDescription().has_value() == false) {
+                     m_peers[sender]->setLocalDescription(); // Triggers Answer generation callback
+                     LOGI("✅ [SIGNAL] Generating answer for %s (called AFTER setRemoteDescription)", sender.c_str());
+                }
                 
                 // Add any early candidates that arrived before this offer
                 if (m_earlyCandidates.count(sender)) {
@@ -416,16 +362,6 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
             LOGE("❌ [SIGNAL] Received empty SDP in answer from %s", sender.c_str());
             return;
         }
-        
-        // Validate that SDP contains required ICE parameters
-        if (sdp.find("ice-ufrag") == std::string::npos || sdp.find("ice-pwd") == std::string::npos) {
-            LOGE("❌ [SIGNAL] Answer from %s missing ICE credentials (ice-ufrag/ice-pwd)", sender.c_str());
-            LOGE("❌ [SIGNAL] SDP content: %s", sdp.c_str());
-            return;
-        }
-        
-        // Normalize SDP to ensure session-level ICE credentials for BUNDLE compatibility
-        sdp = normalizeSDP(sdp);
         
         if(m_peers.count(sender)) {
             try {
