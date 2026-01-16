@@ -152,12 +152,21 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         pc->setLocalDescription(); // This triggers gathering -> onLocalDescription
     }
 
-    // 4. Send Description (Offer/Answer) when ready
-    pc->onLocalDescription([this, peerId](auto desc) {
-        std::string type = desc.typeString(); // "offer" or "answer"
-        std::string sdp = std::string(desc);
-        LOGI("Sending %s to %s", type.c_str(), peerId.c_str());
-        sendSignalingMessage(peerId, type, sdp);
+    // 4. Send Description (Offer/Answer) when ICE gathering is complete
+    pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
+        LOGI("ICE Gathering State for %s: %d", peerId.c_str(), (int)state);
+        
+        if (state == rtc::PeerConnection::GatheringState::Complete) {
+            LOGI("ICE gathering COMPLETE for %s", peerId.c_str());
+            // Now send the complete SDP with ICE candidates embedded
+            auto desc = pc->localDescription();
+            if (desc.has_value()) {
+                std::string type = desc->typeString();
+                std::string sdp = std::string(*desc);
+                LOGI("Sending %s to %s with ICE candidates", type.c_str(), peerId.c_str());
+                sendSignalingMessage(peerId, type, sdp);
+            }
+        }
     });
 }
 
@@ -246,9 +255,24 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         std::string sdp = extractJsonValue(message, "sdp");
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
-            m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
-            if(m_peers[sender]->localDescription().has_value() == false) {
-                 m_peers[sender]->setLocalDescription(); // Triggers Answer generation
+            auto pc = m_peers[sender];
+            pc->setRemoteDescription(rtc::Description(sdp, type));
+            
+            // Set up handler to send answer after ICE gathering completes
+            pc->onGatheringStateChange([this, sender, pc](rtc::PeerConnection::GatheringState state) {
+                if (state == rtc::PeerConnection::GatheringState::Complete) {
+                    LOGI("ICE gathering COMPLETE for %s (answer)", sender.c_str());
+                    auto desc = pc->localDescription();
+                    if (desc.has_value()) {
+                        std::string answerSdp = std::string(*desc);
+                        LOGI("Sending answer to %s with ICE candidates", sender.c_str());
+                        sendSignalingMessage(sender, "answer", answerSdp);
+                    }
+                }
+            });
+            
+            if(pc->localDescription().has_value() == false) {
+                 pc->setLocalDescription(); // Triggers Answer generation and ICE gathering
             }
             // [FIX] Flush any early ICE candidates that arrived before the offer
             flushEarlyCandidatesFor(sender);
