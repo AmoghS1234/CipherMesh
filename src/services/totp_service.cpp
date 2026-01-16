@@ -24,8 +24,9 @@ int TotpService::getSecondsRemaining() {
 
 int TotpService::getProgressPercentage() {
     int remaining = getSecondsRemaining();
-    // Convert to percentage (30 seconds = 100%, 0 seconds = 0%)
-    return static_cast<int>((remaining * 100) / 30);
+    // Convert to progress through the window (0% at start, 100% at end)
+    // When remaining is 30, progress is 0%. When remaining is 0, progress is 100%
+    return static_cast<int>(((30 - remaining) * 100) / 30);
 }
 
 bool TotpService::isValidSecret(const std::string& secret) {

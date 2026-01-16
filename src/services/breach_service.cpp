@@ -53,7 +53,7 @@ void BreachService::checkPassword(const std::string& password,
     QString url = QString("https://api.pwnedpasswords.com/range/%1").arg(QString::fromStdString(prefix));
     QNetworkRequest request(url);
     
-    // Create network manager on heap (will be deleted via parent chain)
+    // Create network manager (will be cleaned up in lambda via deleteLater())
     QNetworkAccessManager* netManager = new QNetworkAccessManager();
     QNetworkReply* reply = netManager->get(request);
     
