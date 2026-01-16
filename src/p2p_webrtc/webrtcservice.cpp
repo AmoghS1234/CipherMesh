@@ -200,9 +200,31 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             
             std::string type = extractJsonValue(msg, "type");
             if (type == "invite-request") {
-                // Notify UI
+                // Notify UI via callback
                 std::string group = extractJsonValue(msg, "group");
-                // TODO: Call Java callback
+                if (onIncomingInvite) {
+                    onIncomingInvite(peerId, group);
+                } else {
+                    LOGE("onIncomingInvite callback not set!");
+                }
+            }
+            else if (type == "invite-accept") {
+                // Handle invite acceptance
+                if (m_pendingInvites.count(peerId)) {
+                    LOGI("Invite accepted by %s", peerId.c_str());
+                    // Send group data if we have it stored
+                    if (m_pendingKeys.count(peerId) && m_pendingEntries.count(peerId)) {
+                        sendGroupData(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], m_pendingEntries[peerId]);
+                    }
+                    m_pendingInvites.erase(peerId);
+                }
+            }
+            else if (type == "invite-reject") {
+                // Handle invite rejection
+                if (m_pendingInvites.count(peerId)) {
+                    LOGI("Invite rejected by %s", peerId.c_str());
+                    m_pendingInvites.erase(peerId);
+                }
             }
         }
     });
