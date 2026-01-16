@@ -264,6 +264,8 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
                         sendGroupData(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], m_pendingEntries[peerId]);
                     }
                     m_pendingInvites.erase(peerId);
+                    m_pendingKeys.erase(peerId);
+                    m_pendingEntries.erase(peerId);
                 }
             }
             else if (type == "invite-reject") {
@@ -271,7 +273,28 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
                 if (m_pendingInvites.count(peerId)) {
                     LOGI("Invite rejected by %s", peerId.c_str());
                     m_pendingInvites.erase(peerId);
+                    m_pendingKeys.erase(peerId);
+                    m_pendingEntries.erase(peerId);
                 }
+            }
+            else if (type == "group-data") {
+                // Handle received group data
+                LOGI("Received group-data from %s", peerId.c_str());
+                
+                std::string groupName = extractJsonValue(msg, "group");
+                std::string keyBase64 = extractJsonValue(msg, "key");
+                
+                if (groupName.empty() || keyBase64.empty()) {
+                    LOGE("Invalid group-data: missing group name or key");
+                    return;
+                }
+                
+                LOGI("Group: %s, Key length: %zu", groupName.c_str(), keyBase64.length());
+                
+                // For now, just log that we received it
+                // Full implementation requires JNI callback to Kotlin to save to vault
+                // This will be implemented in the next step
+                LOGI("Group data received successfully - implementation pending");
             }
         }
     });
@@ -388,16 +411,104 @@ void WebRTCService::setAuthenticated(bool auth) { m_isAuthenticated = auth; }
 void WebRTCService::sendInvite(const std::string& recipientId, const std::string& groupName) { inviteUser(groupName, recipientId, {}, {}); }
 void WebRTCService::cancelInvite(const std::string& userId) { 
     m_pendingInvites.erase(userId); 
+    m_pendingKeys.erase(userId);
+    m_pendingEntries.erase(userId);
     if(m_peers.count(userId)) m_peers.erase(userId);
 }
 void WebRTCService::respondToInvite(const std::string& senderId, bool accept) {
     if(m_channels.count(senderId)) {
         std::string msg = accept ? "{\"type\":\"invite-accept\"}" : "{\"type\":\"invite-reject\"}";
         m_channels[senderId]->send(msg);
+        LOGI("Sent %s to %s", accept ? "invite-accept" : "invite-reject", senderId.c_str());
+    } else {
+        LOGE("Cannot respond to invite: no channel to %s", senderId.c_str());
     }
 }
 void WebRTCService::requestData(const std::string&, const std::string&) {}
-void WebRTCService::sendGroupData(const std::string&, const std::string&, const std::vector<unsigned char>&, const std::vector<CipherMesh::Core::VaultEntry>&) {}
+
+void WebRTCService::sendGroupData(const std::string& recipientId, const std::string& groupName,
+                                   const std::vector<unsigned char>& groupKey,
+                                   const std::vector<CipherMesh::Core::VaultEntry>& entries) {
+    // Check if we have an active data channel
+    if (m_channels.count(recipientId) == 0 || !m_channels[recipientId] || !m_channels[recipientId]->isOpen()) {
+        LOGE("Cannot send group data: no active channel to %s", recipientId.c_str());
+        return;
+    }
+    
+    LOGI("Sending group data for '%s' to %s", groupName.c_str(), recipientId.c_str());
+    LOGI("Group key size: %zu bytes, Entries: %zu", groupKey.size(), entries.size());
+    
+    // Build JSON message manually (since we don't have Qt on Android)
+    std::ostringstream json;
+    json << "{\"type\":\"group-data\",\"group\":\"" << groupName << "\",";
+    
+    // Encode group key as base64
+    static const char base64_chars[] = 
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string keyBase64;
+    int i = 0;
+    int j = 0;
+    unsigned char char_array_3[3];
+    unsigned char char_array_4[4];
+    
+    for (unsigned char c : groupKey) {
+        char_array_3[i++] = c;
+        if (i == 3) {
+            char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+            char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+            char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+            char_array_4[3] = char_array_3[2] & 0x3f;
+            for(i = 0; i < 4; i++) keyBase64 += base64_chars[char_array_4[i]];
+            i = 0;
+        }
+    }
+    if (i) {
+        for(j = i; j < 3; j++) char_array_3[j] = '\0';
+        char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+        char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+        char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+        for (j = 0; j < i + 1; j++) keyBase64 += base64_chars[char_array_4[j]];
+        while(i++ < 3) keyBase64 += '=';
+    }
+    
+    json << "\"key\":\"" << keyBase64 << "\",\"entries\":[";
+    
+    // Serialize entries
+    for (size_t idx = 0; idx < entries.size(); idx++) {
+        const auto& entry = entries[idx];
+        if (idx > 0) json << ",";
+        json << "{";
+        json << "\"id\":" << entry.id << ",";
+        json << "\"groupId\":" << entry.groupId << ",";
+        json << "\"title\":\"" << entry.title << "\",";
+        json << "\"username\":\"" << entry.username << "\",";
+        json << "\"password\":\"" << entry.password << "\",";
+        json << "\"url\":\"" << entry.url << "\",";
+        json << "\"notes\":\"" << entry.notes << "\",";
+        json << "\"totpSecret\":\"" << entry.totpSecret << "\",";
+        json << "\"entryType\":\"" << entry.entryType << "\",";
+        json << "\"createdAt\":" << entry.createdAt << ",";
+        json << "\"updatedAt\":" << entry.updatedAt << ",";
+        json << "\"lastAccessed\":" << entry.lastAccessed << ",";
+        json << "\"passwordExpiry\":" << entry.passwordExpiry;
+        json << "}";
+    }
+    
+    json << "]}";
+    
+    std::string jsonStr = json.str();
+    LOGI("Sending group data message, size: %zu bytes", jsonStr.length());
+    
+    // Send via data channel
+    m_channels[recipientId]->send(jsonStr);
+    
+    LOGI("Group data sent successfully to %s", recipientId.c_str());
+    
+    // Clean up pending data
+    m_pendingKeys.erase(recipientId);
+    m_pendingEntries.erase(recipientId);
+}
+
 void WebRTCService::fetchGroupMembers(const std::string&) {}
 void WebRTCService::removeUser(const std::string&, const std::string&) {}
 void WebRTCService::onRetryTimer() {}
@@ -516,15 +627,39 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
     QJsonObject obj = doc.object();
     QString type = obj["type"].toString();
 
+    qDebug() << "WebRTC: Received P2P message from" << remoteId << "type:" << type;
+
     if (type == "invite-request") {
-        if (onIncomingInvite) onIncomingInvite(remoteId.toStdString(), obj["group"].toString().toStdString());
+        QString groupName = obj["group"].toString();
+        qDebug() << "WebRTC: Invite request for group:" << groupName;
+        if (onIncomingInvite) onIncomingInvite(remoteId.toStdString(), groupName.toStdString());
     } 
     else if (type == "invite-accept") {
+        qDebug() << "WebRTC: Invite accepted by" << remoteId;
         if (m_pendingInvites.contains(remoteId)) {
-            sendGroupData(remoteId.toStdString(), m_pendingInvites[remoteId].toStdString(), m_pendingKeys[remoteId], m_pendingEntries[remoteId]);
+            QString groupName = m_pendingInvites[remoteId];
+            sendGroupData(remoteId.toStdString(), groupName.toStdString(), m_pendingKeys[remoteId], m_pendingEntries[remoteId]);
             m_pendingInvites.remove(remoteId);
-            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), obj["group"].toString().toStdString(), true);
+            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), true);
+        } else {
+            qWarning() << "WebRTC: Received accept but no pending invite for" << remoteId;
         }
+    }
+    else if (type == "invite-reject") {
+        qDebug() << "WebRTC: Invite rejected by" << remoteId;
+        if (m_pendingInvites.contains(remoteId)) {
+            QString groupName = m_pendingInvites[remoteId];
+            m_pendingInvites.remove(remoteId);
+            m_pendingKeys.erase(remoteId);
+            m_pendingEntries.erase(remoteId);
+            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), false);
+        }
+    }
+    else if (type == "group-data") {
+        qDebug() << "WebRTC: Received group data from" << remoteId;
+        // Desktop receiving group data (e.g., when mobile invites desktop)
+        // This would need implementation if desktop can also be invited by mobile
+        qWarning() << "WebRTC: Desktop group-data reception not yet implemented";
     }
 }
 
@@ -759,7 +894,66 @@ void WebRTCService::respondToInvite(const std::string& senderId, bool accept) { 
 void WebRTCService::removeUser(const std::string&, const std::string&) {}
 void WebRTCService::fetchGroupMembers(const std::string&) {}
 void WebRTCService::requestData(const std::string&, const std::string&) {}
-void WebRTCService::sendGroupData(const std::string&, const std::string&, const std::vector<unsigned char>&, const std::vector<CipherMesh::Core::VaultEntry>&) {}
+
+void WebRTCService::sendGroupData(const std::string& recipientId, const std::string& groupName, 
+                                   const std::vector<unsigned char>& groupKey, 
+                                   const std::vector<CipherMesh::Core::VaultEntry>& entries) {
+    QString recipient = QString::fromStdString(recipientId);
+    
+    // Check if we have an active data channel
+    if (!m_dataChannels.contains(recipient) || !m_dataChannels[recipient] || !m_dataChannels[recipient]->isOpen()) {
+        qCritical() << "WebRTC: Cannot send group data - no active channel to" << recipient;
+        return;
+    }
+    
+    qDebug() << "WebRTC: Sending group data for" << QString::fromStdString(groupName) << "to" << recipient;
+    qDebug() << "WebRTC: Group key size:" << groupKey.size() << "bytes";
+    qDebug() << "WebRTC: Number of entries:" << entries.size();
+    
+    // Build the group-data message
+    QJsonObject msg;
+    msg["type"] = "group-data";
+    msg["group"] = QString::fromStdString(groupName);
+    
+    // Encode group key as base64
+    QByteArray keyBytes(reinterpret_cast<const char*>(groupKey.data()), groupKey.size());
+    msg["key"] = QString::fromUtf8(keyBytes.toBase64());
+    
+    // Serialize entries
+    QJsonArray entriesArray;
+    for (const auto& entry : entries) {
+        QJsonObject entryObj;
+        entryObj["id"] = entry.id;
+        entryObj["groupId"] = entry.groupId;
+        entryObj["title"] = QString::fromStdString(entry.title);
+        entryObj["username"] = QString::fromStdString(entry.username);
+        entryObj["password"] = QString::fromStdString(entry.password); // Already encrypted
+        entryObj["url"] = QString::fromStdString(entry.url);
+        entryObj["notes"] = QString::fromStdString(entry.notes);
+        entryObj["totpSecret"] = QString::fromStdString(entry.totpSecret);
+        entryObj["entryType"] = QString::fromStdString(entry.entryType);
+        entryObj["createdAt"] = static_cast<qint64>(entry.createdAt);
+        entryObj["updatedAt"] = static_cast<qint64>(entry.updatedAt);
+        entryObj["lastAccessed"] = static_cast<qint64>(entry.lastAccessed);
+        entryObj["passwordExpiry"] = static_cast<qint64>(entry.passwordExpiry);
+        
+        entriesArray.append(entryObj);
+    }
+    msg["entries"] = entriesArray;
+    
+    // Send the message
+    QString jsonStr = QJsonDocument(msg).toJson(QJsonDocument::Compact);
+    qDebug() << "WebRTC: Sending group data message, size:" << jsonStr.length() << "bytes";
+    
+    sendP2PMessage(recipient, msg);
+    
+    qDebug() << "WebRTC: Group data sent successfully to" << recipient;
+    
+    // Clean up pending data
+    m_pendingKeys.erase(recipient);
+    m_pendingEntries.erase(recipient);
+}
+
 void WebRTCService::onRetryTimer() {}
 
 #endif
