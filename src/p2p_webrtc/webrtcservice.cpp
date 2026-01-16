@@ -334,7 +334,7 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
                     LOGI("📦 [ICE] Adding %zu queued candidates for %s", m_earlyCandidates[sender].size(), sender.c_str());
                     for (const auto& cand : m_earlyCandidates[sender]) {
                         try {
-                            m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, ""));
+                            m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, "0"));
                         } catch (const std::exception& e) {
                             LOGE("❌ [ICE] Failed to add queued candidate: %s", e.what());
                         }
@@ -382,7 +382,7 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
                     LOGI("📦 [ICE] Adding %zu queued candidates for %s", m_earlyCandidates[sender].size(), sender.c_str());
                     for (const auto& cand : m_earlyCandidates[sender]) {
                         try {
-                            m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, ""));
+                            m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, "0"));
                         } catch (const std::exception& e) {
                             LOGE("❌ [ICE] Failed to add queued candidate: %s", e.what());
                         }
