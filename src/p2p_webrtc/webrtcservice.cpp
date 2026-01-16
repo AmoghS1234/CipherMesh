@@ -312,6 +312,20 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
             m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
+            
+            // Add any early candidates that arrived before this offer
+            if (m_earlyCandidates.count(sender)) {
+                LOGI("📦 [ICE] Adding %zu queued candidates for %s", m_earlyCandidates[sender].size(), sender.c_str());
+                for (const auto& cand : m_earlyCandidates[sender]) {
+                    try {
+                        m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, ""));
+                    } catch (const std::exception& e) {
+                        LOGE("❌ [ICE] Failed to add queued candidate: %s", e.what());
+                    }
+                }
+                m_earlyCandidates.erase(sender);
+            }
+            
             if(m_peers[sender]->localDescription().has_value() == false) {
                  m_peers[sender]->setLocalDescription(); // Triggers Answer generation
                  LOGI("✅ [SIGNAL] Generating answer for %s", sender.c_str());
@@ -323,6 +337,19 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         LOGI("📨 [SIGNAL] Received answer from %s", sender.c_str());
         if(m_peers.count(sender)) {
             m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
+            
+            // Add any early candidates that arrived before this answer
+            if (m_earlyCandidates.count(sender)) {
+                LOGI("📦 [ICE] Adding %zu queued candidates for %s", m_earlyCandidates[sender].size(), sender.c_str());
+                for (const auto& cand : m_earlyCandidates[sender]) {
+                    try {
+                        m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, ""));
+                    } catch (const std::exception& e) {
+                        LOGE("❌ [ICE] Failed to add queued candidate: %s", e.what());
+                    }
+                }
+                m_earlyCandidates.erase(sender);
+            }
         }
     }
     else if (type == "ice-candidate") {
@@ -330,7 +357,14 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         std::string mid = extractJsonValue(message, "mid"); // Optional often
         LOGI("📨 [SIGNAL] Received ICE candidate from %s", sender.c_str());
         if(m_peers.count(sender)) {
-            m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, mid));
+            try {
+                m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, mid));
+                LOGI("✅ [ICE] Added candidate from %s", sender.c_str());
+            } catch (const std::exception& e) {
+                // Remote description not set yet - queue the candidate
+                LOGI("📦 [ICE] Queueing early candidate from %s (remote desc not ready)", sender.c_str());
+                m_earlyCandidates[sender].push_back(cand);
+            }
         }
     }
     else {
