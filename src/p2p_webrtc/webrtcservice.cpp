@@ -42,6 +42,42 @@ std::string buildJson(const std::string& type, const std::string& payloadKey, co
     return "{\"type\":\"" + type + "\", \"" + payloadKey + "\":\"" + payloadVal + "\"}";
 }
 
+// Normalize SDP to ensure ICE credentials are at session level for BUNDLE compatibility
+std::string normalizeSDP(const std::string& sdp) {
+    // Find media line position
+    size_t mediaPos = sdp.find("\r\nm=");
+    if (mediaPos == std::string::npos) return sdp;
+    
+    // Check if session-level ICE credentials already exist
+    std::string sessionPart = sdp.substr(0, mediaPos);
+    if (sessionPart.find("a=ice-ufrag:") != std::string::npos) {
+        return sdp; // Already has session-level ICE credentials
+    }
+    
+    // Extract ICE credentials from media section
+    std::string mediaPart = sdp.substr(mediaPos);
+    size_t ufragPos = mediaPart.find("a=ice-ufrag:");
+    size_t pwdPos = mediaPart.find("a=ice-pwd:");
+    
+    if (ufragPos == std::string::npos || pwdPos == std::string::npos) {
+        return sdp; // No ICE credentials found
+    }
+    
+    // Extract ice-ufrag line
+    size_t ufragEnd = mediaPart.find("\r\n", ufragPos);
+    std::string iceUfrag = mediaPart.substr(ufragPos, ufragEnd - ufragPos);
+    
+    // Extract ice-pwd line
+    size_t pwdEnd = mediaPart.find("\r\n", pwdPos);
+    std::string icePwd = mediaPart.substr(pwdPos, pwdEnd - pwdPos);
+    
+    // Insert ICE credentials at session level (after BUNDLE line, before media section)
+    std::string normalized = sessionPart + "\r\n" + iceUfrag + "\r\n" + icePwd + mediaPart;
+    
+    LOGI("📝 [SDP] Normalized SDP: added session-level ICE credentials");
+    return normalized;
+}
+
 // --- Implementation ---
 
 WebRTCService::WebRTCService(const std::string& signalingUrl, const std::string& localUserId)
@@ -140,6 +176,8 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
             try {
                 std::string type = desc.typeString(); // "offer" or "answer"
                 std::string sdp = std::string(desc);
+                // Normalize SDP to ensure session-level ICE credentials for cross-platform compatibility
+                sdp = normalizeSDP(sdp);
                 LOGI("📤 [P2P] Sending %s to %s (SDP length: %zu)", type.c_str(), peerId.c_str(), sdp.length());
                 sendSignalingMessage(peerId, type, sdp);
             } catch (const std::exception& e) {
