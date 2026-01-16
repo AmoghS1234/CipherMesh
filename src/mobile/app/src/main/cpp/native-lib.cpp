@@ -104,6 +104,14 @@ void initP2P() {
         if (!userId.empty()) {
             g_p2p = new WebRTCService("wss://ciphermesh-signal-server.onrender.com", userId);
             g_p2p->onSendSignaling = sendToKotlin;
+            
+            // [FIX] Set up callback for incoming invites
+            g_p2p->onIncomingInvite = [](const std::string& senderId, const std::string& groupName) {
+                // Thread-safe storage for invites
+                std::lock_guard<std::mutex> lock(g_inviteMutex);
+                g_pendingInvites.push_back({g_inviteCounter++, senderId, groupName, ""});
+                LOGD("Received invite from %s for group %s", senderId.c_str(), groupName.c_str());
+            };
         }
     }
 }
@@ -155,19 +163,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_register
 extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_receiveSignalingMessage(JNIEnv* env, jobject, jstring json) {
     const char* c_json = env->GetStringUTFChars(json, 0);
     std::string msg(c_json);
-    std::string type = extractJsonValueJNI(msg, "type");
-
-    if (type == "offer") {
-        std::string sender = extractJsonValueJNI(msg, "sender");
-        std::string sdp = extractJsonValueJNI(msg, "sdp");
-        
-        // Lock before writing to vector
-        std::lock_guard<std::mutex> lock(g_inviteMutex);
-        g_pendingInvites.push_back({g_inviteCounter++, sender, "Shared Group", sdp});
-        LOGD("Stored Invite from %s", sender.c_str());
-    }
     
-    // Also pass to WebRTC core
+    // [FIX] Initialize P2P if needed and pass signaling message to WebRTC service
+    // The invite will come through the data channel callback (onIncomingInvite), not here
     if (!g_p2p && g_vault && !g_vault->isLocked()) initP2P();
     if (g_p2p) g_p2p->handleSignalingMessage(msg);
 
