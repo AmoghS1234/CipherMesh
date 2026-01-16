@@ -360,6 +360,9 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
             return;
         }
         
+        // Normalize SDP to ensure session-level ICE credentials for BUNDLE compatibility
+        sdp = normalizeSDP(sdp);
+        
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
             try {
@@ -408,6 +411,9 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
             LOGE("❌ [SIGNAL] SDP content: %s", sdp.c_str());
             return;
         }
+        
+        // Normalize SDP to ensure session-level ICE credentials for BUNDLE compatibility
+        sdp = normalizeSDP(sdp);
         
         if(m_peers.count(sender)) {
             try {
