@@ -344,6 +344,18 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
     } 
     else if (type == "offer") {
         std::string sdp = extractJsonValue(message, "sdp");
+        
+        // [FIX] If we already have a peer connection, close it first
+        // This handles simultaneous connection attempts
+        if (m_peers.count(sender)) {
+            LOGI("Closing existing peer connection for %s before processing offer", sender.c_str());
+            m_peers[sender]->close();
+            m_peers.erase(sender);
+            if (m_channels.count(sender)) {
+                m_channels.erase(sender);
+            }
+        }
+        
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
             auto pc = m_peers[sender];
@@ -356,6 +368,14 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
                     auto desc = pc->localDescription();
                     if (desc.has_value()) {
                         std::string answerSdp = std::string(*desc);
+                        
+                        // [FIX] Manually fix SDP to replace actpass with passive in answer
+                        size_t pos = answerSdp.find("a=setup:actpass");
+                        if (pos != std::string::npos) {
+                            answerSdp.replace(pos, 15, "a=setup:passive");
+                            LOGI("Fixed answer SDP - replaced actpass with passive");
+                        }
+                        
                         LOGI("Sending answer to %s with ICE candidates", sender.c_str());
                         sendSignalingMessage(sender, "answer", answerSdp);
                     }
@@ -365,8 +385,8 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
             pc->setRemoteDescription(rtc::Description(sdp, type));
             
             if(pc->localDescription().has_value() == false) {
-                 // [FIX] Set role to answer to avoid "actpass" in answer SDP
-                 pc->setLocalDescription(rtc::Description::Type::Answer); // Triggers Answer generation and ICE gathering
+                 // Create answer - libdatachannel will auto-generate it
+                 pc->setLocalDescription();
             }
             // [FIX] Flush any early ICE candidates that arrived before the offer
             flushEarlyCandidatesFor(sender);
@@ -836,6 +856,15 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
     QString sdpOffer = obj["sdp"].toString();
     
     QMetaObject::invokeMethod(this, [this, senderId, sdpOffer]() {
+        // [FIX] If we already have a peer connection for this user, close it first
+        // This handles the case where both sides try to connect simultaneously
+        if (m_peerConnections.contains(senderId)) {
+            qDebug() << "WebRTC: Closing existing peer connection for" << senderId << "before processing offer";
+            m_peerConnections[senderId]->close();
+            m_peerConnections.remove(senderId);
+            m_dataChannels.remove(senderId);
+        }
+        
         setupPeerConnection(senderId, false);
         std::shared_ptr<rtc::PeerConnection> pc = m_peerConnections[senderId];
         
@@ -844,8 +873,16 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
                 QMetaObject::invokeMethod(this, [this, senderId, pc]() {
                     auto desc = pc->localDescription();
                     if (desc.has_value()) {
+                        // [FIX] Manually fix SDP to replace actpass with passive in answer
+                        std::string sdpStr = std::string(*desc);
+                        size_t pos = sdpStr.find("a=setup:actpass");
+                        if (pos != std::string::npos) {
+                            sdpStr.replace(pos, 15, "a=setup:passive");
+                            qDebug() << "WebRTC: Fixed answer SDP - replaced actpass with passive";
+                        }
+                        
                         QJsonObject payload; payload["type"] = "answer";
-                        payload["sdp"] = QString::fromStdString(std::string(*desc));
+                        payload["sdp"] = QString::fromStdString(sdpStr);
                         sendSignalingMessage(senderId, payload);
                         flushEarlyCandidatesFor(senderId);
                     }
@@ -853,9 +890,13 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
             }
         });
         
-        pc->setRemoteDescription(rtc::Description(sdpOffer.toStdString(), "offer"));
-        // [FIX] Set role to passive for answerer to avoid "actpass" in answer
-        pc->setLocalDescription(rtc::Description::Type::Answer);
+        try {
+            pc->setRemoteDescription(rtc::Description(sdpOffer.toStdString(), "offer"));
+            // Create answer - libdatachannel will auto-generate it based on the offer
+            pc->setLocalDescription();
+        } catch (const std::exception& e) {
+            qCritical() << "WebRTC: Error setting descriptions:" << e.what();
+        }
     }, Qt::QueuedConnection);
 }
 
