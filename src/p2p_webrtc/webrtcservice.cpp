@@ -365,7 +365,8 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
             pc->setRemoteDescription(rtc::Description(sdp, type));
             
             if(pc->localDescription().has_value() == false) {
-                 pc->setLocalDescription(); // Triggers Answer generation and ICE gathering
+                 // [FIX] Set role to answer to avoid "actpass" in answer SDP
+                 pc->setLocalDescription(rtc::Description::Type::Answer); // Triggers Answer generation and ICE gathering
             }
             // [FIX] Flush any early ICE candidates that arrived before the offer
             flushEarlyCandidatesFor(sender);
@@ -853,7 +854,8 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
         });
         
         pc->setRemoteDescription(rtc::Description(sdpOffer.toStdString(), "offer"));
-        pc->setLocalDescription();
+        // [FIX] Set role to passive for answerer to avoid "actpass" in answer
+        pc->setLocalDescription(rtc::Description::Type::Answer);
     }, Qt::QueuedConnection);
 }
 
