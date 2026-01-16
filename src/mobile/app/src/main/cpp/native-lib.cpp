@@ -17,6 +17,7 @@ WebRTCService* g_p2p = nullptr;
 JavaVM* g_jvm = nullptr;
 jobject g_callbackObj = nullptr;
 jmethodID g_sendMethod = nullptr;
+jobject g_activityObj = nullptr; // [NEW] Store activity reference for UI updates
 
 // [FIX] Thread-safe storage for invites
 struct PendingInvite {
@@ -28,6 +29,34 @@ struct PendingInvite {
 std::vector<PendingInvite> g_pendingInvites;
 std::mutex g_inviteMutex; // Locks the vector
 int g_inviteCounter = 1;
+
+// [NEW] Helper to show toast from C++
+void showToastFromNative(const std::string& message) {
+    if (!g_jvm || !g_activityObj) return;
+    
+    JNIEnv* env;
+    bool attached = false;
+    if (g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    
+    jstring jMsg = env->NewStringUTF(message.c_str());
+    jclass toastClass = env->FindClass("android/widget/Toast");
+    jmethodID makeTextMethod = env->GetStaticMethodID(toastClass, "makeText",
+        "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;");
+    jmethodID showMethod = env->GetMethodID(toastClass, "show", "()V");
+    
+    jobject toast = env->CallStaticObjectMethod(toastClass, makeTextMethod, g_activityObj, jMsg, 1);
+    if (toast) {
+        env->CallVoidMethod(toast, showMethod);
+        env->DeleteLocalRef(toast);
+    }
+    
+    env->DeleteLocalRef(jMsg);
+    
+    if (attached) g_jvm->DetachCurrentThread();
+}
 
 // --- Helpers ---
 
@@ -112,6 +141,10 @@ void initP2P() {
                 std::lock_guard<std::mutex> lock(g_inviteMutex);
                 g_pendingInvites.push_back({g_inviteCounter++, senderId, groupName, ""});
                 LOGD("Received invite from %s for group %s", senderId.c_str(), groupName.c_str());
+                
+                // [NEW] Show toast notification
+                std::string toastMsg = "Group invite from " + senderId + " for '" + groupName + "'";
+                showToastFromNative(toastMsg);
             };
             
             // [NEW] Set up callback for receiving group data
@@ -189,6 +222,12 @@ void initP2P() {
 }
 
 // --- Exports ---
+
+extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_setActivityContext(JNIEnv* env, jobject, jobject activity) {
+    if (g_activityObj) env->DeleteGlobalRef(g_activityObj);
+    g_activityObj = env->NewGlobalRef(activity);
+    LOGD("Activity context registered for native callbacks");
+}
 
 extern "C" JNIEXPORT void JNICALL Java_com_ciphermesh_mobile_core_Vault_init(JNIEnv* env, jobject, jstring dbPath) {
     const char* path = env->GetStringUTFChars(dbPath, 0);

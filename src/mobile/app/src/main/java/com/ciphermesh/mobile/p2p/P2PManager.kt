@@ -101,10 +101,8 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
         try {
             val json = JSONObject(jsonStr)
             val type = json.optString("type")
-            if (type == "offer") {
-                val sender = json.optString("sender")
-                Toast.makeText(activity, "Incoming Invite from $sender", Toast.LENGTH_LONG).show()
-            }
+            // [REMOVED] Don't show toast on 'offer' - wait for actual invite-request
+            // The toast is now shown from native code when invite-request arrives
         } catch (e: Exception) { }
     }
 }

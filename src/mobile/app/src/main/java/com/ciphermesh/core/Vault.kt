@@ -14,6 +14,7 @@ class Vault {
 
     // --- Core Lifecycle ---
     external fun init(dbPath: String)
+    external fun setActivityContext(activity: android.app.Activity)
     external fun createAccount(dbPath: String, username: String, masterPass: String): Boolean
     external fun unlock(masterPass: String): Boolean
     external fun isLocked(): Boolean

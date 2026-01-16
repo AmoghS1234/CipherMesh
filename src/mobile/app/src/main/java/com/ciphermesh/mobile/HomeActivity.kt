@@ -55,6 +55,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         // 1. Init Core
         val dbPath = File(filesDir, "vault.db").absolutePath
         vault.init(dbPath)
+        vault.setActivityContext(this)
 
         // 2. Auth Check
         if (vault.isLocked()) {
