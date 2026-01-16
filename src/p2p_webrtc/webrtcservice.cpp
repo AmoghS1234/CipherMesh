@@ -113,22 +113,56 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
     QJsonObject obj = doc.object();
     QString type = obj["type"].toString();
 
+    qDebug() << "DEBUG: Received P2P message from" << remoteId << "- Type:" << type;
+
     if (type == "invite-request") {
-        if (onIncomingInvite) onIncomingInvite(remoteId.toStdString(), obj["group"].toString().toStdString());
+        QString groupName = obj["group"].toString();
+        qDebug() << "DEBUG: Received invite-request for group:" << groupName << "from" << remoteId;
+        if (onIncomingInvite) onIncomingInvite(remoteId.toStdString(), groupName.toStdString());
     } 
     else if (type == "invite-accept") {
+        QString groupName = obj["group"].toString();
+        qDebug() << "DEBUG: Received invite-accept for group:" << groupName << "from" << remoteId;
         if (m_pendingInvites.contains(remoteId)) {
-            sendGroupData(remoteId.toStdString(), m_pendingInvites[remoteId].toStdString(), m_pendingKeys[remoteId], m_pendingEntries[remoteId]);
+            qDebug() << "DEBUG: Sending group data to" << remoteId << "for group:" << m_pendingInvites[remoteId];
+            sendGroupData(remoteId.toStdString(), m_pendingInvites[remoteId].toStdString(), 
+                          m_pendingKeys[remoteId], m_pendingEntries[remoteId]);
+            // Clean up pending data after sending
             m_pendingInvites.remove(remoteId);
-            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), obj["group"].toString().toStdString(), true);
+            m_pendingKeys.erase(remoteId);
+            m_pendingEntries.erase(remoteId);
+            qDebug() << "DEBUG: Cleaned up pending invite data for" << remoteId;
+            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), true);
+        } else {
+            qWarning() << "WARNING: Received invite-accept from" << remoteId << "but no pending invite found";
+        }
+    }
+    else if (type == "invite-reject") {
+        QString groupName = obj["group"].toString();
+        qDebug() << "DEBUG: Received invite-reject for group:" << groupName << "from" << remoteId;
+        if (m_pendingInvites.contains(remoteId)) {
+            // Clean up pending data
+            m_pendingInvites.remove(remoteId);
+            m_pendingKeys.erase(remoteId);
+            m_pendingEntries.erase(remoteId);
+            qDebug() << "DEBUG: Cleaned up pending invite data after rejection from" << remoteId;
+            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), false);
+        } else {
+            qWarning() << "WARNING: Received invite-reject from" << remoteId << "but no pending invite found";
         }
     }
     else if (type == "group-data") {
+        QString groupName = obj["group"].toString();
         QString keyBase64 = obj["key"].toString();
+        qDebug() << "DEBUG: Received group-data for group:" << groupName << "from" << remoteId;
+        qDebug() << "DEBUG: Key Base64 length:" << keyBase64.length();
+        
         std::string base64Str = keyBase64.toStdString();
         std::vector<unsigned char> keyContainer(base64Str.begin(), base64Str.end());
         
         QJsonArray entriesArr = obj["entries"].toArray();
+        qDebug() << "DEBUG: Number of entries:" << entriesArr.size();
+        
         std::vector<CipherMesh::Core::VaultEntry> importedEntries;
         for (const auto& val : entriesArr) {
             QJsonObject eObj = val.toObject();
@@ -139,16 +173,21 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
             e.notes = eObj["notes"].toString().toStdString();
             importedEntries.push_back(e);
         }
-        if (onGroupDataReceived) onGroupDataReceived(remoteId.toStdString(), obj["group"].toString().toStdString(), keyContainer, importedEntries);
+        qDebug() << "DEBUG: Triggering onGroupDataReceived callback";
+        if (onGroupDataReceived) onGroupDataReceived(remoteId.toStdString(), groupName.toStdString(), keyContainer, importedEntries);
     }
     else if (type == "request-data") {
+        QString groupName = obj["group"].toString();
         std::string requesterPubKey = obj["pubKey"].toString().toStdString();
-        if (onDataRequested) onDataRequested(remoteId.toStdString(), obj["group"].toString().toStdString(), requesterPubKey);
+        qDebug() << "DEBUG: Received request-data for group:" << groupName << "from" << remoteId;
+        if (onDataRequested) onDataRequested(remoteId.toStdString(), groupName.toStdString(), requesterPubKey);
     }
 }
 
 void WebRTCService::inviteUser(const std::string& groupName, const std::string& userEmail, const std::vector<unsigned char>& groupKey, const std::vector<CipherMesh::Core::VaultEntry>& entries) {
     QString remoteId = QString::fromStdString(userEmail);
+    qDebug() << "DEBUG: inviteUser called - Group:" << QString::fromStdString(groupName) << "User:" << remoteId << "Entries:" << entries.size();
+    
     if (m_peerConnections.contains(remoteId)) { m_peerConnections[remoteId]->close(); m_peerConnections.remove(remoteId); }
     m_dataChannels.remove(remoteId);
     
@@ -156,6 +195,7 @@ void WebRTCService::inviteUser(const std::string& groupName, const std::string& 
     m_pendingKeys[remoteId] = groupKey;
     m_pendingEntries[remoteId] = entries;
     
+    qDebug() << "DEBUG: Stored pending invite for" << remoteId << "- Starting peer connection setup";
     QMetaObject::invokeMethod(this, [this, remoteId]() { setupPeerConnection(remoteId, true); createAndSendOffer(remoteId); }, Qt::QueuedConnection);
     if (onInviteStatus) onInviteStatus(true, "Connecting...");
 }
@@ -225,9 +265,13 @@ void WebRTCService::setupPeerConnection(const QString& remoteId, bool isOfferer)
             m_dataChannels[remoteId] = dc;
             dc->onOpen([this, remoteId]() {
                  QMetaObject::invokeMethod(this, [this, remoteId]() {
+                    qDebug() << "DEBUG: Data channel opened for" << remoteId;
                     if (m_pendingInvites.contains(remoteId)) {
+                        qDebug() << "DEBUG: Sending invite-request to" << remoteId << "for group:" << m_pendingInvites[remoteId];
                         QJsonObject req; req["type"] = "invite-request"; req["group"] = m_pendingInvites[remoteId];
                         sendP2PMessage(remoteId, req);
+                    } else {
+                        qDebug() << "DEBUG: No pending invite for" << remoteId << "- this is likely an incoming connection";
                     }
                 }, Qt::QueuedConnection);
             });
@@ -312,9 +356,13 @@ void WebRTCService::flushEarlyCandidatesFor(const QString& peerId) {
 
 void WebRTCService::sendGroupData(const std::string& recipientId, const std::string& groupName, const std::vector<unsigned char>& groupKey, const std::vector<CipherMesh::Core::VaultEntry>& entries) {
     QString remoteId = QString::fromStdString(recipientId);
+    qDebug() << "DEBUG: sendGroupData called - Recipient:" << remoteId << "Group:" << QString::fromStdString(groupName) << "Entries:" << entries.size();
+    
     QJsonObject keyMsg; keyMsg["type"] = "group-data"; keyMsg["group"] = QString::fromStdString(groupName);
     QByteArray keyBytes(reinterpret_cast<const char*>(groupKey.data()), groupKey.size());
     keyMsg["key"] = QString(keyBytes.toBase64());
+    qDebug() << "DEBUG: Group key size:" << groupKey.size() << "Base64 length:" << QString(keyBytes.toBase64()).length();
+    
     QJsonArray entriesArr;
     for (const auto& entry : entries) {
         QJsonObject eObj; eObj["title"] = QString::fromStdString(entry.title); eObj["username"] = QString::fromStdString(entry.username); 
@@ -322,12 +370,16 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
         entriesArr.append(eObj);
     }
     keyMsg["entries"] = entriesArr;
+    qDebug() << "DEBUG: Sending group-data message to" << remoteId << "- Message size:" << QJsonDocument(keyMsg).toJson(QJsonDocument::Compact).size() << "bytes";
     sendP2PMessage(remoteId, keyMsg);
 }
 
 void WebRTCService::sendP2PMessage(const QString& remoteId, const QJsonObject& payload) {
     if (m_dataChannels.contains(remoteId) && m_dataChannels[remoteId] && m_dataChannels[remoteId]->isOpen()) {
+        qDebug() << "DEBUG: sendP2PMessage to" << remoteId << "- Type:" << payload["type"].toString();
         m_dataChannels[remoteId]->send(QJsonDocument(payload).toJson(QJsonDocument::Compact).toStdString());
+    } else {
+        qWarning() << "WARNING: Cannot send message to" << remoteId << "- Data channel not available or not open";
     }
 }
 
@@ -361,7 +413,13 @@ void WebRTCService::setAuthenticated(bool authenticated) {
 }
 
 void WebRTCService::cancelInvite(const std::string& userId) { m_pendingInvites.remove(QString::fromStdString(userId)); }
-void WebRTCService::respondToInvite(const std::string& senderId, bool accept) { QJsonObject resp; resp["type"] = accept ? "invite-accept" : "invite-reject"; sendP2PMessage(QString::fromStdString(senderId), resp); }
+void WebRTCService::respondToInvite(const std::string& senderId, const std::string& groupName, bool accept) { 
+    qDebug() << "DEBUG: Responding to invite from" << QString::fromStdString(senderId) << "for group:" << QString::fromStdString(groupName) << "- Accept:" << accept;
+    QJsonObject resp; 
+    resp["type"] = accept ? "invite-accept" : "invite-reject"; 
+    resp["group"] = QString::fromStdString(groupName);
+    sendP2PMessage(QString::fromStdString(senderId), resp); 
+}
 void WebRTCService::removeUser(const std::string&, const std::string&) {}
 void WebRTCService::fetchGroupMembers(const std::string&) {}
 void WebRTCService::handleOnlinePing(const QJsonObject&) {}

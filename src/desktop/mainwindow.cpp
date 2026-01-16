@@ -424,7 +424,7 @@ void MainWindow::onAcceptInviteClicked() {
     // Update the invite status in the database so we can request data when sender comes online
     m_vault->updatePendingInviteStatus(m_currentSelectedInviteId, "accepted");
     
-    m_p2pService->respondToInvite(target.senderId, true);
+    m_p2pService->respondToInvite(target.senderId, target.groupName, true);
     
     m_inviteInfoLabel->setText("<b>Acceptance Sent!</b><br>Waiting for sender to transfer data...<br>(They must be online)");
     m_acceptInviteButton->setEnabled(false);
@@ -438,7 +438,7 @@ void MainWindow::onRejectInviteClicked() {
         for (const auto& inv : invites) {
             if (inv.id == m_currentSelectedInviteId) {
                 // Send rejection to the sender
-                m_p2pService->respondToInvite(inv.senderId, false);
+                m_p2pService->respondToInvite(inv.senderId, inv.groupName, false);
                 break;
             }
         }

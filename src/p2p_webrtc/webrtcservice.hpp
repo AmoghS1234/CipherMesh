@@ -28,7 +28,7 @@ public:
     
     void cancelInvite(const std::string& userId) override;
     
-    void respondToInvite(const std::string& senderId, bool accept) override;
+    void respondToInvite(const std::string& senderId, const std::string& groupName, bool accept) override;
     
     // Request data from a peer (includes sending our Public Key)
     void requestData(const std::string& senderId, const std::string& groupName) override;

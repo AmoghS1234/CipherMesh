@@ -19,7 +19,7 @@ public:
                             const std::vector<unsigned char>& groupKey,
                             const std::vector<CipherMesh::Core::VaultEntry>& entries) = 0;
     virtual void cancelInvite(const std::string& userId) = 0;
-    virtual void respondToInvite(const std::string& senderId, bool accept) = 0;
+    virtual void respondToInvite(const std::string& senderId, const std::string& groupName, bool accept) = 0;
     virtual void requestData(const std::string& senderId, const std::string& groupName) = 0;
     virtual void sendGroupData(const std::string& recipientId, const std::string& groupName,
                                const std::vector<unsigned char>& groupKey,
