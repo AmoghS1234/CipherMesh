@@ -367,25 +367,8 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
                     LOGI("ICE gathering COMPLETE for %s (answer)", sender.c_str());
                     auto desc = pc->localDescription();
                     if (desc.has_value()) {
-                        std::string answerSdp = std::string(*desc);
-                        
-                        // [FIX] Manually fix SDP to replace actpass with passive in answer
-                        size_t pos = answerSdp.find("a=setup:actpass");
-                        if (pos != std::string::npos) {
-                            answerSdp.replace(pos, 15, "a=setup:passive");
-                            LOGI("Fixed answer SDP - replaced actpass with passive");
-                            
-                            // [CRITICAL] Re-apply the modified SDP to our peer connection
-                            // This ensures our DTLS layer uses the same role we're advertising
-                            try {
-                                pc->setLocalDescription(rtc::Description(answerSdp, "answer"));
-                            } catch (const std::exception& e) {
-                                LOGE("Failed to re-apply fixed SDP: %s", e.what());
-                            }
-                        }
-                        
                         LOGI("Sending answer to %s with ICE candidates", sender.c_str());
-                        sendSignalingMessage(sender, "answer", answerSdp);
+                        sendSignalingMessage(sender, "answer", std::string(*desc));
                     }
                 }
             });
@@ -882,23 +865,8 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
                     auto desc = pc->localDescription();
                     if (desc.has_value()) {
                         // [FIX] Manually fix SDP to replace actpass with passive in answer
-                        std::string sdpStr = std::string(*desc);
-                        size_t pos = sdpStr.find("a=setup:actpass");
-                        if (pos != std::string::npos) {
-                            sdpStr.replace(pos, 15, "a=setup:passive");
-                            qDebug() << "WebRTC: Fixed answer SDP - replaced actpass with passive";
-                            
-                            // [CRITICAL] Re-apply the modified SDP to our peer connection
-                            // This ensures our DTLS layer uses the same role we're advertising
-                            try {
-                                pc->setLocalDescription(rtc::Description(sdpStr, "answer"));
-                            } catch (const std::exception& e) {
-                                qWarning() << "WebRTC: Failed to re-apply fixed SDP:" << e.what();
-                            }
-                        }
-                        
                         QJsonObject payload; payload["type"] = "answer";
-                        payload["sdp"] = QString::fromStdString(sdpStr);
+                        payload["sdp"] = QString::fromStdString(std::string(*desc));
                         sendSignalingMessage(senderId, payload);
                         flushEarlyCandidatesFor(senderId);
                     }
