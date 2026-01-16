@@ -203,20 +203,18 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         auto dc = pc->createDataChannel("ciphermesh-data");
         setupDataChannel(dc, peerId);
         
-        // Set gathering state callback ONCE here for offerer
-        pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
-            if (state == rtc::PeerConnection::GatheringState::Complete) {
-                LOGI("ICE gathering COMPLETE for %s, sending offer", peerId.c_str());
-                auto desc = pc->localDescription();
-                if (desc.has_value()) {
-                    std::string type = desc->typeString();
-                    std::string sdp = std::string(*desc);
-                    sendSignalingMessage(peerId, type, sdp);
-                }
-            }
-        });
-        
         pc->setLocalDescription(); // This triggers gathering
+        
+        // Send offer immediately (trickle ICE - candidates sent separately)
+        auto desc = pc->localDescription();
+        if (desc.has_value()) {
+            std::string type = desc->typeString();
+            std::string sdp = std::string(*desc);
+            LOGI("Sending offer to %s (trickle ICE)", peerId.c_str());
+            sendSignalingMessage(peerId, type, sdp);
+        } else {
+            LOGE("Failed to get local description for offer to %s", peerId.c_str());
+        }
     }
 }
 
