@@ -325,7 +325,7 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
             try {
-                m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
+                m_peers[sender]->setRemoteDescription(rtc::Description(sdp, rtc::Description::Type::Offer));
                 LOGI("✅ [SIGNAL] Set remote offer for %s", sender.c_str());
                 
                 // Add any early candidates that arrived before this offer
@@ -372,7 +372,7 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         
         if(m_peers.count(sender)) {
             try {
-                m_peers[sender]->setRemoteDescription(rtc::Description(sdp, type));
+                m_peers[sender]->setRemoteDescription(rtc::Description(sdp, rtc::Description::Type::Answer));
                 LOGI("✅ [SIGNAL] Set remote answer for %s", sender.c_str());
                 
                 // Add any early candidates that arrived before this answer
