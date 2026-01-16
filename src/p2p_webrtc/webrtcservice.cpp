@@ -375,6 +375,14 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         setupPeerConnection(sender, false); // False = We are Answerer
         if(m_peers.count(sender)) {
             try {
+                // Android requires setLocalDescription() BEFORE setRemoteDescription()
+                // Call setLocalDescription() first (will trigger answer generation)
+                if(m_peers[sender]->localDescription().has_value() == false) {
+                     m_peers[sender]->setLocalDescription(); // Triggers Answer generation callback
+                     LOGI("✅ [SIGNAL] Generating answer for %s (called BEFORE setRemoteDescription)", sender.c_str());
+                }
+                
+                // Now set the remote offer
                 rtc::Description desc(sdp, "offer");
                 m_peers[sender]->setRemoteDescription(desc);
                 LOGI("✅ [SIGNAL] Set remote offer for %s", sender.c_str());
@@ -390,11 +398,6 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
                         }
                     }
                     m_earlyCandidates.erase(sender);
-                }
-                
-                if(m_peers[sender]->localDescription().has_value() == false) {
-                     m_peers[sender]->setLocalDescription(); // Triggers Answer generation
-                     LOGI("✅ [SIGNAL] Generating answer for %s", sender.c_str());
                 }
             } catch (const std::exception& e) {
                 LOGE("❌ [SIGNAL] CRITICAL: Failed to process offer from %s: %s", sender.c_str(), e.what());
