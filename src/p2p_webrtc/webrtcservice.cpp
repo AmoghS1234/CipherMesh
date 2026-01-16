@@ -374,6 +374,14 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
                         if (pos != std::string::npos) {
                             answerSdp.replace(pos, 15, "a=setup:passive");
                             LOGI("Fixed answer SDP - replaced actpass with passive");
+                            
+                            // [CRITICAL] Re-apply the modified SDP to our peer connection
+                            // This ensures our DTLS layer uses the same role we're advertising
+                            try {
+                                pc->setLocalDescription(rtc::Description(answerSdp, "answer"));
+                            } catch (const std::exception& e) {
+                                LOGE("Failed to re-apply fixed SDP: %s", e.what());
+                            }
                         }
                         
                         LOGI("Sending answer to %s with ICE candidates", sender.c_str());
@@ -879,6 +887,14 @@ void WebRTCService::handleOffer(const QJsonObject& obj) {
                         if (pos != std::string::npos) {
                             sdpStr.replace(pos, 15, "a=setup:passive");
                             qDebug() << "WebRTC: Fixed answer SDP - replaced actpass with passive";
+                            
+                            // [CRITICAL] Re-apply the modified SDP to our peer connection
+                            // This ensures our DTLS layer uses the same role we're advertising
+                            try {
+                                pc->setLocalDescription(rtc::Description(sdpStr, "answer"));
+                            } catch (const std::exception& e) {
+                                qWarning() << "WebRTC: Failed to re-apply fixed SDP:" << e.what();
+                            }
                         }
                         
                         QJsonObject payload; payload["type"] = "answer";
