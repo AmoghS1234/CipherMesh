@@ -284,7 +284,88 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val btnInvite = dialogView.findViewById<Button>(R.id.btnInvite)
         val membersLayout = dialogView.findViewById<LinearLayout>(R.id.layoutMembersList)
 
-        // ... (Keep Member List loading logic) ...
+        // Load and display group members
+        fun loadMembers() {
+            membersLayout.removeAllViews()
+            val members = vault.getGroupMembers(currentGroup)
+            val owner = vault.getGroupOwner(currentGroup)
+            val myId = vault.getUserId()
+            
+            if (members.isEmpty()) {
+                val emptyText = TextView(this).apply {
+                    text = "No members yet"
+                    setPadding(16, 16, 16, 16)
+                    setTextColor(getColor(android.R.color.darker_gray))
+                }
+                membersLayout.addView(emptyText)
+            } else {
+                for (memberId in members) {
+                    val memberView = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        setPadding(12, 12, 12, 12)
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        )
+                    }
+                    
+                    val memberText = TextView(this).apply {
+                        text = when {
+                            memberId == myId -> "$memberId (You)"
+                            memberId == owner -> "$memberId ★ Owner"
+                            else -> memberId
+                        }
+                        layoutParams = LinearLayout.LayoutParams(
+                            0,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            1f
+                        )
+                        setTextColor(when {
+                            memberId == owner -> getColor(android.R.color.holo_green_dark)
+                            memberId == myId -> getColor(android.R.color.holo_blue_light)
+                            else -> getColor(android.R.color.white)
+                        })
+                        setPadding(8, 4, 8, 4)
+                    }
+                    
+                    memberView.addView(memberText)
+                    
+                    // Add remove button if not self and not owner
+                    if (memberId != myId && memberId != owner && myId == owner) {
+                        val removeBtn = Button(this).apply {
+                            text = "Remove"
+                            setTextColor(getColor(android.R.color.holo_red_light))
+                            setBackgroundColor(Color.TRANSPARENT)
+                            setPadding(16, 8, 16, 8)
+                            setOnClickListener {
+                                vault.removeUser(currentGroup, memberId)
+                                loadMembers()
+                                Toast.makeText(this@HomeActivity, "User removed", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        memberView.addView(removeBtn)
+                    }
+                    
+                    membersLayout.addView(memberView)
+                    
+                    // Add divider
+                    if (memberId != members.last()) {
+                        val divider = View(this).apply {
+                            layoutParams = LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                1
+                            ).apply {
+                                setMargins(0, 4, 0, 4)
+                            }
+                            setBackgroundColor(getColor(android.R.color.darker_gray))
+                        }
+                        membersLayout.addView(divider)
+                    }
+                }
+            }
+        }
+        
+        loadMembers()
 
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Manage '$currentGroup'")
@@ -302,7 +383,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     runOnUiThread {
                         Toast.makeText(this, "Invite Sent!", Toast.LENGTH_SHORT).show()
                         inputId.setText("")
-                        dialog.dismiss() 
+                        loadMembers() // Refresh members list
                     }
                 }.start()
             } else {
