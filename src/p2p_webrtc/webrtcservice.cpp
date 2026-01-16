@@ -17,6 +17,36 @@
 
 // --- JSON Helpers ---
 
+std::string unescapeString(const std::string& str) {
+    std::string result;
+    result.reserve(str.length());
+    
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == '\\' && i + 1 < str.length()) {
+            char next = str[i + 1];
+            if (next == 'r') {
+                result += '\r';
+                ++i;
+            } else if (next == 'n') {
+                result += '\n';
+                ++i;
+            } else if (next == 't') {
+                result += '\t';
+                ++i;
+            } else if (next == '\"' || next == '\\') {
+                result += next;
+                ++i;
+            } else {
+                result += str[i];
+            }
+        } else {
+            result += str[i];
+        }
+    }
+    
+    return result;
+}
+
 std::string extractJsonValue(const std::string& json, const std::string& key) {
     std::string search = "\"" + key + "\":";
     size_t start = json.find(search);
@@ -34,7 +64,14 @@ std::string extractJsonValue(const std::string& json, const std::string& key) {
     else end = json.find_first_of(",}", start);
     
     if (end == std::string::npos) return "";
-    return json.substr(start, end - start);
+    std::string value = json.substr(start, end - start);
+    
+    // Unescape string values (important for SDP which contains \r\n)
+    if (isString) {
+        value = unescapeString(value);
+    }
+    
+    return value;
 }
 
 // Simple JSON builder to replace QJsonObject
