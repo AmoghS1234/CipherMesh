@@ -595,4 +595,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             setTheme(themes[themeIndex])
         }
     }
+    
+    // [NEW] Helper method for native code to show toasts on UI thread
+    fun showToast(message: String) {
+        runOnUiThread {
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
+    }
 }

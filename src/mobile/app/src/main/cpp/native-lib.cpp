@@ -30,7 +30,7 @@ std::vector<PendingInvite> g_pendingInvites;
 std::mutex g_inviteMutex; // Locks the vector
 int g_inviteCounter = 1;
 
-// [NEW] Helper to show toast from C++
+// [NEW] Helper to show toast from C++ - Posts to UI thread
 void showToastFromNative(const std::string& message) {
     if (!g_jvm || !g_activityObj) return;
     
@@ -42,18 +42,15 @@ void showToastFromNative(const std::string& message) {
     }
     
     jstring jMsg = env->NewStringUTF(message.c_str());
-    jclass toastClass = env->FindClass("android/widget/Toast");
-    jmethodID makeTextMethod = env->GetStaticMethodID(toastClass, "makeText",
-        "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;");
-    jmethodID showMethod = env->GetMethodID(toastClass, "show", "()V");
+    jclass activityClass = env->GetObjectClass(g_activityObj);
+    jmethodID showToastMethod = env->GetMethodID(activityClass, "showToast", "(Ljava/lang/String;)V");
     
-    jobject toast = env->CallStaticObjectMethod(toastClass, makeTextMethod, g_activityObj, jMsg, 1);
-    if (toast) {
-        env->CallVoidMethod(toast, showMethod);
-        env->DeleteLocalRef(toast);
+    if (showToastMethod) {
+        env->CallVoidMethod(g_activityObj, showToastMethod, jMsg);
     }
     
     env->DeleteLocalRef(jMsg);
+    env->DeleteLocalRef(activityClass);
     
     if (attached) g_jvm->DetachCurrentThread();
 }
