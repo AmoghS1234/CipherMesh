@@ -145,6 +145,12 @@ Java_com_ciphermesh_mobile_core_Vault_unlock(JNIEnv* env, jobject thiz, jstring 
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_isLocked(JNIEnv* env, jobject thiz) {
+    if (!g_vault) return true;
+    return g_vault->isLocked();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_ciphermesh_mobile_core_Vault_registerUser(JNIEnv* env, jobject thiz, jstring db_path, jstring password) {
     const char* path = env->GetStringUTFChars(db_path, 0);
     const char* pwd = env->GetStringUTFChars(password, 0);
