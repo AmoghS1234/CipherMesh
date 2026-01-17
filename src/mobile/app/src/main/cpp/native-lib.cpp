@@ -119,15 +119,20 @@ std::vector<unsigned char> decodeBase64(const std::string& in) {
 // =============================================================
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_ciphermesh_mobile_core_Vault_init(JNIEnv* env, jobject thiz, jstring db_path, jobject context) {
-    if (g_context) env->DeleteGlobalRef(g_context);
-    g_context = env->NewGlobalRef(context);
-
+Java_com_ciphermesh_mobile_core_Vault_init(JNIEnv* env, jobject thiz, jstring db_path) {
     const char* path = env->GetStringUTFChars(db_path, 0);
+    if (!path) return; // [FIX] Check for null
+    
     g_vault = std::make_unique<CipherMesh::Core::Vault>();
     g_vault->connect(path);
     env->ReleaseStringUTFChars(db_path, path);
     LOGI("Vault Initialized at: %s", path);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_setActivityContext(JNIEnv* env, jobject thiz, jobject activity) {
+    if (g_context) env->DeleteGlobalRef(g_context);
+    g_context = env->NewGlobalRef(activity);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
