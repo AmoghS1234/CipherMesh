@@ -48,6 +48,7 @@ public:
     
     // [FIX] Added this method which was missing but called by Vault.cpp
     static std::string decryptAsymmetric(const std::string& ciphertextBase64, const std::vector<unsigned char>& privateKey);
+    static std::string encryptAsymmetric(const std::string& plaintext, const std::vector<unsigned char>& recipientPubKey);
 
     static std::vector<unsigned char> decryptSealed(const std::vector<unsigned char>& ciphertext, 
                                                     const std::vector<unsigned char>& recipientPubKey, 

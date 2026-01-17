@@ -161,6 +161,13 @@ std::string Crypto::decryptAsymmetric(const std::string& ciphertextBase64, const
     return std::string(decrypted.begin(), decrypted.end());
 }
 
+// [FIX] Implemented encryptAsymmetric to support Vault.cpp calls
+std::string Crypto::encryptAsymmetric(const std::string& plaintext, const std::vector<unsigned char>& recipientPubKey) {
+    std::vector<unsigned char> plaintextVec(plaintext.begin(), plaintext.end());
+    std::vector<unsigned char> encrypted = encryptSealed(plaintextVec, recipientPubKey);
+    return base64Encode(encrypted);
+}
+
 std::vector<unsigned char> Crypto::decryptSealed(const std::vector<unsigned char>& ciphertext, 
                                                  const std::vector<unsigned char>& recipientPubKey, 
                                                  const std::vector<unsigned char>& recipientPrivKey) {
