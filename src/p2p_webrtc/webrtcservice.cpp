@@ -341,6 +341,7 @@ void WebRTCService::fetchGroupMembers(const std::string&) {}
 void WebRTCService::requestData(const std::string&, const std::string&) {}
 void WebRTCService::onRetryTimer() {}
 void WebRTCService::broadcastSync(const std::string&) {}
+void WebRTCService::queueInvite(const std::string& groupName, const std::string& userEmail, const std::vector<unsigned char>& groupKey, const std::vector<CipherMesh::Core::VaultEntry>& entries) { inviteUser(groupName, userEmail, groupKey, entries); }
 
 // =========================================================
 //  DESKTOP IMPLEMENTATION (Qt / QWebSocket / QJson)
