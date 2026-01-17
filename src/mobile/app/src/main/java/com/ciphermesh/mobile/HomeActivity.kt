@@ -294,25 +294,31 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             if (members.isEmpty()) {
                 val emptyText = TextView(this).apply {
                     text = "No members yet"
-                    setPadding(16, 16, 16, 16)
-                    setTextColor(getColor(android.R.color.darker_gray))
+                    setPadding(32, 32, 32, 32)
+                    textSize = 14f
+                    setTextColor(getColor(com.google.android.material.R.color.material_on_surface_emphasis_medium))
+                    gravity = android.view.Gravity.CENTER
                 }
                 membersLayout.addView(emptyText)
             } else {
                 for (memberId in members) {
                     val memberView = LinearLayout(this).apply {
                         orientation = LinearLayout.HORIZONTAL
-                        setPadding(12, 12, 12, 12)
+                        setPadding(24, 16, 24, 16)
                         layoutParams = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
                             LinearLayout.LayoutParams.WRAP_CONTENT
                         )
+                        // Add subtle background for better separation
+                        if (memberId == myId) {
+                            setBackgroundResource(android.R.drawable.dialog_holo_light_frame)
+                        }
                     }
                     
                     val memberText = TextView(this).apply {
                         text = when {
                             memberId == myId -> "$memberId (You)"
-                            memberId == owner -> "$memberId ★ Owner"
+                            memberId == owner -> "★ $memberId"
                             else -> memberId
                         }
                         layoutParams = LinearLayout.LayoutParams(
@@ -320,23 +326,36 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                             LinearLayout.LayoutParams.WRAP_CONTENT,
                             1f
                         )
+                        textSize = 15f
                         setTextColor(when {
-                            memberId == owner -> getColor(android.R.color.holo_green_dark)
-                            memberId == myId -> getColor(android.R.color.holo_blue_light)
-                            else -> getColor(android.R.color.white)
+                            memberId == owner -> getColor(com.google.android.material.R.color.material_deep_teal_500)
+                            memberId == myId -> getColor(com.google.android.material.R.color.material_blue_grey_800)
+                            else -> getColor(com.google.android.material.R.color.material_on_surface_emphasis_high_type)
                         })
-                        setPadding(8, 4, 8, 4)
+                        setPadding(0, 8, 8, 8)
+                        typeface = android.graphics.Typeface.create(
+                            if (memberId == owner || memberId == myId) android.graphics.Typeface.DEFAULT_BOLD 
+                            else android.graphics.Typeface.DEFAULT, 
+                            android.graphics.Typeface.NORMAL
+                        )
                     }
                     
                     memberView.addView(memberText)
                     
                     // Add remove button if not self and not owner
                     if (memberId != myId && memberId != owner && myId == owner) {
-                        val removeBtn = Button(this).apply {
+                        val removeBtn = com.google.android.material.button.MaterialButton(
+                            this,
+                            null,
+                            com.google.android.material.R.attr.materialButtonOutlinedStyle
+                        ).apply {
                             text = "Remove"
-                            setTextColor(getColor(android.R.color.holo_red_light))
-                            setBackgroundColor(Color.TRANSPARENT)
-                            setPadding(16, 8, 16, 8)
+                            setTextColor(getColor(com.google.android.material.R.color.design_default_color_error))
+                            strokeColor = android.content.res.ColorStateList.valueOf(
+                                getColor(com.google.android.material.R.color.design_default_color_error)
+                            )
+                            setPadding(24, 8, 24, 8)
+                            textSize = 12f
                             setOnClickListener {
                                 vault.removeUser(currentGroup, memberId)
                                 loadMembers()
@@ -348,16 +367,16 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     
                     membersLayout.addView(memberView)
                     
-                    // Add divider
+                    // Add divider - using Material Design divider
                     if (memberId != members.last()) {
                         val divider = View(this).apply {
                             layoutParams = LinearLayout.LayoutParams(
                                 LinearLayout.LayoutParams.MATCH_PARENT,
-                                1
+                                resources.getDimensionPixelSize(com.google.android.material.R.dimen.material_divider_thickness)
                             ).apply {
-                                setMargins(0, 4, 0, 4)
+                                setMargins(24, 8, 24, 8)
                             }
-                            setBackgroundColor(getColor(android.R.color.darker_gray))
+                            setBackgroundColor(getColor(com.google.android.material.R.color.material_on_surface_stroke))
                         }
                         membersLayout.addView(divider)
                     }
