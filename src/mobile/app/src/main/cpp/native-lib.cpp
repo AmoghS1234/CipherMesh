@@ -716,3 +716,177 @@ Java_com_ciphermesh_mobile_core_Vault_getEntryFullDetails(JNIEnv* env, jobject t
     }
     return env->NewStringUTF("");
 }
+// --- Verify Master Password ---
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_verifyMasterPassword(JNIEnv* env, jobject thiz, jstring password) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault || !password) return false;
+    const char* pwd = env->GetStringUTFChars(password, 0);
+    if (!pwd) return false;
+    bool result = g_vault->verifyMasterPassword(pwd);
+    env->ReleaseStringUTFChars(password, pwd);
+    return result;
+}
+
+// --- Get Display Username ---
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getDisplayUsername(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewStringUTF("");
+    return env->NewStringUTF(g_vault->getDisplayUsername().c_str());
+}
+
+// --- Delete Group ---
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_deleteGroup(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault || !groupName) return false;
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    if (!name) return false;
+    bool result = g_vault->deleteGroup(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    return result;
+}
+
+// --- Get Group Owner ---
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getGroupOwner(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault || !groupName) return env->NewStringUTF("");
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    if (!name) return env->NewStringUTF("");
+    int groupId = g_vault->getGroupId(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    if (groupId == -1) return env->NewStringUTF("");
+    return env->NewStringUTF(g_vault->getGroupOwner(groupId).c_str());
+}
+
+// --- Invite User ---
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_inviteUser(JNIEnv* env, jobject thiz, jstring groupName, jstring targetUserId) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault || !groupName || !targetUserId) return false;
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    const char* target = env->GetStringUTFChars(targetUserId, 0);
+    if (!grp || !target) {
+        if (grp) env->ReleaseStringUTFChars(groupName, grp);
+        if (target) env->ReleaseStringUTFChars(targetUserId, target);
+        return false;
+    }
+    // Store the invite in database with proper payload format
+    std::string payload = std::string("{\"targetUserId\":\"") + target + "\"}";
+    g_vault->storePendingInvite(g_vault->getUserId(), grp, payload);
+    env->ReleaseStringUTFChars(groupName, grp);
+    env->ReleaseStringUTFChars(targetUserId, target);
+    return true;
+}
+
+// --- Get Entry Details ---
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getEntryDetails(JNIEnv* env, jobject thiz, jint entryId) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewStringUTF("");
+    auto entries = g_vault->getEntries();
+    for (const auto& entry : entries) {
+        if (entry.id == entryId) {
+            std::string password = g_vault->getDecryptedPassword(entryId);
+            // Format: title|username|password|type|url|notes|totp
+            std::string formatted = entry.title + "|" + entry.username + "|" + password + "|" + 
+                                   std::to_string(entry.type) + "|";
+            if (!entry.locations.empty()) {
+                formatted += entry.locations[0].value;
+            }
+            formatted += "|" + entry.notes + "|" + entry.totpSecret;
+            return env->NewStringUTF(formatted.c_str());
+        }
+    }
+    return env->NewStringUTF("");
+}
+
+// --- Delete Entry ---
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_deleteEntry(JNIEnv* env, jobject thiz, jint entryId) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return false;
+    return g_vault->deleteEntry(entryId);
+}
+
+// --- Get Pending Invite For User ---
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getPendingInviteForUser(JNIEnv* env, jobject thiz, jstring targetId) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault || !targetId) return env->NewStringUTF("");
+    const char* target = env->GetStringUTFChars(targetId, 0);
+    if (!target) return env->NewStringUTF("");
+    
+    auto invites = g_vault->getPendingInvites();
+    std::string targetStr(target);
+    for (const auto& invite : invites) {
+        // Check if this invite is for the target user (exact match in payload)
+        std::string searchPattern = "\"targetUserId\":\"" + targetStr + "\"";
+        if (invite.payloadJson.find(searchPattern) != std::string::npos) {
+            env->ReleaseStringUTFChars(targetId, target);
+            return env->NewStringUTF(invite.payloadJson.c_str());
+        }
+    }
+    env->ReleaseStringUTFChars(targetId, target);
+    return env->NewStringUTF("");
+}
+
+// --- Accept P2P Invite ---
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_acceptP2PInvite(JNIEnv* env, jobject thiz, jstring groupName, jstring payload) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault || !groupName || !payload) return false;
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    const char* data = env->GetStringUTFChars(payload, 0);
+    if (!grp || !data) {
+        if (grp) env->ReleaseStringUTFChars(groupName, grp);
+        if (data) env->ReleaseStringUTFChars(payload, data);
+        return false;
+    }
+    
+    // Validate payload is not empty and create the group
+    // TODO: Full implementation should parse and validate JSON payload,
+    // decrypt shared group key, and verify sender authenticity
+    std::string payloadStr(data);
+    if (payloadStr.empty() || payloadStr.length() < 2) {
+        env->ReleaseStringUTFChars(groupName, grp);
+        env->ReleaseStringUTFChars(payload, data);
+        return false;
+    }
+    
+    bool result = g_vault->addGroup(grp);
+    
+    env->ReleaseStringUTFChars(groupName, grp);
+    env->ReleaseStringUTFChars(payload, data);
+    return result;
+}
+
+// --- Test Inject Invite ---
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_testInjectInvite(JNIEnv* env, jobject thiz, jstring sender, jstring groupName) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault || !sender || !groupName) return;
+    const char* snd = env->GetStringUTFChars(sender, 0);
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    if (!snd || !grp) {
+        if (snd) env->ReleaseStringUTFChars(sender, snd);
+        if (grp) env->ReleaseStringUTFChars(groupName, grp);
+        return;
+    }
+    
+    // Inject a test invite into the database with safe JSON construction
+    // Escape special characters in group name for JSON safety
+    std::string grpStr(grp);
+    std::string escapedGrp;
+    for (char c : grpStr) {
+        if (c == '"' || c == '\\') escapedGrp += '\\';
+        escapedGrp += c;
+    }
+    std::string payload = "{\"type\":\"test\",\"group\":\"" + escapedGrp + "\"}";
+    g_vault->storePendingInvite(snd, grp, payload);
+    
+    env->ReleaseStringUTFChars(sender, snd);
+    env->ReleaseStringUTFChars(groupName, grp);
+}
