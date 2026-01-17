@@ -77,6 +77,15 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
 
     // Called BY C++ (via JNI) to send data out
     override fun sendSignalingMessage(targetId: String, type: String, payload: String) {
+        // Validate WebSocket is connected before sending
+        if (webSocket == null) {
+            Log.e("P2P", "❌ Cannot send $type: WebSocket is null")
+            activity.runOnUiThread {
+                Toast.makeText(activity, "Connection lost. Please reconnect.", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        
         val userId = vault.getUserId()
         val json = JSONObject()
         json.put("type", type)
@@ -86,15 +95,19 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
         // Format payload based on type
         if (type == "offer" || type == "answer") {
             json.put("sdp", payload)
-        } else if (type == "candidate") {
-            json.put("candidate", payload)
+        } else if (type == "ice-candidate") {
+            json.put("payload", payload)
         } else {
             json.put("payload", payload)
         }
 
         val str = json.toString()
         Log.d("P2P", "📤 C++ Sending: $str")
-        webSocket?.send(str)
+        val sent = webSocket?.send(str) ?: false
+        
+        if (!sent) {
+            Log.e("P2P", "❌ Failed to send $type message")
+        }
     }
 
     private fun handleUiMessage(jsonStr: String) {

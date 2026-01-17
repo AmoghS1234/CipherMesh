@@ -215,18 +215,27 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         setupDataChannel(dc, peerId);
         
         LOGI("Creating offer for %s", peerId.c_str());
-        pc->setLocalDescription(); // This triggers offer creation and gathering
         
-        // setLocalDescription() is synchronous in libdatachannel - check immediately
-        auto desc = pc->localDescription();
-        if (desc.has_value()) {
-            std::string type = desc->typeString();
-            std::string sdp = std::string(*desc);
-            LOGI("Sending offer to %s (type: %s, SDP length: %zu)", peerId.c_str(), type.c_str(), sdp.length());
-            sendSignalingMessage(peerId, type, sdp);
-        } else {
-            LOGE("ERROR: Failed to get local description for offer to %s - this should not happen!", peerId.c_str());
-        }
+        // [FIX] Set up gathering callback to send offer when ICE gathering completes
+        // This matches the Qt implementation and ensures all ICE candidates are included
+        pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
+            if (state == rtc::PeerConnection::GatheringState::Complete) {
+                LOGI("ICE gathering COMPLETE for %s (offer), sending now", peerId.c_str());
+                auto desc = pc->localDescription();
+                if (desc.has_value()) {
+                    std::string type = desc->typeString();
+                    std::string sdp = std::string(*desc);
+                    LOGI("Sending offer to %s (type: %s, SDP length: %zu)", peerId.c_str(), type.c_str(), sdp.length());
+                    sendSignalingMessage(peerId, type, sdp);
+                } else {
+                    LOGE("ERROR: Failed to get local description for offer to %s after gathering complete!", peerId.c_str());
+                }
+            }
+        });
+        
+        // Trigger local description creation - this starts ICE gathering
+        pc->setLocalDescription();
+        LOGI("Started ICE gathering for offer to %s", peerId.c_str());
     }
 }
 
