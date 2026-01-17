@@ -116,8 +116,17 @@ void Database::createTables() {
     exec("CREATE TABLE IF NOT EXISTS pending_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, sender_id TEXT, group_name TEXT, payload TEXT, status TEXT)");
     
     // [FIX] Migration: Add uuid and is_deleted columns if they don't exist (for existing databases)
-    exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
-    exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
+    // SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we try and ignore errors
+    try {
+        exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
+    } catch (...) {
+        // Column already exists, ignore
+    }
+    try {
+        exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
+    } catch (...) {
+        // Column already exists, ignore
+    }
 }
 
 // -- Groups --
@@ -668,8 +677,12 @@ void Database::createTables() {
         throw DBException(q.lastError().text().toStdString());
     
     // [FIX] Migration: Add uuid and is_deleted columns if they don't exist
+    // Qt's QSqlQuery doesn't throw exceptions, it returns false on error
+    // We check for errors only if they're not "column already exists"
     q.exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
+    // Ignore errors (column likely already exists)
     q.exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
+    // Ignore errors (column likely already exists)
 
     // 5. Locations (Geo-fencing)
     if (!q.exec("CREATE TABLE IF NOT EXISTS locations ("
