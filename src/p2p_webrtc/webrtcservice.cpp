@@ -643,9 +643,11 @@ void WebRTCService::removeUser(const std::string& groupName, const std::string& 
         m_channels.erase(userId);
     }
     
-    // Clean up pending invites
+    // Clean up pending invites - this fixes the re-invite bug
+    // When you remove a user before they accept, this clears the pending state
+    // allowing you to immediately re-invite them
     if (m_pendingInvites.count(userId)) {
-        LOGI("Removing pending invite for removed user: %s", userId.c_str());
+        LOGI("Removing pending invite for removed user: %s (fixes re-invite bug)", userId.c_str());
         m_pendingInvites.erase(userId);
     }
     
@@ -1112,9 +1114,11 @@ void WebRTCService::removeUser(const std::string& groupName, const std::string& 
         m_dataChannels.remove(userIdQt);
     }
     
-    // Clean up pending invites
+    // Clean up pending invites - this fixes the re-invite bug
+    // When you remove a user before they accept, this clears the pending state
+    // allowing you to immediately re-invite them
     if (m_pendingInvites.contains(userIdQt)) {
-        qDebug() << "Removing pending invite for removed user:" << userIdQt;
+        qDebug() << "Removing pending invite for removed user:" << userIdQt << "(fixes re-invite bug)";
         m_pendingInvites.remove(userIdQt);
     }
     

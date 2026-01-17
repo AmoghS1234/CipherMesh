@@ -1,6 +1,7 @@
 package com.ciphermesh.mobile
 
 import android.content.Context
+import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -24,6 +25,13 @@ class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel
 
         title.text = entry?.title
         subtitle.text = entry?.subtitle
+        
+        // Show pending invites in red (like desktop app)
+        if (entry?.subtitle == "Pending") {
+            title.setTextColor(Color.parseColor("#FF5555")) // Red color for pending invites
+        } else {
+            title.setTextColor(Color.parseColor("#FFFFFF")) // White color for normal entries
+        }
 
         return view
     }

@@ -112,7 +112,28 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         // 5. List Logic
         listView.setOnItemClickListener { _, _, position, _ ->
             if (isShowingGroups) {
-                val groupName = adapter.getItem(position)?.title ?: return@setOnItemClickListener
+                val entry = adapter.getItem(position) ?: return@setOnItemClickListener
+                
+                // Check if this is a pending invite (has negative ID and "Pending" subtitle)
+                if (entry.subtitle == "Pending" && entry.id < -1000) {
+                    // Extract invite info from the display name
+                    // Format: "GroupName (Invite from UserID)"
+                    val inviteId = -(entry.id + 1000) // Reverse the encoding
+                    val displayName = entry.title ?: return@setOnItemClickListener
+                    
+                    // Parse the group name and sender from display name
+                    val regex = """^(.+) \(Invite from (.+)\)$""".toRegex()
+                    val match = regex.find(displayName)
+                    if (match != null) {
+                        val groupName = match.groupValues[1]
+                        val fromUser = match.groupValues[2]
+                        showAcceptRejectInviteDialog(inviteId, fromUser, groupName)
+                    }
+                    return@setOnItemClickListener
+                }
+                
+                // Normal group handling
+                val groupName = entry.title ?: return@setOnItemClickListener
                 
                 if (vault.isLocked()) {
                     Toast.makeText(this, "Vault Locked", Toast.LENGTH_SHORT).show()
@@ -224,8 +245,27 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         invalidateOptionsMenu()
         fabAdd.setImageDrawable(resources.getDrawable(android.R.drawable.ic_input_add, theme)) 
 
-        val groupsRaw = vault.getGroupNames()
         val groupList = ArrayList<EntryModel>()
+        
+        // First, add pending invites inline (like desktop app) with red text
+        val rawInvites = vault.getPendingInvites()
+        for (invite in rawInvites) {
+            val parts = invite.split("|")
+            if (parts.size >= 3) {
+                val inviteId = parts[0].toIntOrNull() ?: continue
+                val fromUser = parts[1]
+                val groupName = parts[2]
+                
+                // Create entry with invite ID as negative number to distinguish from real groups
+                // Display as "GroupName (Invite from UserID)"
+                val displayName = "$groupName (Invite from $fromUser)"
+                val entry = EntryModel(-inviteId - 1000, displayName, "Pending")
+                groupList.add(entry)
+            }
+        }
+        
+        // Then add regular groups
+        val groupsRaw = vault.getGroupNames()
         if (groupsRaw != null) {
             for (g in groupsRaw) {
                 val isMine = (vault.getGroupOwner(g) == vault.getUserId() || g == "Personal")
@@ -514,92 +554,25 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             .show()
     }
 
-    private fun showPendingInvitesDialog() {
-        // Fetch invites
-        val rawInvites = vault.getPendingInvites()
-        
-        if (rawInvites.isEmpty()) {
-            Toast.makeText(this, "No Pending Invites", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // Create a custom dialog with better UX
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.activity_invites, null)
-        val listView = dialogView.findViewById<ListView>(R.id.listInvites)
-        val emptyText = dialogView.findViewById<TextView>(R.id.txtNoInvites)
-        
-        if (rawInvites.isEmpty()) {
-            listView.visibility = View.GONE
-            emptyText.visibility = View.VISIBLE
-        } else {
-            listView.visibility = View.VISIBLE
-            emptyText.visibility = View.GONE
-            
-            // Custom adapter for better UI
-            val inviteAdapter = object : ArrayAdapter<String>(this, R.layout.item_invite_row, rawInvites) {
-                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                    val view = convertView ?: LayoutInflater.from(context).inflate(R.layout.item_invite_row, parent, false)
-                    
-                    val parts = getItem(position)?.split("|") ?: return view
-                    if (parts.size < 3) return view
-                    
-                    val inviteId = parts[0].toIntOrNull() ?: return view
-                    val fromText = view.findViewById<TextView>(R.id.inviteFrom)
-                    val groupText = view.findViewById<TextView>(R.id.inviteGroup)
-                    val btnAccept = view.findViewById<android.widget.Button>(R.id.btnAccept)
-                    val btnReject = view.findViewById<android.widget.Button>(R.id.btnReject)
-                    
-                    // Null safety checks to prevent crashes
-                    if (fromText == null || groupText == null || btnAccept == null || btnReject == null) {
-                        android.util.Log.e("HomeActivity", "Failed to find UI elements in invite row")
-                        return view
-                    }
-                    
-                    fromText.text = "From: ${parts[1]}"
-                    groupText.text = parts[2]
-                    
-                    btnAccept.setOnClickListener {
-                        vault.respondToInvite(inviteId, true)
-                        Toast.makeText(context, "Invite Accepted! Receiving group data...", Toast.LENGTH_LONG).show()
-                        
-                        // Refresh the list
-                        remove(getItem(position))
-                        notifyDataSetChanged()
-                        
-                        // Reload groups to show the new one - use delayed refresh to allow group-data to arrive
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            loadGroups()
-                        }, 1500)
-                        
-                        // Close dialog if no more invites
-                        if (count == 0) {
-                            (view.context as? HomeActivity)?.let { activity ->
-                                // Dialog will be closed by user
-                            }
-                        }
-                    }
-                    
-                    btnReject.setOnClickListener {
-                        vault.respondToInvite(inviteId, false)
-                        Toast.makeText(context, "Invite Rejected", Toast.LENGTH_SHORT).show()
-                        
-                        // Refresh the list
-                        remove(getItem(position))
-                        notifyDataSetChanged()
-                    }
-                    
-                    return view
-                }
-            }
-            
-            listView.adapter = inviteAdapter
-        }
-        
-        // Create dialog with custom view
+    private fun showAcceptRejectInviteDialog(inviteId: Int, fromUser: String, groupName: String) {
         MaterialAlertDialogBuilder(this)
-            .setTitle("Pending Invites")
-            .setView(dialogView)
-            .setPositiveButton("Close", null)
+            .setTitle("Group Invite")
+            .setMessage("From: $fromUser\nGroup: $groupName\n\nDo you want to accept this invitation?")
+            .setPositiveButton("Accept") { _, _ ->
+                vault.respondToInvite(inviteId, true)
+                Toast.makeText(this, "Invite Accepted! Receiving group data...", Toast.LENGTH_LONG).show()
+                
+                // Reload groups after delay to allow group-data to arrive
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    loadGroups()
+                }, 1500)
+            }
+            .setNegativeButton("Reject") { _, _ ->
+                vault.respondToInvite(inviteId, false)
+                Toast.makeText(this, "Invite Rejected", Toast.LENGTH_SHORT).show()
+                loadGroups() // Refresh immediately
+            }
+            .setNeutralButton("Cancel", null)
             .show()
     }
 
@@ -607,8 +580,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         when (item.itemId) {
             R.id.nav_groups -> loadGroups()
             R.id.nav_add_group -> showCreateGroupDialog()
-            // This is the menu item you asked for
-            R.id.nav_invites -> showPendingInvitesDialog() 
+            // Removed nav_invites - now shown inline in groups list
             R.id.nav_theme -> cycleTheme()
             R.id.nav_lock -> {
                 finish()
