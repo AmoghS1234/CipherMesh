@@ -106,11 +106,7 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
 
                 val str = json.toString()
                 Log.d("P2P", "📤 C++ Sending: $str")
-                val sent = ws.send(str)
-                
-                if (!sent) {
-                    Log.e("P2P", "❌ Failed to send $type message")
-                }
+                ws.send(str)
             } catch (e: Exception) {
                 Log.e("P2P", "❌ Error sending message: ${e.message}", e)
             }
