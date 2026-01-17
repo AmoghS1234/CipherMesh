@@ -164,6 +164,12 @@ Java_com_ciphermesh_mobile_core_Vault_registerUser(JNIEnv* env, jobject thiz, js
     return result;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_hasUsers(JNIEnv* env, jobject thiz) {
+    if (!g_vault) return false;
+    return g_vault->hasUsers();
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_ciphermesh_mobile_core_Vault_getUserId(JNIEnv* env, jobject thiz) {
     if(!g_vault) return env->NewStringUTF("");
