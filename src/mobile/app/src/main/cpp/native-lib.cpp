@@ -6,6 +6,7 @@
 #include <mutex>
 #include <memory>
 #include <algorithm> // for find
+#include <sodium.h> // [FIX] Add sodium for randombytes_buf
 #include "vault.hpp"
 #include "webrtcservice.hpp" // [FIX] Include the correct service header
 
@@ -196,7 +197,12 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
     // 1. Handle Incoming Invites
     g_p2p->onIncomingInvite = [](std::string sender, std::string groupName) {
         std::lock_guard<std::mutex> lock(g_inviteMutex);
-        int id = rand();
+        // [FIX] Use secure random instead of weak rand()
+        unsigned char randomBytes[4];
+        randombytes_buf(randomBytes, 4);
+        int id = (randomBytes[0] << 24) | (randomBytes[1] << 16) | (randomBytes[2] << 8) | randomBytes[3];
+        if (id < 0) id = -id; // Ensure positive ID
+        
         CipherMesh::Core::PendingInvite inv;
         inv.id = id; 
         inv.senderId = sender;
@@ -298,12 +304,16 @@ Java_com_ciphermesh_mobile_core_Vault_getPendingInvites(JNIEnv* env, jobject thi
     std::lock_guard<std::mutex> lock(g_inviteMutex);
     
     jclass strClass = env->FindClass("java/lang/String");
-    jobjectArray result = env->NewObjectArray(g_pendingInvites.size(), strClass, env->NewStringUTF(""));
+    jstring emptyStr = env->NewStringUTF("");
+    jobjectArray result = env->NewObjectArray(g_pendingInvites.size(), strClass, emptyStr);
+    env->DeleteLocalRef(emptyStr); // [FIX] Clean up local reference
 
     for (size_t i = 0; i < g_pendingInvites.size(); i++) {
         // Format: "senderId|groupName"
         std::string item = g_pendingInvites[i].senderId + "|" + g_pendingInvites[i].groupName;
-        env->SetObjectArrayElement(result, i, env->NewStringUTF(item.c_str()));
+        jstring jItem = env->NewStringUTF(item.c_str());
+        env->SetObjectArrayElement(result, i, jItem);
+        env->DeleteLocalRef(jItem); // [FIX] Clean up local reference
     }
     return result;
 }
@@ -315,9 +325,14 @@ Java_com_ciphermesh_mobile_core_Vault_getGroupNames(JNIEnv* env, jobject thiz) {
     if (!g_vault) return nullptr;
     std::vector<std::string> groups = g_vault->getGroupNames();
     jclass strClass = env->FindClass("java/lang/String");
-    jobjectArray result = env->NewObjectArray(groups.size(), strClass, env->NewStringUTF(""));
+    jstring emptyStr = env->NewStringUTF("");
+    jobjectArray result = env->NewObjectArray(groups.size(), strClass, emptyStr);
+    env->DeleteLocalRef(emptyStr); // [FIX] Clean up local reference
+    
     for (size_t i = 0; i < groups.size(); i++) {
-        env->SetObjectArrayElement(result, i, env->NewStringUTF(groups[i].c_str()));
+        jstring jGroup = env->NewStringUTF(groups[i].c_str());
+        env->SetObjectArrayElement(result, i, jGroup);
+        env->DeleteLocalRef(jGroup); // [FIX] Clean up local reference
     }
     return result;
 }
@@ -390,16 +405,22 @@ extern "C" JNIEXPORT jobjectArray JNICALL
 Java_com_ciphermesh_mobile_core_Vault_getGroupMembers(JNIEnv* env, jobject thiz, jstring groupName) {
     if (!g_vault) return nullptr;
     const char* name = env->GetStringUTFChars(groupName, 0);
+    if (!name) return nullptr; // [FIX] Check for null
+    
     std::vector<CipherMesh::Core::GroupMember> members = g_vault->getGroupMembers(name);
     env->ReleaseStringUTFChars(groupName, name);
     
     jclass strClass = env->FindClass("java/lang/String");
-    jobjectArray result = env->NewObjectArray(members.size(), strClass, env->NewStringUTF(""));
+    jstring emptyStr = env->NewStringUTF("");
+    jobjectArray result = env->NewObjectArray(members.size(), strClass, emptyStr);
+    env->DeleteLocalRef(emptyStr); // [FIX] Clean up local reference
 
     for (size_t i = 0; i < members.size(); i++) {
         // Format: userId|role|status
         std::string s = members[i].userId + "|" + members[i].role + "|" + members[i].status;
-        env->SetObjectArrayElement(result, i, env->NewStringUTF(s.c_str()));
+        jstring jMember = env->NewStringUTF(s.c_str());
+        env->SetObjectArrayElement(result, i, jMember);
+        env->DeleteLocalRef(jMember); // [FIX] Clean up local reference
     }
     return result;
 }

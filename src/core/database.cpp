@@ -110,10 +110,14 @@ void Database::createTables() {
     exec("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB)");
     exec("CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, encrypted_key BLOB NOT NULL, owner_id TEXT, admins_only_write INTEGER DEFAULT 0, admins_only_invite INTEGER DEFAULT 0)");
     exec("CREATE TABLE IF NOT EXISTS group_members (group_id INTEGER, user_id TEXT, role TEXT, status TEXT, PRIMARY KEY(group_id, user_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
-    exec("CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER, title TEXT, username TEXT, encrypted_password BLOB, url TEXT, notes TEXT, totp_secret TEXT, entry_type TEXT, created_at INTEGER, updated_at INTEGER, access_count INTEGER DEFAULT 0, last_accessed INTEGER DEFAULT 0, password_expiry INTEGER DEFAULT 0, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
+    exec("CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER, uuid TEXT UNIQUE, title TEXT, username TEXT, encrypted_password BLOB, url TEXT, notes TEXT, totp_secret TEXT, entry_type TEXT, created_at INTEGER, updated_at INTEGER, access_count INTEGER DEFAULT 0, last_accessed INTEGER DEFAULT 0, password_expiry INTEGER DEFAULT 0, is_deleted INTEGER DEFAULT 0, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
     exec("CREATE TABLE IF NOT EXISTS locations (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER, type TEXT, value TEXT, FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
     exec("CREATE TABLE IF NOT EXISTS password_history (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER, encrypted_password BLOB, timestamp INTEGER, FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
     exec("CREATE TABLE IF NOT EXISTS pending_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, sender_id TEXT, group_name TEXT, payload TEXT, status TEXT)");
+    
+    // [FIX] Migration: Add uuid and is_deleted columns if they don't exist (for existing databases)
+    exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
+    exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
 }
 
 // -- Groups --

@@ -19,6 +19,7 @@ struct Location {
 struct VaultEntry {
     int id;
     int groupId; // [ADDED] Missing in previous version
+    std::string uuid; // [ADDED] UUID for sync conflict resolution
     std::string title;
     std::string username;
     std::string notes;
@@ -33,17 +34,18 @@ struct VaultEntry {
     
     std::string totpSecret;   // [RENAMED] from totp_secret (camelCase standard)
     std::string entryType;    // [RENAMED] from entry_type (camelCase standard)
+    bool isDeleted;           // [ADDED] For tombstoning (sync deletions)
 
     // Default Constructor
     VaultEntry() 
         : id(-1), groupId(-1), createdAt(0), updatedAt(0), lastAccessed(0), passwordExpiry(0), 
-          totpSecret(""), entryType("password") {}
+          totpSecret(""), entryType("password"), isDeleted(false) {}
 
     // Convenience Constructor
     VaultEntry(int id, std::string t, std::string u, std::string n) 
         : id(id), groupId(-1), title(std::move(t)), username(std::move(u)), notes(std::move(n)), 
           createdAt(0), updatedAt(0), lastAccessed(0), passwordExpiry(0), 
-          totpSecret(""), entryType("password") {}
+          totpSecret(""), entryType("password"), isDeleted(false) {}
 };
 
 // --- 3. Group Structures ---
