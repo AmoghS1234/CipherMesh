@@ -546,8 +546,8 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     val inviteId = parts[0].toIntOrNull() ?: return view
                     val fromText = view.findViewById<TextView>(R.id.inviteFrom)
                     val groupText = view.findViewById<TextView>(R.id.inviteGroup)
-                    val btnAccept = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnAccept)
-                    val btnReject = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnReject)
+                    val btnAccept = view.findViewById<android.widget.Button>(R.id.btnAccept)
+                    val btnReject = view.findViewById<android.widget.Button>(R.id.btnReject)
                     
                     // Null safety checks to prevent crashes
                     if (fromText == null || groupText == null || btnAccept == null || btnReject == null) {
