@@ -304,6 +304,14 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             } else {
                 // Get pending invites to show status
                 val pendingInvites = vault.getPendingInvites()
+                // Parse pending invites - format is "id|fromUser|groupName"
+                val pendingUserIds = mutableSetOf<String>()
+                for (inviteStr in pendingInvites) {
+                    val parts = inviteStr.split("|")
+                    if (parts.size >= 2) {
+                        pendingUserIds.add(parts[1]) // fromUser is at index 1
+                    }
+                }
                 
                 for ((index, memberId) in members.withIndex()) {
                     // Card container for each member (like groups list)
@@ -330,7 +338,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     }
                     
                     // Check if this user has a pending invite
-                    val isPending = pendingInvites.any { it.targetUserId == memberId }
+                    val isPending = pendingUserIds.contains(memberId)
                     
                     val memberText = TextView(this).apply {
                         text = when {
@@ -540,6 +548,12 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     val groupText = view.findViewById<TextView>(R.id.inviteGroup)
                     val btnAccept = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnAccept)
                     val btnReject = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnReject)
+                    
+                    // Null safety checks to prevent crashes
+                    if (fromText == null || groupText == null || btnAccept == null || btnReject == null) {
+                        android.util.Log.e("HomeActivity", "Failed to find UI elements in invite row")
+                        return view
+                    }
                     
                     fromText.text = "From: ${parts[1]}"
                     groupText.text = parts[2]

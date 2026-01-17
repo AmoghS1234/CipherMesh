@@ -620,7 +620,46 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
 }
 
 void WebRTCService::fetchGroupMembers(const std::string&) {}
-void WebRTCService::removeUser(const std::string&, const std::string&) {}
+
+void WebRTCService::removeUser(const std::string& groupName, const std::string& userId) {
+    LOGI("removeUser called for user: %s in group: %s", userId.c_str(), groupName.c_str());
+    
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    // Clean up peer connection for this user
+    if (m_peers.count(userId)) {
+        LOGI("Cleaning up peer connection for removed user: %s", userId.c_str());
+        auto peer = m_peers[userId];
+        if (peer) {
+            peer->close();
+            peer = nullptr;
+        }
+        m_peers.erase(userId);
+    }
+    
+    // Clean up data channel
+    if (m_channels.count(userId)) {
+        LOGI("Removing data channel for removed user: %s", userId.c_str());
+        m_channels.erase(userId);
+    }
+    
+    // Clean up pending invites
+    if (m_pendingInvites.count(userId)) {
+        LOGI("Removing pending invite for removed user: %s", userId.c_str());
+        m_pendingInvites.erase(userId);
+    }
+    
+    // Clean up pending keys and entries
+    if (m_pendingKeys.count(userId)) {
+        m_pendingKeys.erase(userId);
+    }
+    if (m_pendingEntries.count(userId)) {
+        m_pendingEntries.erase(userId);
+    }
+    
+    LOGI("removeUser complete for user: %s", userId.c_str());
+}
+
 void WebRTCService::onRetryTimer() {}
 void WebRTCService::broadcastSync(const std::string&) {}
 
@@ -1050,7 +1089,37 @@ void WebRTCService::sendInvite(const std::string& recipientId, const std::string
 
 void WebRTCService::cancelInvite(const std::string& userId) { m_pendingInvites.remove(QString::fromStdString(userId)); }
 void WebRTCService::respondToInvite(const std::string& senderId, bool accept) { QJsonObject resp; resp["type"] = accept ? "invite-accept" : "invite-reject"; sendP2PMessage(QString::fromStdString(senderId), resp); }
-void WebRTCService::removeUser(const std::string&, const std::string&) {}
+
+void WebRTCService::removeUser(const std::string& groupName, const std::string& userId) {
+    qDebug() << "removeUser called for user:" << QString::fromStdString(userId) 
+             << "in group:" << QString::fromStdString(groupName);
+    
+    QString userIdQt = QString::fromStdString(userId);
+    
+    // Clean up peer connection for this user
+    if (m_peers.contains(userIdQt)) {
+        qDebug() << "Cleaning up peer connection for removed user:" << userIdQt;
+        auto peer = m_peers[userIdQt];
+        if (peer) {
+            peer->close();
+        }
+        m_peers.remove(userIdQt);
+    }
+    
+    // Clean up data channel
+    if (m_channels.contains(userIdQt)) {
+        qDebug() << "Removing data channel for removed user:" << userIdQt;
+        m_channels.remove(userIdQt);
+    }
+    
+    // Clean up pending invites
+    if (m_pendingInvites.contains(userIdQt)) {
+        qDebug() << "Removing pending invite for removed user:" << userIdQt;
+        m_pendingInvites.remove(userIdQt);
+    }
+    
+    qDebug() << "removeUser complete for user:" << userIdQt;
+}
 void WebRTCService::fetchGroupMembers(const std::string&) {}
 void WebRTCService::requestData(const std::string&, const std::string&) {}
 
