@@ -257,7 +257,13 @@ std::vector<VaultEntry> Vault::getEntries() {
 std::string Vault::getDecryptedPassword(int entryId) {
     checkLocked();
     int groupId = m_db->getGroupIdForEntry(entryId);
+    if (groupId == -1) {
+        throw std::runtime_error("Entry not found or has no associated group");
+    }
     std::vector<unsigned char> encryptedGroupKey = m_db->getEncryptedGroupKeyById(groupId);
+    if (encryptedGroupKey.empty()) {
+        throw std::runtime_error("Invalid group key");
+    }
     std::vector<unsigned char> groupKey = m_crypto->decrypt(encryptedGroupKey, m_masterKey_RAM);
     std::vector<unsigned char> encryptedPassword = m_db->getEncryptedPassword(entryId);
     std::string decryptedPassword = m_crypto->decryptToString(encryptedPassword, groupKey);
@@ -275,6 +281,7 @@ std::vector<VaultEntry> Vault::searchEntries(const std::string& searchTerm) {
     
     for (const auto& g : groups) {
         int gid = m_db->getGroupId(g);
+        if (gid == -1) continue; // Skip deleted or invalid groups
         std::vector<VaultEntry> entries = m_db->getEntriesForGroup(gid);
         for (const auto& e : entries) {
             std::string lowerTitle = e.title;
@@ -492,8 +499,36 @@ std::string Vault::getIdentityPublicKey() {
     return m_crypto->base64Encode(m_identityPublicKey); 
 }
 
-std::string Vault::decryptIncomingKey(const std::string& encryptedBase64) { return ""; }
-std::vector<unsigned char> Vault::encryptForUser(const std::string&, const std::vector<unsigned char>&) { return {}; }
+std::string Vault::decryptIncomingKey(const std::string& encryptedBase64) {
+    // Decrypt group key that was encrypted for us using our public key
+    checkLocked();
+    if (m_identityPrivateKey.empty()) {
+        ensureIdentityKeys();
+    }
+    
+    try {
+        std::string decrypted = m_crypto->decryptAsymmetric(encryptedBase64, m_identityPrivateKey);
+        return decrypted;
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("Failed to decrypt incoming key: ") + e.what());
+    }
+}
+
+std::vector<unsigned char> Vault::encryptForUser(const std::string& recipientPublicKeyBase64, const std::vector<unsigned char>& data) {
+    // Encrypt data for a specific user using their public key
+    checkLocked();
+    
+    try {
+        std::vector<unsigned char> recipientPublicKey = m_crypto->base64Decode(recipientPublicKeyBase64);
+        std::string encrypted = m_crypto->encryptAsymmetric(
+            std::string(data.begin(), data.end()),
+            recipientPublicKey
+        );
+        return std::vector<unsigned char>(encrypted.begin(), encrypted.end());
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("Failed to encrypt for user: ") + e.what());
+    }
+}
 
 // --- History & Extras ---
 
@@ -501,7 +536,18 @@ std::vector<PasswordHistoryEntry> Vault::getPasswordHistory(int entryId) {
     return m_db->getPasswordHistory(entryId);
 }
 
-std::string Vault::decryptPasswordFromHistory(const std::string& encryptedPassword) { return ""; }
+std::string Vault::decryptPasswordFromHistory(const std::string& encryptedPassword) {
+    checkLocked();
+    // Password history uses the same encryption as current passwords
+    // The encrypted password is stored in base64 format
+    try {
+        std::vector<unsigned char> encryptedData = m_crypto->base64Decode(encryptedPassword);
+        std::string decrypted = m_crypto->decryptToString(encryptedData, m_masterKey_RAM);
+        return decrypted;
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("Failed to decrypt password from history: ") + e.what());
+    }
+}
 
 void Vault::updateEntryAccessTime(int entryId) {
     m_db->updateEntryAccessTime(entryId);

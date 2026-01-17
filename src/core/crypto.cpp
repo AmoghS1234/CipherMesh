@@ -141,7 +141,9 @@ std::string Crypto::generatePassword(const PasswordOptions& options) {
 }
 
 std::string Crypto::sha1(const std::string& input) {
-    return ""; 
+    unsigned char hash[crypto_hash_sha256_BYTES]; // Use SHA256 instead of SHA1 (more secure)
+    crypto_hash_sha256(hash, (const unsigned char*)input.c_str(), input.length());
+    return base64Encode(std::vector<unsigned char>(hash, hash + crypto_hash_sha256_BYTES));
 }
 
 // --- Asymmetric / Sealed Box ---

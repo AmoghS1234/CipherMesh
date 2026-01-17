@@ -151,8 +151,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_ciphermesh_mobile_core_Vault_setActivityContext(JNIEnv* env, jobject thiz, jobject activity) {
     // [FIX] Lock JNI globals access
     std::lock_guard<std::mutex> lock(g_jniMutex);
-    if (g_context) env->DeleteGlobalRef(g_context);
-    g_context = env->NewGlobalRef(activity);
+    if (g_context != nullptr) {
+        env->DeleteGlobalRef(g_context);
+        g_context = nullptr;
+    }
+    if (activity != nullptr) {
+        g_context = env->NewGlobalRef(activity);
+    }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -176,10 +181,26 @@ Java_com_ciphermesh_mobile_core_Vault_isLocked(JNIEnv* env, jobject thiz) {
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_ciphermesh_mobile_core_Vault_registerUser(JNIEnv* env, jobject thiz, jstring db_path, jstring password) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    
     const char* path = env->GetStringUTFChars(db_path, 0);
     const char* pwd = env->GetStringUTFChars(password, 0);
     
-    // Re-create vault instance just in case
+    if (!path || !pwd) {
+        if (path) env->ReleaseStringUTFChars(db_path, path);
+        if (pwd) env->ReleaseStringUTFChars(password, pwd);
+        return false;
+    }
+    
+    // Only create new vault if one doesn't exist or if old one is locked
+    if (g_vault && !g_vault->isLocked()) {
+        env->ReleaseStringUTFChars(db_path, path);
+        env->ReleaseStringUTFChars(password, pwd);
+        LOGE("Cannot register: vault already unlocked");
+        return false; // Already have unlocked vault
+    }
+    
+    // Re-create vault instance
     g_vault = std::make_unique<CipherMesh::Core::Vault>();
     bool result = g_vault->createNewVault(path, pwd);
     if(result) {
@@ -222,8 +243,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_ciphermesh_mobile_core_Vault_registerSignalingCallback(JNIEnv* env, jobject thiz, jobject callback) {
     // [FIX] Lock JNI globals access
     std::lock_guard<std::mutex> lock(g_jniMutex);
-    if (g_signalingCallback) env->DeleteGlobalRef(g_signalingCallback);
-    g_signalingCallback = env->NewGlobalRef(callback);
+    if (g_signalingCallback != nullptr) {
+        env->DeleteGlobalRef(g_signalingCallback);
+        g_signalingCallback = nullptr;
+    }
+    if (callback != nullptr) {
+        g_signalingCallback = env->NewGlobalRef(callback);
+    }
 }
 
 // [NEW] Receive message from Kotlin and pass to C++ service
@@ -239,11 +265,14 @@ Java_com_ciphermesh_mobile_core_Vault_receiveSignalingMessage(JNIEnv* env, jobje
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring signaling_url) {
-    // [FIX] Lock both vault and p2p access
+    // [FIX] Lock both vault and p2p access in consistent order
     std::lock_guard<std::mutex> vaultLock(g_vaultMutex);
     std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
     
-    if (!g_vault) return;
+    if (!g_vault || g_p2p) {
+        LOGI("P2P: Skipping init (vault=%p, p2p=%p)", g_vault.get(), g_p2p.get());
+        return; // Prevent double initialization
+    }
     
     // [FIX] Initialize WebRTCService
     // We pass "" as URL because Kotlin handles the WebSocket connection.

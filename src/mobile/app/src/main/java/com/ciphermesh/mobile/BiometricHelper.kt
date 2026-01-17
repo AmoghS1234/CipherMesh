@@ -132,11 +132,19 @@ class BiometricHelper(private val context: Context) {
                 .setNegativeButtonText("Use Password")
                 .build()
             
+            // Use WeakReference to prevent memory leaks
+            val activityRef = java.lang.ref.WeakReference(activity)
+            
             val biometricPrompt = BiometricPrompt(activity,
                 ContextCompat.getMainExecutor(context),
                 object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                         super.onAuthenticationSucceeded(result)
+                        val act = activityRef.get()
+                        if (act == null || act.isFinishing || act.isDestroyed) {
+                            Log.w("BiometricHelper", "Activity destroyed, ignoring biometric success")
+                            return
+                        }
                         try {
                             val encryptedPassword = Base64.decode(encryptedPasswordStr, Base64.NO_WRAP)
                             val decryptedPassword = cipher.doFinal(encryptedPassword)
@@ -149,11 +157,15 @@ class BiometricHelper(private val context: Context) {
                     
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                         super.onAuthenticationError(errorCode, errString)
+                        val act = activityRef.get()
+                        if (act == null || act.isFinishing || act.isDestroyed) return
                         onError(errString.toString())
                     }
                     
                     override fun onAuthenticationFailed() {
                         super.onAuthenticationFailed()
+                        val act = activityRef.get()
+                        if (act == null || act.isFinishing || act.isDestroyed) return
                         onError("Authentication failed")
                     }
                 }
@@ -172,8 +184,23 @@ class BiometricHelper(private val context: Context) {
     private fun getOrCreateKey(): SecretKey {
         // Check if key exists
         if (keyStore.containsAlias(KEYSTORE_ALIAS)) {
-            val entry = keyStore.getEntry(KEYSTORE_ALIAS, null) as KeyStore.SecretKeyEntry
-            return entry.secretKey
+            try {
+                val entry = keyStore.getEntry(KEYSTORE_ALIAS, null) as? KeyStore.SecretKeyEntry
+                if (entry != null) {
+                    return entry.secretKey
+                }
+                // Key is corrupted, delete and recreate
+                Log.w("BiometricHelper", "Key entry corrupted, deleting...")
+                keyStore.deleteEntry(KEYSTORE_ALIAS)
+            } catch (e: Exception) {
+                Log.e("BiometricHelper", "Error retrieving key: ${e.message}", e)
+                // Delete corrupted key
+                try {
+                    keyStore.deleteEntry(KEYSTORE_ALIAS)
+                } catch (deleteError: Exception) {
+                    Log.e("BiometricHelper", "Error deleting corrupted key: ${deleteError.message}")
+                }
+            }
         }
         
         // Generate new key
