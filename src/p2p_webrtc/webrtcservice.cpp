@@ -216,9 +216,10 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         
         LOGI("Creating offer for %s", peerId.c_str());
         
-        // [FIX] Set up gathering callback to send offer when ICE gathering completes
-        // This matches the Qt implementation and ensures all ICE candidates are included
+        // [FIX] Set up gathering callback BEFORE setLocalDescription to avoid race condition
+        // This ensures the callback is registered before ICE gathering starts/completes
         pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
+            LOGI("ICE gathering state changed for %s: %d", peerId.c_str(), static_cast<int>(state));
             if (state == rtc::PeerConnection::GatheringState::Complete) {
                 LOGI("ICE gathering COMPLETE for %s (offer), sending now", peerId.c_str());
                 auto desc = pc->localDescription();
@@ -234,6 +235,8 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
         });
         
         // Trigger local description creation - this starts ICE gathering
+        // Callback above is already registered so it will be called when gathering completes
+        LOGI("Calling setLocalDescription for %s to start ICE gathering", peerId.c_str());
         pc->setLocalDescription();
         LOGI("Started ICE gathering for offer to %s", peerId.c_str());
     }
