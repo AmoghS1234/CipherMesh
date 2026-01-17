@@ -53,6 +53,9 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     // [NEW] Handler for clipboard auto-clear
     private val clipboardHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var clipboardClearRunnable: Runnable? = null
+    
+    // [NEW] Track if receiver is registered to prevent unregister crash
+    private var isReceiverRegistered = false
 
     private val processingInvites = mutableSetOf<String>()
 
@@ -211,6 +214,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         } else {
             registerReceiver(refreshReceiver, IntentFilter("com.ciphermesh.REFRESH_GROUPS"))
         }
+        isReceiverRegistered = true
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -223,7 +227,15 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(refreshReceiver)
+        // [FIX] Only unregister if it was successfully registered
+        if (isReceiverRegistered) {
+            try {
+                unregisterReceiver(refreshReceiver)
+                isReceiverRegistered = false
+            } catch (e: IllegalArgumentException) {
+                // Receiver already unregistered, ignore
+            }
+        }
         // [NEW] Cancel any pending clipboard clear when activity is destroyed
         clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
     }
