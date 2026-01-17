@@ -280,11 +280,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
     private fun showManageGroupDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_share_group, null)
-        val inputId = dialogView.findViewById<EditText>(R.id.inputInviteId)
-        val btnInvite = dialogView.findViewById<Button>(R.id.btnInvite)
+        val inputId = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.inputInviteId)
+        val btnInvite = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnInvite)
         val membersLayout = dialogView.findViewById<LinearLayout>(R.id.layoutMembersList)
 
-        // Load and display group members
+        // Load and display group members with Material Design 3 styling
         fun loadMembers() {
             membersLayout.removeAllViews()
             val members = vault.getGroupMembers(currentGroup)
@@ -293,32 +293,36 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             
             if (members.isEmpty()) {
                 val emptyText = TextView(this).apply {
-                    text = "No members yet"
-                    setPadding(32, 32, 32, 32)
+                    text = "No members in this group yet.\nInvite users to collaborate!"
+                    setPadding(40, 40, 40, 40)
                     textSize = 14f
                     setTextColor(getColor(com.google.android.material.R.color.material_on_surface_emphasis_medium))
                     gravity = android.view.Gravity.CENTER
+                    textAlignment = TextView.TEXT_ALIGNMENT_CENTER
                 }
                 membersLayout.addView(emptyText)
             } else {
-                for (memberId in members) {
+                for ((index, memberId) in members.withIndex()) {
                     val memberView = LinearLayout(this).apply {
                         orientation = LinearLayout.HORIZONTAL
-                        setPadding(24, 16, 24, 16)
+                        setPadding(16, 14, 16, 14)
                         layoutParams = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
                             LinearLayout.LayoutParams.WRAP_CONTENT
                         )
-                        // Add subtle background for better separation
-                        if (memberId == myId) {
-                            setBackgroundResource(android.R.drawable.dialog_holo_light_frame)
-                        }
+                        gravity = Gravity.CENTER_VERTICAL
+                        
+                        // Add ripple effect for better UX
+                        val typedValue = TypedValue()
+                        theme.resolveAttribute(android.R.attr.selectableItemBackground, typedValue, true)
+                        setBackgroundResource(typedValue.resourceId)
                     }
                     
                     val memberText = TextView(this).apply {
                         text = when {
+                            memberId == owner && memberId == myId -> "★ $memberId (You, Owner)"
+                            memberId == owner -> "★ $memberId (Owner)"
                             memberId == myId -> "$memberId (You)"
-                            memberId == owner -> "★ $memberId"
                             else -> memberId
                         }
                         layoutParams = LinearLayout.LayoutParams(
@@ -332,17 +336,19 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                             memberId == myId -> getColor(com.google.android.material.R.color.material_blue_grey_800)
                             else -> getColor(com.google.android.material.R.color.material_on_surface_emphasis_high_type)
                         })
-                        setPadding(0, 8, 8, 8)
+                        setPadding(4, 8, 12, 8)
                         typeface = android.graphics.Typeface.create(
                             if (memberId == owner || memberId == myId) android.graphics.Typeface.DEFAULT_BOLD 
                             else android.graphics.Typeface.DEFAULT, 
                             android.graphics.Typeface.NORMAL
                         )
+                        // Enable text selection for copying IDs
+                        setTextIsSelectable(true)
                     }
                     
                     memberView.addView(memberText)
                     
-                    // Add remove button if not self and not owner
+                    // Add remove button if not self and not owner, and current user is owner
                     if (memberId != myId && memberId != owner && myId == owner) {
                         val removeBtn = com.google.android.material.button.MaterialButton(
                             this,
@@ -354,12 +360,15 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                             strokeColor = android.content.res.ColorStateList.valueOf(
                                 getColor(com.google.android.material.R.color.design_default_color_error)
                             )
-                            setPadding(24, 8, 24, 8)
-                            textSize = 12f
+                            setPadding(20, 4, 20, 4)
+                            textSize = 11f
+                            insetTop = 0
+                            insetBottom = 0
+                            minimumHeight = 0
                             setOnClickListener {
                                 vault.removeUser(currentGroup, memberId)
                                 loadMembers()
-                                Toast.makeText(this@HomeActivity, "User removed", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@HomeActivity, "Removed $memberId from group", Toast.LENGTH_SHORT).show()
                             }
                         }
                         memberView.addView(removeBtn)
@@ -367,16 +376,17 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     
                     membersLayout.addView(memberView)
                     
-                    // Add divider - using Material Design divider
-                    if (memberId != members.last()) {
+                    // Add divider between members (but not after last one)
+                    if (index < members.size - 1) {
                         val divider = View(this).apply {
                             layoutParams = LinearLayout.LayoutParams(
                                 LinearLayout.LayoutParams.MATCH_PARENT,
-                                resources.getDimensionPixelSize(com.google.android.material.R.dimen.material_divider_thickness)
+                                1
                             ).apply {
-                                setMargins(24, 8, 24, 8)
+                                setMargins(16, 0, 16, 0)
                             }
                             setBackgroundColor(getColor(com.google.android.material.R.color.material_on_surface_stroke))
+                            alpha = 0.5f
                         }
                         membersLayout.addView(divider)
                     }
@@ -534,14 +544,16 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     
                     btnAccept.setOnClickListener {
                         vault.respondToInvite(inviteId, true)
-                        Toast.makeText(context, "Invite Accepted!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Invite Accepted! Receiving group data...", Toast.LENGTH_LONG).show()
                         
                         // Refresh the list
                         remove(getItem(position))
                         notifyDataSetChanged()
                         
-                        // Reload groups to show the new one
-                        loadGroups()
+                        // Reload groups to show the new one - use delayed refresh to allow group-data to arrive
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            loadGroups()
+                        }, 1500)
                         
                         // Close dialog if no more invites
                         if (count == 0) {
