@@ -1,4 +1,5 @@
 #include "database.hpp"
+#include "crypto.hpp"
 #include <vector>
 #include <iostream>
 
