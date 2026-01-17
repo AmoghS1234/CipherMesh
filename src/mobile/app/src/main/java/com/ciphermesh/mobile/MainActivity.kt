@@ -21,6 +21,13 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedTheme()
         super.onCreate(savedInstanceState)
+        
+        // [SECURITY] Prevent screenshots and screen recording
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            android.view.WindowManager.LayoutParams.FLAG_SECURE
+        )
+        
         setContentView(R.layout.activity_main)
 
         // Setup DB
@@ -48,6 +55,25 @@ class MainActivity : AppCompatActivity() {
             titleText.text = getString(R.string.app_name)
             subtitleText.text = "Enter your master password to unlock."
             btnAction.text = "Unlock Vault"
+            
+            // [NEW] Try biometric unlock if enabled
+            val biometricHelper = BiometricHelper(this)
+            if (biometricHelper.isBiometricEnabled() && biometricHelper.isBiometricAvailable()) {
+                biometricHelper.authenticate(
+                    this,
+                    onSuccess = { password ->
+                        if (vault.unlock(password)) {
+                            navigateToHome()
+                        } else {
+                            Toast.makeText(this, "Biometric unlock failed", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onError = { error ->
+                        // User clicked "Use Password" or biometric failed
+                        // Just show the password field (already visible)
+                    }
+                )
+            }
 
             btnAction.setOnClickListener {
                 val password = passInput.text.toString()

@@ -69,6 +69,9 @@ dependencies {
     // Lifecycle components
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2")
     implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.6.2")
+    
+    // [NEW] Biometric authentication
+    implementation("androidx.biometric:biometric:1.2.0-alpha05")
 }
 
 // Fix for the schema warning (Optional but cleaner)

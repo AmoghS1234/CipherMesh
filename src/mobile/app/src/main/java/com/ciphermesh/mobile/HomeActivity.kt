@@ -49,6 +49,10 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private var isShowingGroups = true 
     private var currentGroup = ""
     private var isGroupOwner = false 
+    
+    // [NEW] Handler for clipboard auto-clear
+    private val clipboardHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var clipboardClearRunnable: Runnable? = null
 
     private val processingInvites = mutableSetOf<String>()
 
@@ -103,6 +107,13 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedTheme()
         super.onCreate(savedInstanceState)
+        
+        // [SECURITY] Prevent screenshots and screen recording
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            android.view.WindowManager.LayoutParams.FLAG_SECURE
+        )
+        
         setContentView(R.layout.activity_home)
 
         val dbPath = File(filesDir, "vault.db").absolutePath
@@ -213,6 +224,33 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(refreshReceiver)
+        // [NEW] Cancel any pending clipboard clear when activity is destroyed
+        clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
+    }
+    
+    // [NEW] Copy text to clipboard with auto-clear after 60 seconds
+    private fun copyToClipboardSecure(label: String, text: String, toastMessage: String = "Copied") {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText(label, text)
+        clipboard.setPrimaryClip(clip)
+        
+        // Cancel any previous auto-clear
+        clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
+        
+        // Schedule clipboard clear after 60 seconds
+        clipboardClearRunnable = Runnable {
+            try {
+                val emptyClip = ClipData.newPlainText("", "")
+                clipboard.setPrimaryClip(emptyClip)
+            } catch (e: Exception) {
+                // Ignore errors (user may have copied something else)
+            }
+        }
+        clipboardClearRunnable?.let {
+            clipboardHandler.postDelayed(it, 60000) // 60 seconds
+        }
+        
+        Toast.makeText(this, "$toastMessage (clears in 60s)", Toast.LENGTH_SHORT).show()
     }
 
     private fun loadEntries() {
@@ -589,8 +627,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val raw = vault.getEntryDetails(id); val parts = raw.split("|"); if (parts.size < 3) return
         MaterialAlertDialogBuilder(this).setTitle(parts[0]).setMessage("User: ${parts[1]}\nPass: ••••••")
             .setPositiveButton("Copy"){_,_-> 
-                (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Pass", parts[2]))
-                Toast.makeText(this,"Copied",Toast.LENGTH_SHORT).show() 
+                copyToClipboardSecure("Pass", parts[2], "Password copied")
             }.setNeutralButton("Delete"){_,_-> if(vault.deleteEntry(id)) loadEntries() }.setNegativeButton("Close",null).show()
     }
 
