@@ -157,7 +157,12 @@ void WebRTCService::inviteUser(const std::string& groupName, const std::string& 
 }
 
 void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOfferer) {
-    if (m_peers.count(peerId)) return;
+    LOGI("setupPeerConnection() called for %s, isOfferer=%d", peerId.c_str(), isOfferer ? 1 : 0);
+    
+    if (m_peers.count(peerId)) {
+        LOGI("Peer connection already exists for %s, returning early!", peerId.c_str());
+        return;
+    }
 
     rtc::Configuration config;
     config.iceServers.emplace_back("stun:stun.l.google.com:19302");
