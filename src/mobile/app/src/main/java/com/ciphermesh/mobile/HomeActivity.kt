@@ -22,6 +22,7 @@ import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.ActionBarDrawerToggle
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
 import androidx.core.view.GravityCompat
@@ -218,6 +219,14 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Refresh groups list to show any new invites that arrived
+        if (isShowingGroups) {
+            loadGroups()
+        }
+    }
+
     // --- Helpers ---
 
     private fun loadEntries() {
@@ -257,7 +266,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 val groupName = parts[2]
                 
                 // Create entry with invite ID as negative number to distinguish from real groups
-                // Display as "GroupName (Invite from UserID)"
+                // Display as "GroupName (Invite from UserID)" for pending invites
                 val displayName = "$groupName (Invite from $fromUser)"
                 val entry = EntryModel(-inviteId - 1000, displayName, "Pending")
                 groupList.add(entry)
@@ -555,25 +564,41 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
 
     private fun showAcceptRejectInviteDialog(inviteId: Int, fromUser: String, groupName: String) {
-        MaterialAlertDialogBuilder(this)
+        var acceptClicked = false
+        
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Group Invite")
             .setMessage("From: $fromUser\nGroup: $groupName\n\nDo you want to accept this invitation?")
-            .setPositiveButton("Accept") { _, _ ->
-                vault.respondToInvite(inviteId, true)
-                Toast.makeText(this, "Invite Accepted! Receiving group data...", Toast.LENGTH_LONG).show()
-                
-                // Reload groups after delay to allow group-data to arrive
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    loadGroups()
-                }, 1500)
-            }
+            .setPositiveButton("Accept", null) // Set later to control behavior
             .setNegativeButton("Reject") { _, _ ->
                 vault.respondToInvite(inviteId, false)
                 Toast.makeText(this, "Invite Rejected", Toast.LENGTH_SHORT).show()
                 loadGroups() // Refresh immediately
             }
             .setNeutralButton("Cancel", null)
-            .show()
+            .create()
+        
+        dialog.setOnShowListener {
+            val acceptButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            acceptButton.setOnClickListener {
+                if (!acceptClicked) {
+                    acceptClicked = true
+                    acceptButton.isEnabled = false // Disable after first click
+                    acceptButton.text = "Accepting..."
+                    
+                    vault.respondToInvite(inviteId, true)
+                    Toast.makeText(this, "Invite Accepted! Receiving group data...", Toast.LENGTH_LONG).show()
+                    
+                    // Reload groups after delay to allow group-data to arrive and show members if opened
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        loadGroups()
+                        dialog.dismiss()
+                    }, 2000)
+                }
+            }
+        }
+        
+        dialog.show()
     }
 
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
