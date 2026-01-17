@@ -14,5 +14,31 @@
     <string name="menu_theme">Change Theme</string>
     <string name="menu_settings">Settings</string>
     <string name="menu_lock">Lock Vault</string>
+    <string name="menu_recent_entries">Recently Accessed</string>
+    
+    <!-- Search -->
+    <string name="action_search">Search</string>
+    <string name="search_hint">Search entries…</string>
+    <string name="no_search_results">No entries found</string>
+    
+    <!-- Password History -->
+    <string name="password_history_title">Password History</string>
+    <string name="no_password_history">No password history available</string>
+    <string name="password_changed_at">Changed: %s</string>
+    <string name="password_copied">Password copied</string>
+    
+    <!-- Entry Details -->
+    <string name="created_at">Created: %s</string>
+    <string name="updated_at">Updated: %s</string>
+    <string name="last_accessed">Last accessed: %s</string>
+    
+    <!-- Entry Actions -->
+    <string name="action_duplicate">Duplicate</string>
+    <string name="action_view_history">Password History</string>
+    <string name="entry_duplicated">Entry duplicated</string>
+    
+    <!-- Recently Accessed -->
+    <string name="recently_accessed_title">Recently Accessed</string>
+    <string name="no_recent_entries">No recent entries</string>
 
 </resources>

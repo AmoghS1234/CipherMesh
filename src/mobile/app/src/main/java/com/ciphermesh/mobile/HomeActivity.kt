@@ -27,8 +27,11 @@ import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
+import androidx.appcompat.widget.SearchView
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.ciphermesh.mobile.core.Vault
 import com.ciphermesh.mobile.p2p.P2PManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -36,6 +39,8 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.textfield.TextInputEditText
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
 class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener {
 
@@ -49,6 +54,9 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private var isShowingGroups = true 
     private var currentGroup = ""
     private var isGroupOwner = false 
+    
+    // [NEW] For search functionality
+    private var allEntries = ArrayList<EntryModel>()
     
     // [NEW] Handler for clipboard auto-clear
     private val clipboardHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -281,6 +289,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 }
             }
         }
+        allEntries = entryList
         adapter.updateData(entryList)
     }
 
@@ -636,24 +645,178 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
 
     private fun showEntryDetails(id: Int) {
-        val raw = vault.getEntryDetails(id); val parts = raw.split("|"); if (parts.size < 3) return
-        MaterialAlertDialogBuilder(this).setTitle(parts[0]).setMessage("User: ${parts[1]}\nPass: ••••••")
-            .setPositiveButton("Copy"){_,_-> 
-                copyToClipboardSecure("Pass", parts[2], "Password copied")
-            }.setNeutralButton("Delete"){_,_-> if(vault.deleteEntry(id)) loadEntries() }.setNegativeButton("Close",null).show()
+        val raw = vault.getEntryFullDetails(id)
+        val parts = raw.split("|")
+        if (parts.size < 8) return
+        
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_entry_details, null)
+        
+        val detailTitle = dialogView.findViewById<EditText>(R.id.detailTitle)
+        val detailUser = dialogView.findViewById<EditText>(R.id.detailUser)
+        val detailPass = dialogView.findViewById<TextInputEditText>(R.id.detailPass)
+        val detailNotes = dialogView.findViewById<EditText>(R.id.detailNotes)
+        val btnCopyPass = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnCopyPass)
+        
+        // Timestamp TextViews
+        val textCreatedAt = dialogView.findViewById<TextView>(R.id.textCreatedAt)
+        val textUpdatedAt = dialogView.findViewById<TextView>(R.id.textUpdatedAt)
+        val textLastAccessed = dialogView.findViewById<TextView>(R.id.textLastAccessed)
+        
+        // Action Buttons
+        val btnPasswordHistory = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnPasswordHistory)
+        val btnDuplicate = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnDuplicate)
+        
+        // Format: title|username|password|notes|totpSecret|createdAt|updatedAt|lastAccessed
+        detailTitle.setText(parts[0])
+        detailUser.setText(parts[1])
+        detailPass.setText(parts[2])
+        detailNotes.setText(parts[3])
+        
+        // Format timestamps
+        val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+        textCreatedAt.text = getString(R.string.created_at, sdf.format(Date(parts[5].toLong() * 1000)))
+        textUpdatedAt.text = getString(R.string.updated_at, sdf.format(Date(parts[6].toLong() * 1000)))
+        textLastAccessed.text = getString(R.string.last_accessed, sdf.format(Date(parts[7].toLong() * 1000)))
+        
+        btnCopyPass.setOnClickListener {
+            copyToClipboardSecure("Pass", parts[2], "Password copied")
+        }
+        
+        btnPasswordHistory.setOnClickListener {
+            showPasswordHistoryDialog(id)
+        }
+        
+        btnDuplicate.setOnClickListener {
+            duplicateEntry(id, parts[0], parts[1], parts[2], parts[3], parts[4])
+        }
+        
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
+            .setNegativeButton("Close", null)
+            .setNeutralButton("Delete") { _, _ ->
+                if (vault.deleteEntry(id)) {
+                    loadEntries()
+                    Toast.makeText(this, "Entry deleted", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .create()
+        
+        dialog.show()
+    }
+    
+    private fun showPasswordHistoryDialog(entryId: Int) {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_password_history, null)
+        val recyclerView = dialogView.findViewById<RecyclerView>(R.id.recyclerPasswordHistory)
+        val textNoHistory = dialogView.findViewById<TextView>(R.id.textNoHistory)
+        
+        val historyRaw = vault.getPasswordHistory(entryId)
+        val historyItems = ArrayList<PasswordHistoryItem>()
+        
+        for (raw in historyRaw) {
+            val parts = raw.split("|")
+            if (parts.size >= 3) {
+                historyItems.add(PasswordHistoryItem(parts[1], parts[2].toLong()))
+            }
+        }
+        
+        if (historyItems.isEmpty()) {
+            recyclerView.visibility = View.GONE
+            textNoHistory.visibility = View.VISIBLE
+        } else {
+            recyclerView.visibility = View.VISIBLE
+            textNoHistory.visibility = View.GONE
+            
+            recyclerView.layoutManager = LinearLayoutManager(this)
+            recyclerView.adapter = PasswordHistoryAdapter(this, historyItems) { encryptedPassword ->
+                val decryptedPassword = vault.decryptPasswordFromHistory(encryptedPassword)
+                copyToClipboardSecure("Password", decryptedPassword, "Password copied")
+            }
+        }
+        
+        MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
+            .setPositiveButton("Close", null)
+            .show()
+    }
+    
+    private fun duplicateEntry(originalId: Int, title: String, username: String, password: String, notes: String, totpSecret: String) {
+        val newTitle = "$title (Copy)"
+        
+        if (vault.addEntry(newTitle, username, password, "Login", "{\"locations\":[]}", notes, totpSecret)) {
+            Toast.makeText(this, getString(R.string.entry_duplicated), Toast.LENGTH_SHORT).show()
+            loadEntries()
+        } else {
+            Toast.makeText(this, "Failed to duplicate entry", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun performSearch(query: String) {
+        if (query.isEmpty()) {
+            adapter.updateData(allEntries)
+            return
+        }
+        
+        val searchResults = vault.searchEntries(query)
+        val resultList = ArrayList<EntryModel>()
+        
+        for (raw in searchResults) {
+            val parts = raw.split(":")
+            if (parts.size >= 3) {
+                resultList.add(EntryModel(parts[0].toInt(), parts[1], parts[2]))
+            }
+        }
+        
+        adapter.updateData(resultList)
     }
 
-    override fun onCreateOptionsMenu(menu: Menu?): Boolean { menuInflater.inflate(R.menu.menu_home, menu); return true }
+    override fun onCreateOptionsMenu(menu: Menu?): Boolean { 
+        menuInflater.inflate(R.menu.menu_home, menu)
+        
+        // Setup search functionality
+        val searchItem = menu?.findItem(R.id.action_search)
+        val searchView = searchItem?.actionView as? SearchView
+        
+        searchView?.queryHint = getString(R.string.search_hint)
+        searchView?.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(query: String?): Boolean {
+                query?.let { performSearch(it) }
+                return true
+            }
+            
+            override fun onQueryTextChange(newText: String?): Boolean {
+                newText?.let { performSearch(it) }
+                return true
+            }
+        })
+        
+        // Restore full list when search is closed
+        searchItem?.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
+            override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
+            
+            override fun onMenuItemActionCollapse(item: MenuItem): Boolean {
+                if (!isShowingGroups) {
+                    adapter.updateData(allEntries)
+                }
+                return true
+            }
+        })
+        
+        return true
+    }
+    
     override fun onPrepareOptionsMenu(menu: Menu?): Boolean { 
+        val searchItem = menu?.findItem(R.id.action_search)
         val reconnectItem = menu?.findItem(R.id.action_reconnect)
         val settingsItem = menu?.findItem(R.id.action_group_settings)
 
         if (isShowingGroups) {
-            // Main Screen: Show Reconnect, Hide Settings
+            // Main Screen: Show Reconnect, Hide Settings and Search
+            searchItem?.isVisible = false
             reconnectItem?.isVisible = true
             settingsItem?.isVisible = false
         } else {
-            // Group Screen: Hide Reconnect, Show Settings
+            // Group Screen: Show Search and Settings, Hide Reconnect
+            searchItem?.isVisible = true
             reconnectItem?.isVisible = false
             settingsItem?.isVisible = true
         }
@@ -679,6 +842,9 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
         when(item.itemId) {
             R.id.nav_groups -> loadGroups()
+            R.id.nav_recent_entries -> {
+                startActivity(Intent(this, RecentEntriesActivity::class.java))
+            }
             R.id.nav_add_group -> showCreateGroupDialog()
             R.id.nav_theme -> { 
                 val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)

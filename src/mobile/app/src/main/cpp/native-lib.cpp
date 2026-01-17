@@ -556,3 +556,108 @@ Java_com_ciphermesh_mobile_core_Vault_removeUser(JNIEnv* env, jobject thiz, jstr
      env->ReleaseStringUTFChars(groupName, grp);
      env->ReleaseStringUTFChars(targetUser, tgt);
 }
+
+// --- Search Entries ---
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_searchEntries(JNIEnv* env, jobject thiz, jstring searchTerm) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
+    
+    const char* term = env->GetStringUTFChars(searchTerm, 0);
+    auto entries = g_vault->searchEntries(term);
+    env->ReleaseStringUTFChars(searchTerm, term);
+    
+    jobjectArray result = env->NewObjectArray(entries.size(), env->FindClass("java/lang/String"), nullptr);
+    for (size_t i = 0; i < entries.size(); i++) {
+        std::string formatted = std::to_string(entries[i].id) + ":" + entries[i].title + ":" + entries[i].username;
+        jstring jstr = env->NewStringUTF(formatted.c_str());
+        env->SetObjectArrayElement(result, i, jstr);
+        env->DeleteLocalRef(jstr);
+    }
+    return result;
+}
+
+// --- Get Recently Accessed Entries ---
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getRecentlyAccessedEntries(JNIEnv* env, jobject thiz, jint limit) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
+    
+    auto entries = g_vault->getRecentlyAccessedEntries(limit);
+    
+    jobjectArray result = env->NewObjectArray(entries.size(), env->FindClass("java/lang/String"), nullptr);
+    for (size_t i = 0; i < entries.size(); i++) {
+        std::string formatted = std::to_string(entries[i].id) + ":" + entries[i].title + ":" + entries[i].username;
+        jstring jstr = env->NewStringUTF(formatted.c_str());
+        env->SetObjectArrayElement(result, i, jstr);
+        env->DeleteLocalRef(jstr);
+    }
+    return result;
+}
+
+// --- Get Password History ---
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getPasswordHistory(JNIEnv* env, jobject thiz, jint entryId) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
+    
+    auto history = g_vault->getPasswordHistory(entryId);
+    
+    jobjectArray result = env->NewObjectArray(history.size(), env->FindClass("java/lang/String"), nullptr);
+    for (size_t i = 0; i < history.size(); i++) {
+        // Format: id|encryptedPassword|timestamp
+        std::string formatted = std::to_string(history[i].id) + "|" + 
+                               history[i].encryptedPassword + "|" + 
+                               std::to_string(history[i].changedAt);
+        jstring jstr = env->NewStringUTF(formatted.c_str());
+        env->SetObjectArrayElement(result, i, jstr);
+        env->DeleteLocalRef(jstr);
+    }
+    return result;
+}
+
+// --- Decrypt Password from History ---
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_decryptPasswordFromHistory(JNIEnv* env, jobject thiz, jstring encryptedPassword) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewStringUTF("");
+    
+    const char* encrypted = env->GetStringUTFChars(encryptedPassword, 0);
+    std::string decrypted = g_vault->decryptPasswordFromHistory(encrypted);
+    env->ReleaseStringUTFChars(encryptedPassword, encrypted);
+    
+    return env->NewStringUTF(decrypted.c_str());
+}
+
+// --- Update Entry Access Time ---
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_updateEntryAccessTime(JNIEnv* env, jobject thiz, jint entryId) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    g_vault->updateEntryAccessTime(entryId);
+}
+
+// --- Get Entry Full Details (with timestamps) ---
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getEntryFullDetails(JNIEnv* env, jobject thiz, jint entryId) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewStringUTF("");
+    
+    auto entries = g_vault->getEntries();
+    for (const auto& entry : entries) {
+        if (entry.id == entryId) {
+            // Update access time
+            g_vault->updateEntryAccessTime(entryId);
+            
+            // Format: title|username|password|notes|totpSecret|createdAt|updatedAt|lastAccessed
+            std::string password = g_vault->getDecryptedPassword(entryId);
+            std::string formatted = entry.title + "|" + entry.username + "|" + password + "|" + 
+                                   entry.notes + "|" + entry.totpSecret + "|" + 
+                                   std::to_string(entry.createdAt) + "|" + 
+                                   std::to_string(entry.updatedAt) + "|" + 
+                                   std::to_string(entry.lastAccessed);
+            return env->NewStringUTF(formatted.c_str());
+        }
+    }
+    return env->NewStringUTF("");
+}

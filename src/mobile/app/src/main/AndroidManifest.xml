@@ -28,6 +28,8 @@
         <activity android:name=".HomeActivity" />
         <activity android:name=".SettingsActivity" 
             android:parentActivityName=".HomeActivity" />
+        <activity android:name=".RecentEntriesActivity"
+            android:parentActivityName=".HomeActivity" />
     </application>
 
 </manifest>

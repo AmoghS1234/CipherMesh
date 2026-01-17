@@ -67,4 +67,12 @@ class Vault {
     
     // 8. Test Method
     external fun testInjectInvite(sender: String, groupName: String)
+    
+    // --- Search and History ---
+    external fun searchEntries(searchTerm: String): Array<String>
+    external fun getRecentlyAccessedEntries(limit: Int): Array<String>
+    external fun getPasswordHistory(entryId: Int): Array<String>
+    external fun decryptPasswordFromHistory(encryptedPassword: String): String
+    external fun updateEntryAccessTime(entryId: Int)
+    external fun getEntryFullDetails(entryId: Int): String
 }
