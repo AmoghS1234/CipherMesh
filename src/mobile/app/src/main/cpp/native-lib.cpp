@@ -200,6 +200,17 @@ Java_com_ciphermesh_mobile_core_Vault_hasUsers(JNIEnv* env, jobject thiz) {
     return g_vault->hasUsers();
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_groupExists(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    if (!g_vault) return false;
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    if (!name) return false;
+    bool result = g_vault->groupExists(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    return result;
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_ciphermesh_mobile_core_Vault_getUserId(JNIEnv* env, jobject thiz) {
     if(!g_vault) return env->NewStringUTF("");
