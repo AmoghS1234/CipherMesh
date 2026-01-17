@@ -379,7 +379,7 @@ Java_com_ciphermesh_mobile_core_Vault_addEntry(JNIEnv* env, jobject thiz, jstrin
     const char* u = env->GetStringUTFChars(user, 0); e.username = u;
     const char* p = env->GetStringUTFChars(pass, 0); e.password = p;
     const char* l = env->GetStringUTFChars(url, 0); 
-    e.locations.push_back({"url", l});
+    e.locations.push_back(CipherMesh::Core::Location(-1, "url", l));
     const char* n = env->GetStringUTFChars(notes, 0); e.notes = n;
 
     g_vault->addEntry(e, e.password);
