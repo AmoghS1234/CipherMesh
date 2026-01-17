@@ -302,7 +302,23 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 }
                 membersLayout.addView(emptyText)
             } else {
+                // Get pending invites to show status
+                val pendingInvites = vault.getPendingInvites()
+                
                 for ((index, memberId) in members.withIndex()) {
+                    // Card container for each member (like groups list)
+                    val cardView = com.google.android.material.card.MaterialCardView(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            setMargins(0, 0, 0, 12) // 12dp bottom margin between cards
+                        }
+                        cardElevation = 8f
+                        radius = 12f
+                        setCardBackgroundColor(getColor(com.google.android.material.R.color.material_grey_100))
+                    }
+                    
                     val memberView = LinearLayout(this).apply {
                         orientation = LinearLayout.HORIZONTAL
                         setPadding(16, 14, 16, 14)
@@ -311,18 +327,18 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                             LinearLayout.LayoutParams.WRAP_CONTENT
                         )
                         gravity = Gravity.CENTER_VERTICAL
-                        
-                        // Add ripple effect for better UX
-                        val typedValue = TypedValue()
-                        theme.resolveAttribute(android.R.attr.selectableItemBackground, typedValue, true)
-                        setBackgroundResource(typedValue.resourceId)
                     }
+                    
+                    // Check if this user has a pending invite
+                    val isPending = pendingInvites.any { it.targetUserId == memberId }
                     
                     val memberText = TextView(this).apply {
                         text = when {
-                            memberId == owner && memberId == myId -> "★ $memberId (You, Owner)"
+                            memberId == owner && memberId == myId -> "★ $memberId (Me, Owner)"
+                            memberId == owner && isPending -> "★ $memberId (Owner, Pending Invite)"
                             memberId == owner -> "★ $memberId (Owner)"
-                            memberId == myId -> "$memberId (You)"
+                            memberId == myId -> "$memberId (Me)"
+                            isPending -> "$memberId (Pending Invite)"
                             else -> memberId
                         }
                         layoutParams = LinearLayout.LayoutParams(
@@ -374,22 +390,8 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                         memberView.addView(removeBtn)
                     }
                     
-                    membersLayout.addView(memberView)
-                    
-                    // Add divider between members (but not after last one)
-                    if (index < members.size - 1) {
-                        val divider = View(this).apply {
-                            layoutParams = LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT,
-                                1
-                            ).apply {
-                                setMargins(16, 0, 16, 0)
-                            }
-                            setBackgroundColor(getColor(com.google.android.material.R.color.material_on_surface_stroke))
-                            alpha = 0.5f
-                        }
-                        membersLayout.addView(divider)
-                    }
+                    cardView.addView(memberView)
+                    membersLayout.addView(cardView)
                 }
             }
         }
