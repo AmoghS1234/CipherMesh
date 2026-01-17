@@ -180,6 +180,47 @@ Java_com_ciphermesh_mobile_core_Vault_isLocked(JNIEnv* env, jobject thiz) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_createAccount(JNIEnv* env, jobject thiz, jstring db_path, jstring username, jstring master_pass) {
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    
+    const char* path = env->GetStringUTFChars(db_path, 0);
+    const char* user = env->GetStringUTFChars(username, 0);
+    const char* pwd = env->GetStringUTFChars(master_pass, 0);
+    
+    if (!path || !user || !pwd) {
+        if (path) env->ReleaseStringUTFChars(db_path, path);
+        if (user) env->ReleaseStringUTFChars(username, user);
+        if (pwd) env->ReleaseStringUTFChars(master_pass, pwd);
+        return false;
+    }
+    
+    // Only create new vault if one doesn't exist or if old one is locked
+    if (g_vault && !g_vault->isLocked()) {
+        env->ReleaseStringUTFChars(db_path, path);
+        env->ReleaseStringUTFChars(username, user);
+        env->ReleaseStringUTFChars(master_pass, pwd);
+        LOGE("Cannot create account: vault already unlocked");
+        return false;
+    }
+    
+    // Create vault instance
+    g_vault = std::make_unique<CipherMesh::Core::Vault>();
+    bool result = g_vault->createNewVault(path, pwd);
+    if(result) {
+        g_vault->connect(path);
+        g_vault->unlock(pwd);
+        g_vault->setUsername(user);
+        // Ensure "Personal" group exists
+        g_vault->addGroup("Personal");
+    }
+    
+    env->ReleaseStringUTFChars(db_path, path);
+    env->ReleaseStringUTFChars(username, user);
+    env->ReleaseStringUTFChars(master_pass, pwd);
+    return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_ciphermesh_mobile_core_Vault_registerUser(JNIEnv* env, jobject thiz, jstring db_path, jstring password) {
     std::lock_guard<std::mutex> lock(g_vaultMutex);
     
