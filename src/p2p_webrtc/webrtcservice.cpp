@@ -1097,19 +1097,19 @@ void WebRTCService::removeUser(const std::string& groupName, const std::string& 
     QString userIdQt = QString::fromStdString(userId);
     
     // Clean up peer connection for this user
-    if (m_peers.contains(userIdQt)) {
+    if (m_peerConnections.contains(userIdQt)) {
         qDebug() << "Cleaning up peer connection for removed user:" << userIdQt;
-        auto peer = m_peers[userIdQt];
+        auto peer = m_peerConnections[userIdQt];
         if (peer) {
             peer->close();
         }
-        m_peers.remove(userIdQt);
+        m_peerConnections.remove(userIdQt);
     }
     
     // Clean up data channel
-    if (m_channels.contains(userIdQt)) {
+    if (m_dataChannels.contains(userIdQt)) {
         qDebug() << "Removing data channel for removed user:" << userIdQt;
-        m_channels.remove(userIdQt);
+        m_dataChannels.remove(userIdQt);
     }
     
     // Clean up pending invites
