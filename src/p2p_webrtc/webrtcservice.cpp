@@ -138,12 +138,20 @@ void WebRTCService::inviteUser(const std::string& groupName, const std::string& 
     std::lock_guard<std::mutex> lock(m_mutex);
     
     // Clean up any existing connection to ensure fresh start
+    // CRITICAL: Must fully remove peer before creating new offer
     if (m_peers.count(userEmail)) {
         LOGI("Cleaning up existing peer connection for %s before inviting", userEmail.c_str());
-        m_peers[userEmail]->close();
+        auto existingPeer = m_peers[userEmail];
+        if (existingPeer) {
+            existingPeer->close();
+            // Force immediate cleanup - don't wait for close() to complete
+            existingPeer = nullptr;
+        }
         m_peers.erase(userEmail);
+        LOGI("Peer removed, m_peers.count(%s) = %zu", userEmail.c_str(), m_peers.count(userEmail));
     }
     if (m_channels.count(userEmail)) {
+        LOGI("Removing existing data channel for %s", userEmail.c_str());
         m_channels.erase(userEmail);
     }
     
@@ -159,9 +167,17 @@ void WebRTCService::inviteUser(const std::string& groupName, const std::string& 
 void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOfferer) {
     LOGI("setupPeerConnection() called for %s, isOfferer=%d", peerId.c_str(), isOfferer ? 1 : 0);
     
+    // Check if peer already exists - if it does, something went wrong with cleanup
     if (m_peers.count(peerId)) {
-        LOGI("Peer connection already exists for %s, returning early!", peerId.c_str());
-        return;
+        LOGE("CRITICAL BUG: Peer connection already exists for %s! This should not happen after cleanup!", peerId.c_str());
+        // Force cleanup and continue - this is a defensive measure
+        auto existingPeer = m_peers[peerId];
+        if (existingPeer) {
+            existingPeer->close();
+            existingPeer = nullptr;
+        }
+        m_peers.erase(peerId);
+        LOGI("Force-removed stale peer connection, continuing with fresh setup");
     }
 
     rtc::Configuration config;
