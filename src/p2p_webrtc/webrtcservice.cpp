@@ -352,14 +352,21 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
     std::string type = extractJsonValue(message, "type");
     std::string sender = extractJsonValue(message, "sender");
     
-    if (sender.empty()) return;
+    LOGI("📥 Received signaling message: type=%s, sender=%s", type.c_str(), sender.c_str());
+    
+    if (sender.empty()) {
+        LOGE("ERROR: Signaling message has no sender!");
+        return;
+    }
 
     if (type == "user-online") {
         LOGI("Peer Online: %s", sender.c_str());
         if (m_pendingInvites.count(sender)) retryPendingInviteFor(sender);
     } 
     else if (type == "offer") {
+        LOGI("📨 Processing OFFER from %s", sender.c_str());
         std::string sdp = extractJsonValue(message, "sdp");
+        LOGI("Offer SDP length: %zu", sdp.length());
         
         // [FIX] If we already have a peer connection, close it first
         // This handles simultaneous connection attempts
@@ -400,7 +407,9 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         }
     }
     else if (type == "answer") {
+        LOGI("📨 Processing ANSWER from %s", sender.c_str());
         std::string sdp = extractJsonValue(message, "sdp");
+        LOGI("Answer SDP length: %zu", sdp.length());
         if(m_peers.count(sender)) {
             // [FIX] libdatachannel may send actpass in answers which violates spec
             // Fix the SDP before applying it to avoid crash
@@ -416,6 +425,7 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
         }
     }
     else if (type == "ice-candidate") {
+        LOGI("📨 Processing ICE CANDIDATE from %s", sender.c_str());
         std::string cand = extractJsonValue(message, "candidate");
         std::string mid = extractJsonValue(message, "mid"); // Optional often
         if(m_peers.count(sender)) {
