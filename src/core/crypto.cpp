@@ -46,6 +46,16 @@ std::vector<unsigned char> Crypto::encrypt(const std::vector<unsigned char>& pla
     return ciphertext;
 }
 
+void Crypto::randomBytes(unsigned char* buffer, size_t length) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, 255);
+
+        for (size_t i = 0; i < length; ++i) {
+            buffer[i] = static_cast<unsigned char>(dis(gen));
+        }
+    }
+
 std::vector<unsigned char> Crypto::encrypt(const std::string& plaintext, const std::vector<unsigned char>& key) {
     return encrypt(std::vector<unsigned char>(plaintext.begin(), plaintext.end()), key);
 }

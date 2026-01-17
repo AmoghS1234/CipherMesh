@@ -1,11 +1,14 @@
 package com.ciphermesh.mobile
 
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
@@ -14,15 +17,14 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.ActionBarDrawerToggle
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
 import androidx.core.view.GravityCompat
@@ -48,40 +50,78 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private var currentGroup = ""
     private var isGroupOwner = false 
 
+    private val processingInvites = mutableSetOf<String>()
+
+    // Helper Class to hold location data in memory before saving
+    data class LocationData(var type: String, var value: String) {
+        override fun toString(): String = "[$type] $value"
+    }
+
+    private val refreshReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (isShowingGroups) runOnUiThread { loadGroups() }
+        }
+    }
+
+    // [FIX] Robust Ownership Check: Compares Group Owner ID with Current User ID
+    private fun checkOwnership(groupName: String) {
+        if (groupName == "Personal") {
+            isGroupOwner = true
+            return
+        }
+        val ownerId = vault.getGroupOwner(groupName)
+        val myId = vault.getUserId()
+        isGroupOwner = (ownerId == myId)
+    }
+
+    private fun showGroupOptionsDialog(groupName: String) {
+        // [LOGIC] Define options based on ownership
+        val options = if (isGroupOwner) {
+            arrayOf("Manage Group", "Delete Group")
+        } else {
+            arrayOf("Members", "Leave Group")
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(groupName)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> {
+                        // Option 0: "Manage Group" (Owner) or "Members" (Member)
+                        // Both open the same dialog, but it adapts internally
+                        showManageGroupDialog() 
+                    }
+                    1 -> {
+                        // Option 1: "Delete Group" (Owner) or "Leave Group" (Member)
+                        showDeleteGroupConfirmation(groupName)
+                    }
+                }
+            }
+            .show()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         applySavedTheme()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_home)
 
-        // 1. Init Core
         val dbPath = File(filesDir, "vault.db").absolutePath
         vault.init(dbPath)
         vault.setActivityContext(this)
 
-        // 2. Auth Check
         if (vault.isLocked()) {
-            Toast.makeText(this, "Session Expired. Please Login.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Session Expired", Toast.LENGTH_SHORT).show()
             startActivity(Intent(this, MainActivity::class.java))
             finish()
             return
         }
 
-        // 3. UI Setup
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
         
         drawerLayout = findViewById(R.id.drawer_layout)
         val navView = findViewById<NavigationView>(R.id.nav_view)
-        
-        val toggle = ActionBarDrawerToggle(
-            this, drawerLayout, toolbar,
-            R.string.navigation_drawer_open, R.string.navigation_drawer_close
-        )
-        
-        val typedValue = TypedValue()
-        theme.resolveAttribute(android.R.attr.textColorPrimary, typedValue, true)
-        toggle.drawerArrowDrawable.color = typedValue.data
-        
+        val toggle = ActionBarDrawerToggle(this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close)
         drawerLayout.addDrawerListener(toggle)
         toggle.syncState()
         navView.setNavigationItemSelectedListener(this)
@@ -91,7 +131,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val userId = vault.getUserId()
         userText.text = userId
         userText.setOnClickListener {
-            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText("User ID", userId)
             clipboard.setPrimaryClip(clip)
             Toast.makeText(this, "ID Copied", Toast.LENGTH_SHORT).show()
@@ -99,79 +139,53 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         listView = findViewById(R.id.listViewEntries)
         fabAdd = findViewById(R.id.fabAdd)
-        
         listView.divider = ColorDrawable(Color.TRANSPARENT)
-        listView.dividerHeight = 32 
+        listView.dividerHeight = 16 
         
-        // 4. Init P2P
         p2pManager = P2PManager(this, vault)
         p2pManager.connect()
 
         adapter = CustomAdapter(this, arrayListOf())
         listView.adapter = adapter
 
-        // 5. List Logic
+        // [UPDATE] On Item Click (Entry / Group)
         listView.setOnItemClickListener { _, _, position, _ ->
             if (isShowingGroups) {
                 val entry = adapter.getItem(position) ?: return@setOnItemClickListener
                 
-                // Check if this is a pending invite (has negative ID and "Pending" subtitle)
                 if (entry.subtitle == "Pending" && entry.id < -1000) {
-                    // Extract invite info from the display name
-                    // Format: "GroupName (Invite from UserID)"
-                    val inviteId = -(entry.id + 1000) // Reverse the encoding
-                    val displayName = entry.title ?: return@setOnItemClickListener
-                    
-                    // Parse the group name and sender from display name
+                    val inviteId = -(entry.id + 1000)
                     val regex = """^(.+) \(Invite from (.+)\)$""".toRegex()
-                    val match = regex.find(displayName)
-                    if (match != null) {
-                        val groupName = match.groupValues[1]
-                        val fromUser = match.groupValues[2]
-                        showAcceptRejectInviteDialog(inviteId, fromUser, groupName)
-                    }
+                    val match = regex.find(entry.title ?: "")
+                    if (match != null) showAcceptRejectInviteDialog(inviteId, match.groupValues[2], match.groupValues[1])
                     return@setOnItemClickListener
                 }
                 
-                // Normal group handling
+                if (entry.subtitle == "Syncing...") {
+                    Toast.makeText(this, "Syncing...", Toast.LENGTH_SHORT).show()
+                    return@setOnItemClickListener
+                }
+                
                 val groupName = entry.title ?: return@setOnItemClickListener
-                
-                if (vault.isLocked()) {
-                    Toast.makeText(this, "Vault Locked", Toast.LENGTH_SHORT).show()
-                    startActivity(Intent(this, MainActivity::class.java))
-                    finish()
-                    return@setOnItemClickListener
-                }
-
                 if (vault.setActiveGroup(groupName)) {
                     currentGroup = groupName
-                    val owner = vault.getGroupOwner(groupName)
-                    isGroupOwner = (owner == vault.getUserId() || groupName == "Personal")
+                    checkOwnership(groupName) // <--- Use new ownership check
                     loadEntries()
-                } else {
-                    Toast.makeText(this, "Failed to open group", Toast.LENGTH_SHORT).show()
                 }
             } else {
                 val entryId = adapter.getItem(position)?.id ?: return@setOnItemClickListener
                 showEntryDetails(entryId)
             }
         }
-
+        // [FIXED] Long Press now opens the Options Menu
         listView.setOnItemLongClickListener { _, _, position, _ ->
             if (isShowingGroups) {
                 val groupName = adapter.getItem(position)?.title ?: return@setOnItemLongClickListener false
-                val owner = vault.getGroupOwner(groupName)
-                
-                if (owner == vault.getUserId() || groupName == "Personal") {
-                    currentGroup = groupName
-                    showGroupOptionsDialog(groupName)
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
+                currentGroup = groupName
+                checkOwnership(groupName)
+                showGroupOptionsDialog(groupName) // Calls the menu logic below
+                true
+            } else false
         }
 
         fabAdd.setOnClickListener {
@@ -180,60 +194,32 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         if (!vault.groupExists("Personal")) vault.addGroup("Personal")
         loadGroups()
-    }
 
-    // --- Menus ---
-
-    override fun onCreateOptionsMenu(menu: Menu?): Boolean {
-        menuInflater.inflate(R.menu.menu_home, menu)
-        menu?.add(0, 1001, 0, "🔄 Reconnect")
-        menu?.add(0, 1002, 0, "📡 Test Ping")
-        return true
-    }
-
-    override fun onPrepareOptionsMenu(menu: Menu?): Boolean {
-        val shareItem = menu?.findItem(R.id.action_share_group)
-        shareItem?.isVisible = (!isShowingGroups && isGroupOwner)
-        return super.onPrepareOptionsMenu(menu)
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            R.id.action_share_group -> {
-                showManageGroupDialog()
-                true
-            }
-            1001 -> { p2pManager.connect(); true }
-            1002 -> { p2pManager.sendPing(); true }
-            else -> super.onOptionsItemSelected(item)
-        }
-    }
-
-    override fun onBackPressed() {
-        if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
-            drawerLayout.closeDrawer(GravityCompat.START)
-        } else if (!isShowingGroups) {
-            loadGroups()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(refreshReceiver, IntentFilter("com.ciphermesh.REFRESH_GROUPS"), Context.RECEIVER_NOT_EXPORTED)
         } else {
-            super.onBackPressed()
+            registerReceiver(refreshReceiver, IntentFilter("com.ciphermesh.REFRESH_GROUPS"))
         }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (drawerLayout.isDrawerOpen(GravityCompat.START)) drawerLayout.closeDrawer(GravityCompat.START)
+                else if (!isShowingGroups) loadGroups()
+                else finish() 
+            }
+        })
     }
 
-    override fun onResume() {
-        super.onResume()
-        // Refresh groups list to show any new invites that arrived
-        if (isShowingGroups) {
-            loadGroups()
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(refreshReceiver)
     }
-
-    // --- Helpers ---
 
     private fun loadEntries() {
         isShowingGroups = false
         supportActionBar?.title = currentGroup
         invalidateOptionsMenu() 
-        fabAdd.setImageDrawable(resources.getDrawable(android.R.drawable.ic_input_add, theme))
+        fabAdd.setImageResource(android.R.drawable.ic_input_add)
         
         val entriesRaw = vault.getEntries()
         val entryList = ArrayList<EntryModel>()
@@ -252,260 +238,340 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         isShowingGroups = true
         supportActionBar?.title = "Your Groups"
         invalidateOptionsMenu()
-        fabAdd.setImageDrawable(resources.getDrawable(android.R.drawable.ic_input_add, theme)) 
+        fabAdd.setImageResource(android.R.drawable.ic_input_add)
 
         val groupList = ArrayList<EntryModel>()
+        val prefs = getSharedPreferences("memberships", Context.MODE_PRIVATE)
         
-        // First, add pending invites inline (like desktop app) with red text
         val rawInvites = vault.getPendingInvites()
         for (invite in rawInvites) {
             val parts = invite.split("|")
             if (parts.size >= 3) {
                 val inviteId = parts[0].toIntOrNull() ?: continue
-                val fromUser = parts[1]
-                val groupName = parts[2]
-                
-                // Create entry with invite ID as negative number to distinguish from real groups
-                // Display as "GroupName (Invite from UserID)" for pending invites
-                val displayName = "$groupName (Invite from $fromUser)"
-                val entry = EntryModel(-inviteId - 1000, displayName, "Pending")
-                groupList.add(entry)
+                if (processingInvites.contains(parts[2])) {
+                    groupList.add(EntryModel(-1, "Joining '${parts[2]}'...", "Syncing..."))
+                } else {
+                    groupList.add(EntryModel(-inviteId - 1000, "${parts[2]} (Invite from ${parts[1]})", "Pending"))
+                }
             }
         }
         
-        // Then add regular groups
         val groupsRaw = vault.getGroupNames()
         if (groupsRaw != null) {
             for (g in groupsRaw) {
-                val isMine = (vault.getGroupOwner(g) == vault.getUserId() || g == "Personal")
-                groupList.add(EntryModel(-1, g, if (isMine) "Owner" else "Member")) 
+                val isMember = prefs.getBoolean(g, false)
+                val role = if (isMember) "Member" else "Owner"
+                groupList.add(EntryModel(-1, g, role))
             }
         }
         adapter.updateData(groupList)
     }
 
-    // --- Dialogs ---
+    // [NEW] Manage Group Dialog: Handles Sync, Invites, and Members in one place
+    // ... inside HomeActivity class ...
 
-    private fun showGroupOptionsDialog(groupName: String) {
-        val options = arrayOf("Manage / Share", "Delete Group")
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Options for '$groupName'")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showManageGroupDialog()
-                    1 -> showDeleteGroupConfirmation(groupName)
+    private fun showManageGroupDialog() {
+        // [FIX] Ensure we are inflating the correct new layout
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_manage_group, null)
+        
+        // Views
+        val contentLayout = dialogView.findViewById<LinearLayout>(R.id.manageGroupContentLayout)
+        val titleText = dialogView.findViewById<TextView>(R.id.textGroupTitle)
+        val sectionSync = dialogView.findViewById<LinearLayout>(R.id.sectionSyncSettings)
+        val sectionInvite = dialogView.findViewById<LinearLayout>(R.id.sectionInvite)
+        
+        // [FIX] Changed to generic Switch or SwitchMaterial to match XML
+        val switchMemberSync = dialogView.findViewById<android.widget.CompoundButton>(R.id.switchMemberSync)
+        
+        val btnManualSync = dialogView.findViewById<Button>(R.id.btnManualSync)
+        val inputInvite = dialogView.findViewById<TextInputEditText>(R.id.inputInviteId)
+        val btnSendInvite = dialogView.findViewById<Button>(R.id.btnSendInvite)
+        val membersContainer = dialogView.findViewById<LinearLayout>(R.id.containerMembers)
+
+        titleText.text = "Manage '$currentGroup'"
+
+        if (isGroupOwner) {
+            sectionSync.visibility = View.VISIBLE
+            sectionInvite.visibility = View.VISIBLE
+            
+            val prefs = getSharedPreferences("group_settings", Context.MODE_PRIVATE)
+            val isSyncEnabled = prefs.getBoolean("sync_$currentGroup", false)
+            switchMemberSync.isChecked = isSyncEnabled
+            
+            switchMemberSync.setOnCheckedChangeListener { _, isChecked ->
+                prefs.edit().putBoolean("sync_$currentGroup", isChecked).apply()
+                Toast.makeText(this, "Sync Policy Updated", Toast.LENGTH_SHORT).show()
+            }
+
+            btnManualSync.setOnClickListener {
+                vault.broadcastSync(currentGroup)
+                Toast.makeText(this, "Broadcasting Update...", Toast.LENGTH_SHORT).show()
+            }
+
+            btnSendInvite.setOnClickListener {
+                val target = inputInvite.text.toString().trim()
+                if(target.isNotEmpty()) {
+                    vault.sendP2PInvite(currentGroup, target)
+                    Toast.makeText(this, "Invite Sent", Toast.LENGTH_SHORT).show()
+                    inputInvite.setText("")
                 }
             }
+        } else {
+            sectionSync.visibility = View.GONE
+            sectionInvite.visibility = View.GONE
+            
+            val btnLeave = Button(this)
+            btnLeave.text = "Leave Group"
+            btnLeave.setTextColor(Color.RED)
+            btnLeave.setBackgroundColor(Color.TRANSPARENT)
+            btnLeave.setOnClickListener {
+                showDeleteGroupConfirmation(currentGroup)
+            }
+            // [FIX] Safe add to the LinearLayout, not ScrollView
+            contentLayout?.addView(btnLeave) 
+        }
+
+        fun loadMembers() {
+            membersContainer.removeAllViews()
+            val members = vault.getGroupMembers(currentGroup)
+            val myId = vault.getUserId()
+            
+            if (members.isEmpty()) return
+
+            for (m in members) {
+                val parts = m.split("|")
+                if(parts.size < 3) continue
+                val uid = parts[0]; val role = parts[1]; val status = parts[2]
+                
+                // [FIX] Inflate the specific item_member_row layout
+                val row = LayoutInflater.from(this).inflate(R.layout.item_member_row, membersContainer, false)
+                val nameTxt = row.findViewById<TextView>(R.id.memberName)
+                val statusTxt = row.findViewById<TextView>(R.id.memberStatus)
+                val btnRemove = row.findViewById<View>(R.id.btnRemove)
+
+                // [FIX] Safety check if row views are found
+                if (nameTxt != null) {
+                    var disp = uid
+                    if(uid == myId) disp += " (You)"
+                    if(role == "owner") disp = "👑 $disp"
+                    nameTxt.text = disp
+                }
+                
+                if (statusTxt != null) {
+                    statusTxt.text = status.uppercase()
+                }
+
+                if(isGroupOwner && uid != myId && btnRemove != null) {
+                    btnRemove.visibility = View.VISIBLE
+                    btnRemove.setOnClickListener {
+                        vault.removeUser(currentGroup, uid)
+                        loadMembers()
+                    }
+                } else {
+                    btnRemove?.visibility = View.GONE
+                }
+                membersContainer.addView(row)
+            }
+        }
+        loadMembers()
+
+        MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
+            .setPositiveButton("Done", null)
             .show()
     }
 
     private fun showDeleteGroupConfirmation(groupName: String) {
-        if (groupName == "Personal") {
-            Toast.makeText(this, "Cannot delete 'Personal' group", Toast.LENGTH_SHORT).show()
-            return
-        }
+        if (groupName == "Personal") { Toast.makeText(this, "Cannot delete 'Personal'", Toast.LENGTH_SHORT).show(); return }
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_confirm_password, null)
         val inputPass = dialogView.findViewById<TextInputEditText>(R.id.inputConfirmPass)
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Delete '$groupName'?")
-            .setView(dialogView)
-            .setPositiveButton("Delete") { _, _ ->
+        val action = if (isGroupOwner) "Delete" else "Leave"
+        MaterialAlertDialogBuilder(this).setTitle("$action '$groupName'?")
+            .setView(dialogView).setPositiveButton(action) { _, _ ->
                 val pass = inputPass.text.toString()
                 if (pass.isNotEmpty() && vault.verifyMasterPassword(pass)) {
                     if (vault.deleteGroup(groupName)) {
-                        Toast.makeText(this, "Group Deleted", Toast.LENGTH_SHORT).show()
+                        getSharedPreferences("memberships", Context.MODE_PRIVATE).edit().remove(groupName).apply()
+                        Toast.makeText(this, "Group $action" + "d", Toast.LENGTH_SHORT).show()
                         loadGroups()
-                    } else {
-                        Toast.makeText(this, "Deletion Failed", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    Toast.makeText(this, "Incorrect Password", Toast.LENGTH_SHORT).show()
+                    } else Toast.makeText(this, "Failed", Toast.LENGTH_SHORT).show()
+                } else Toast.makeText(this, "Incorrect Password", Toast.LENGTH_SHORT).show()
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun showAcceptRejectInviteDialog(inviteId: Int, fromUser: String, groupName: String) {
+        val view = LayoutInflater.from(this).inflate(R.layout.dialog_accept_invite, null)
+        val text = view.findViewById<TextView>(R.id.inviteDetailText)
+        val btnAccept = view.findViewById<Button>(R.id.btnAcceptInvite)
+        val btnReject = view.findViewById<Button>(R.id.btnRejectInvite)
+        text.text = "$fromUser invites you to '$groupName'"
+        val dialog = MaterialAlertDialogBuilder(this).setView(view).setCancelable(false).create()
+        btnAccept.setOnClickListener {
+            btnAccept.isEnabled = false; btnAccept.text = "Joining..."; btnReject.isEnabled = false; btnReject.alpha = 0.5f
+            getSharedPreferences("memberships", Context.MODE_PRIVATE).edit().putBoolean(groupName, true).apply()
+            processingInvites.add(groupName)
+            vault.respondToInvite(inviteId, true)
+            Toast.makeText(this, "Accepted. Syncing...", Toast.LENGTH_SHORT).show()
+            loadGroups(); view.postDelayed({ dialog.dismiss() }, 800)
+        }
+        btnReject.setOnClickListener { vault.respondToInvite(inviteId, false); dialog.dismiss(); loadGroups() }
+        dialog.show()
+    }
+
+    // --- Sub-Dialog for Adding/Editing a single location ---
+    private fun showLocationEditDialog(existing: LocationData?, onResult: (LocationData) -> Unit) {
+        val view = LayoutInflater.from(this).inflate(R.layout.dialog_edit_location, null)
+        
+        val spinner = view.findViewById<android.widget.Spinner>(R.id.spinnerLocationType)
+        val inputVal = view.findViewById<TextInputEditText>(R.id.inputLocationValue)
+        
+        // [FIX] Get layout to set placeholder text to avoid overlap issues
+        val layoutVal = view.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.layoutLocationValue)
+        
+        val layoutCustom = view.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.layoutCustomType)
+        val inputCustom = view.findViewById<TextInputEditText>(R.id.inputCustomType)
+
+        val types = arrayOf("URL", "Android App", "iOS App", "WiFi SSID", "Other")
+        val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, types)
+        spinner.adapter = adapter
+
+        // Pre-fill logic
+        if (existing != null) {
+            inputVal.setText(existing.value)
+            if (types.contains(existing.type)) {
+                spinner.setSelection(types.indexOf(existing.type))
+            } else {
+                spinner.setSelection(types.indexOf("Other"))
+                layoutCustom.visibility = View.VISIBLE
+                inputCustom.setText(existing.type)
+            }
+        }
+
+        // Spinner Logic with Placeholder Fix
+        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p0: android.widget.AdapterView<*>?, p1: View?, pos: Int, p3: Long) {
+                val selected = types[pos]
+                layoutCustom.visibility = if (selected == "Other") View.VISIBLE else View.GONE
+                
+                // Set placeholderText on the Layout, NOT hint on the EditText
+                layoutVal.placeholderText = when(selected) {
+                    "URL" -> "https://example.com"
+                    "Android App" -> "com.example.app"
+                    "iOS App" -> "com.example.ios"
+                    "WiFi SSID" -> "Network Name"
+                    else -> "Value"
+                }
+            }
+            override fun onNothingSelected(p0: android.widget.AdapterView<*>?) {}
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setView(view)
+            .setPositiveButton(if (existing == null) "Add" else "Update") { _, _ ->
+                var type = spinner.selectedItem.toString()
+                if (type == "Other") type = inputCustom.text.toString().trim()
+                if (type.isEmpty()) type = "Other"
+                
+                val value = inputVal.text.toString().trim()
+                if (value.isNotEmpty()) {
+                    onResult(LocationData(type, value))
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun showManageGroupDialog() {
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_share_group, null)
-        val inputId = dialogView.findViewById<EditText>(R.id.inputInviteId)
-        val btnInvite = dialogView.findViewById<Button>(R.id.btnInvite)
-        val membersLayout = dialogView.findViewById<LinearLayout>(R.id.layoutMembersList)
-
-        // Load and display group members with Material Design 3 styling
-        fun loadMembers() {
-            membersLayout.removeAllViews()
-            val members = vault.getGroupMembers(currentGroup)
-            val owner = vault.getGroupOwner(currentGroup)
-            val myId = vault.getUserId()
-            
-            if (members.isEmpty()) {
-                val emptyText = TextView(this).apply {
-                    text = "No members in this group yet.\nInvite users to collaborate!"
-                    setPadding(40, 40, 40, 40)
-                    textSize = 14f
-                    setTextColor(getColor(com.google.android.material.R.color.material_on_surface_emphasis_medium))
-                    gravity = android.view.Gravity.CENTER
-                    textAlignment = TextView.TEXT_ALIGNMENT_CENTER
-                }
-                membersLayout.addView(emptyText)
-            } else {
-                // Get pending invites to show status
-                val pendingInvites = vault.getPendingInvites()
-                // Parse pending invites - format is "id|fromUser|groupName"
-                val pendingUserIds = mutableSetOf<String>()
-                for (inviteStr in pendingInvites) {
-                    val parts = inviteStr.split("|")
-                    if (parts.size >= 2) {
-                        pendingUserIds.add(parts[1]) // fromUser is at index 1
-                    }
-                }
-                
-                for ((index, memberId) in members.withIndex()) {
-                    // Card container for each member (like groups list)
-                    val cardView = com.google.android.material.card.MaterialCardView(this).apply {
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        ).apply {
-                            setMargins(0, 0, 0, 12) // 12dp bottom margin between cards
-                        }
-                        cardElevation = 8f
-                        radius = 12f
-                        setCardBackgroundColor(getColor(com.google.android.material.R.color.material_grey_100))
-                    }
-                    
-                    val memberView = LinearLayout(this).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        setPadding(16, 14, 16, 14)
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        )
-                        gravity = Gravity.CENTER_VERTICAL
-                    }
-                    
-                    // Check if this user has a pending invite
-                    val isPending = pendingUserIds.contains(memberId)
-                    
-                    val memberText = TextView(this).apply {
-                        text = when {
-                            memberId == owner && memberId == myId -> "★ $memberId (Me, Owner)"
-                            memberId == owner && isPending -> "★ $memberId (Owner, Pending Invite)"
-                            memberId == owner -> "★ $memberId (Owner)"
-                            memberId == myId -> "$memberId (Me)"
-                            isPending -> "$memberId (Pending Invite)"
-                            else -> memberId
-                        }
-                        layoutParams = LinearLayout.LayoutParams(
-                            0,
-                            LinearLayout.LayoutParams.WRAP_CONTENT,
-                            1f
-                        )
-                        textSize = 15f
-                        setTextColor(when {
-                            memberId == owner -> getColor(com.google.android.material.R.color.material_deep_teal_500)
-                            memberId == myId -> getColor(com.google.android.material.R.color.material_blue_grey_800)
-                            else -> getColor(com.google.android.material.R.color.material_on_surface_emphasis_high_type)
-                        })
-                        setPadding(4, 8, 12, 8)
-                        typeface = android.graphics.Typeface.create(
-                            if (memberId == owner || memberId == myId) android.graphics.Typeface.DEFAULT_BOLD 
-                            else android.graphics.Typeface.DEFAULT, 
-                            android.graphics.Typeface.NORMAL
-                        )
-                        // Enable text selection for copying IDs
-                        setTextIsSelectable(true)
-                    }
-                    
-                    memberView.addView(memberText)
-                    
-                    // Add remove button if not self and not owner, and current user is owner
-                    if (memberId != myId && memberId != owner && myId == owner) {
-                        val removeBtn = com.google.android.material.button.MaterialButton(
-                            this,
-                            null,
-                            com.google.android.material.R.attr.materialButtonOutlinedStyle
-                        ).apply {
-                            text = "Remove"
-                            setTextColor(getColor(com.google.android.material.R.color.design_default_color_error))
-                            strokeColor = android.content.res.ColorStateList.valueOf(
-                                getColor(com.google.android.material.R.color.design_default_color_error)
-                            )
-                            setPadding(20, 4, 20, 4)
-                            textSize = 11f
-                            insetTop = 0
-                            insetBottom = 0
-                            minimumHeight = 0
-                            setOnClickListener {
-                                vault.removeUser(currentGroup, memberId)
-                                loadMembers()
-                                Toast.makeText(this@HomeActivity, "Removed $memberId from group", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                        memberView.addView(removeBtn)
-                    }
-                    
-                    cardView.addView(memberView)
-                    membersLayout.addView(cardView)
-                }
-            }
-        }
-        
-        loadMembers()
-
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle("Manage '$currentGroup'")
-            .setView(dialogView)
-            .setPositiveButton("Done", null)
-            .create()
-
-        btnInvite.setOnClickListener {
-            val targetId = inputId.text.toString().trim()
-            if (targetId.isNotEmpty()) {
-                // [FIX] Run heavy P2P logic in background thread to prevent FREEZING
-                Toast.makeText(this, "Sending invite...", Toast.LENGTH_SHORT).show()
-                Thread {
-                    vault.sendP2PInvite(currentGroup, targetId)
-                    runOnUiThread {
-                        Toast.makeText(this, "Invite Sent!", Toast.LENGTH_SHORT).show()
-                        inputId.setText("")
-                        loadMembers() // Refresh members list
-                    }
-                }.start()
-            } else {
-                Toast.makeText(this, "Enter a User ID", Toast.LENGTH_SHORT).show()
-            }
-        }
-        dialog.show()
-    }
-
     private fun showCreateEntryDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_entry, null)
+        
         val titleEdit = dialogView.findViewById<TextInputEditText>(R.id.inputTitle)
         val userEdit = dialogView.findViewById<TextInputEditText>(R.id.inputUsername)
         val passEdit = dialogView.findViewById<TextInputEditText>(R.id.inputPassword)
-        val urlEdit = dialogView.findViewById<TextInputEditText>(R.id.inputUrl)
+        val totpEdit = dialogView.findViewById<TextInputEditText>(R.id.inputTotp)
+        val notesEdit = dialogView.findViewById<TextInputEditText>(R.id.inputNotes)
+        
+        // Location UI Components
+        val locationsContainer = dialogView.findViewById<LinearLayout>(R.id.locationsContainer)
+        val btnAdd = dialogView.findViewById<Button>(R.id.btnAddLoc)
+
+        val locationsList = ArrayList<LocationData>()
+
+        // Function to refresh the visual list
+        fun refreshLocationsList() {
+            locationsContainer.removeAllViews()
+            
+            for ((index, loc) in locationsList.withIndex()) {
+                val rowView = LayoutInflater.from(this).inflate(R.layout.item_location_row, locationsContainer, false)
+                val typeText = rowView.findViewById<TextView>(R.id.textType)
+                val valueText = rowView.findViewById<TextView>(R.id.textValue)
+                val btnRemove = rowView.findViewById<View>(R.id.btnRemove)
+                val clickArea = rowView.findViewById<View>(R.id.rowClickArea)
+
+                typeText.text = loc.type
+                valueText.text = loc.value
+
+                // Click row to Edit
+                clickArea.setOnClickListener {
+                    showLocationEditDialog(loc) { updatedLoc ->
+                        locationsList[index] = updatedLoc
+                        refreshLocationsList()
+                    }
+                }
+
+                // Click X to Remove
+                btnRemove.setOnClickListener {
+                    locationsList.removeAt(index)
+                    refreshLocationsList()
+                }
+
+                locationsContainer.addView(rowView)
+            }
+        }
+
+        btnAdd.setOnClickListener {
+            showLocationEditDialog(null) { newLoc ->
+                locationsList.add(newLoc)
+                refreshLocationsList()
+            }
+        }
 
         MaterialAlertDialogBuilder(this)
-            .setTitle("Add New Entry")
+            .setTitle("Add Entry")
             .setView(dialogView)
+            .setCancelable(false) // Prevent accidental close
             .setPositiveButton("Save") { _, _ ->
-                val title = titleEdit.text.toString()
-                val user = userEdit.text.toString()
+                val title = titleEdit.text.toString().trim()
+                val user = userEdit.text.toString().trim()
                 val pass = passEdit.text.toString()
-                val url = urlEdit.text.toString()
+                val totp = totpEdit.text.toString().trim()
+                val notes = notesEdit.text.toString().trim()
+
+                // Serialize locations to JSON manually
+                val locListJson = ArrayList<String>()
+                for (loc in locationsList) {
+                    // Basic escaping for safety
+                    val t = loc.type.replace("\"", "\\\"")
+                    val v = loc.value.replace("\"", "\\\"")
+                    locListJson.add("{\"type\":\"$t\", \"value\":\"$v\"}")
+                }
+                val locationsJson = "{\"locations\":[${locListJson.joinToString(",")}]}"
 
                 if (title.isNotEmpty() && pass.isNotEmpty()) {
-                    if (vault.addEntry(title, user, pass, "Login", url, "", "")) {
-                        loadEntries()
-                        Toast.makeText(this, "Entry Saved", Toast.LENGTH_SHORT).show()
+                    vault.addEntry(title, user, pass, "Login", locationsJson, notes, totp)
+                    loadEntries()
+                    
+                    // [AUTO SYNC LOGIC]
+                    val prefs = getSharedPreferences("group_settings", Context.MODE_PRIVATE)
+                    val syncAllowed = isGroupOwner || prefs.getBoolean("sync_$currentGroup", false)
+                    
+                    if (currentGroup != "Personal" && syncAllowed) {
+                        vault.broadcastSync(currentGroup)
+                        Toast.makeText(this, "Saved & Synced", Toast.LENGTH_SHORT).show()
                     } else {
-                        Toast.makeText(this, "Save Failed", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Saved Locally", Toast.LENGTH_SHORT).show()
                     }
                 } else {
-                    Toast.makeText(this, "Title/Password required", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Title/Pass required", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -513,137 +579,75 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
 
     private fun showCreateGroupDialog() {
-        val input = EditText(this)
-        input.hint = "Group Name"
-        val container = android.widget.FrameLayout(this)
-        container.setPadding(60, 40, 60, 20)
-        container.addView(input)
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Create Group")
-            .setView(container)
-            .setPositiveButton("Create") { _, _ ->
-                val name = input.text.toString().trim()
-                if (name.isNotEmpty()) {
-                    if (vault.addGroup(name)) {
-                        loadGroups()
-                    } else {
-                        Toast.makeText(this, "Create Failed", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        val input = EditText(this); input.hint = "Group Name"; val ctr = android.widget.FrameLayout(this); ctr.setPadding(50,20,50,0); ctr.addView(input)
+        MaterialAlertDialogBuilder(this).setTitle("New Group").setView(ctr).setPositiveButton("Create"){_,_->
+            if(input.text.toString().isNotEmpty()) if(vault.addGroup(input.text.toString())) loadGroups()
+        }.setNegativeButton("Cancel",null).show()
     }
 
     private fun showEntryDetails(id: Int) {
-        val detailsRaw = vault.getEntryDetails(id) 
-        val parts = detailsRaw.split("|")
-        if (parts.size < 3) return
-
-        val pass = parts[2]
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle(parts[0]) 
-            .setMessage("Username: ${parts[1]}\nPassword: ••••••••")
-            .setPositiveButton("Copy Password") { _, _ ->
-                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                val clip = ClipData.newPlainText("Password", pass)
-                clipboard.setPrimaryClip(clip)
-                Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
-            }
-            .setNeutralButton("Delete") { _, _ ->
-                if (vault.deleteEntry(id)) {
-                    loadEntries()
-                } else {
-                    Toast.makeText(this, "Delete Failed", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("Close", null)
-            .show()
+        val raw = vault.getEntryDetails(id); val parts = raw.split("|"); if (parts.size < 3) return
+        MaterialAlertDialogBuilder(this).setTitle(parts[0]).setMessage("User: ${parts[1]}\nPass: ••••••")
+            .setPositiveButton("Copy"){_,_-> 
+                (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Pass", parts[2]))
+                Toast.makeText(this,"Copied",Toast.LENGTH_SHORT).show() 
+            }.setNeutralButton("Delete"){_,_-> if(vault.deleteEntry(id)) loadEntries() }.setNegativeButton("Close",null).show()
     }
 
-    private fun showAcceptRejectInviteDialog(inviteId: Int, fromUser: String, groupName: String) {
-        var acceptClicked = false
-        
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle("Group Invite")
-            .setMessage("From: $fromUser\nGroup: $groupName\n\nDo you want to accept this invitation?")
-            .setPositiveButton("Accept", null) // Set later to control behavior
-            .setNegativeButton("Reject") { _, _ ->
-                vault.respondToInvite(inviteId, false)
-                Toast.makeText(this, "Invite Rejected", Toast.LENGTH_SHORT).show()
-                loadGroups() // Refresh immediately
+    override fun onCreateOptionsMenu(menu: Menu?): Boolean { menuInflater.inflate(R.menu.menu_home, menu); return true }
+    override fun onPrepareOptionsMenu(menu: Menu?): Boolean { 
+        val reconnectItem = menu?.findItem(R.id.action_reconnect)
+        val settingsItem = menu?.findItem(R.id.action_group_settings)
+
+        if (isShowingGroups) {
+            // Main Screen: Show Reconnect, Hide Settings
+            reconnectItem?.isVisible = true
+            settingsItem?.isVisible = false
+        } else {
+            // Group Screen: Hide Reconnect, Show Settings
+            reconnectItem?.isVisible = false
+            settingsItem?.isVisible = true
+        }
+        return true 
+    }
+    
+    override fun onOptionsItemSelected(item: MenuItem): Boolean { 
+        when (item.itemId) {
+            R.id.action_reconnect -> { 
+                p2pManager.connect()
+                Toast.makeText(this, "Reconnecting...", Toast.LENGTH_SHORT).show()
+                return true
             }
-            .setNeutralButton("Cancel", null)
-            .create()
-        
-        dialog.setOnShowListener {
-            val acceptButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-            acceptButton.setOnClickListener {
-                if (!acceptClicked) {
-                    acceptClicked = true
-                    acceptButton.isEnabled = false // Disable after first click
-                    acceptButton.text = "Accepting..."
-                    
-                    vault.respondToInvite(inviteId, true)
-                    Toast.makeText(this, "Invite Accepted! Receiving group data...", Toast.LENGTH_LONG).show()
-                    
-                    // Reload groups after delay to allow group-data to arrive and show members if opened
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        loadGroups()
-                        dialog.dismiss()
-                    }, 2000)
-                }
+            R.id.action_group_settings -> {
+                // Clicked the gear icon inside a group
+                showManageGroupDialog()
+                return true
             }
         }
-        
-        dialog.show()
+        return super.onOptionsItemSelected(item)
     }
-
+    
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
-        when (item.itemId) {
+        when(item.itemId) {
             R.id.nav_groups -> loadGroups()
             R.id.nav_add_group -> showCreateGroupDialog()
-            // Removed nav_invites - now shown inline in groups list
-            R.id.nav_theme -> cycleTheme()
-            R.id.nav_lock -> {
-                finish()
-                startActivity(Intent(this, MainActivity::class.java))
+            R.id.nav_theme -> { 
+                val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putInt("theme_index", (prefs.getInt("theme_index", 0) + 1) % 5).apply()
+                finish(); startActivity(intent)
             }
+            R.id.nav_lock -> { finish(); startActivity(Intent(this, MainActivity::class.java)) }
         }
         drawerLayout.closeDrawer(GravityCompat.START)
         return true
     }
-
-    private fun cycleTheme() {
-        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        var index = prefs.getInt("theme_index", 0)
-        index = (index + 1) % 5 
-        prefs.edit().putInt("theme_index", index).apply()
-        finish()
-        startActivity(intent)
-    }
-
-    private fun applySavedTheme() {
-        val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-        val themeIndex = prefs.getInt("theme_index", 0)
-        val themes = listOf(
-            R.style.Theme_CipherMesh_Professional,
-            R.style.Theme_CipherMesh_ModernLight,
-            R.style.Theme_CipherMesh_Ocean,
-            R.style.Theme_CipherMesh_Warm,
-            R.style.Theme_CipherMesh_Vibrant
-        )
-        if (themeIndex in themes.indices) {
-            setTheme(themes[themeIndex])
-        }
-    }
     
-    // [NEW] Helper method for native code to show toasts on UI thread
-    fun showToast(message: String) {
-        runOnUiThread {
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-        }
+    private fun applySavedTheme() {
+        val idx = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getInt("theme_index", 0)
+        val themes = listOf(R.style.Theme_CipherMesh_Professional, R.style.Theme_CipherMesh_ModernLight, R.style.Theme_CipherMesh_Ocean, R.style.Theme_CipherMesh_Warm, R.style.Theme_CipherMesh_Vibrant)
+        if(idx in themes.indices) setTheme(themes[idx])
     }
+
+    fun showToast(msg: String) { runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); if(msg.contains("invite", true)) loadGroups() } }
+    fun triggerGroupRefresh() { runOnUiThread { loadGroups() } }
 }

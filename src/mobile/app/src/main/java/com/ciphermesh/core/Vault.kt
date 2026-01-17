@@ -52,12 +52,12 @@ class Vault {
     
     // 3. Receive JSON from WebSocket -> Pass to C++
     external fun receiveSignalingMessage(json: String)
-
+    // ... existing methods ...
+    external fun sendP2PInvite(groupName: String, targetUser: String)
+    external fun broadcastSync(groupName: String) // [NEW]
+    // ...
     // 4. Register the P2PManager callback so C++ can reply
     external fun registerSignalingCallback(callback: SignalingCallback)
-    
-    // 5. Trigger an invite from the UI -> C++
-    external fun sendP2PInvite(groupName: String, targetUserId: String)
     
     // 6. Check if we need to sync with a newly online user
     external fun getPendingInviteForUser(targetId: String): String

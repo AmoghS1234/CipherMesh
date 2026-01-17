@@ -21,7 +21,8 @@
 
 class WebRTCService : public CipherMesh::P2P::IP2PService {
 public:
-    WebRTCService(const std::string& signalingUrl, const std::string& localUserId);
+    // [FIX] Added optional parent argument to match native-lib.cpp call
+    WebRTCService(const std::string& signalingUrl, const std::string& localUserId, void* parent = nullptr);
     ~WebRTCService() override;
 
     // --- Core P2P Interface ---
@@ -29,6 +30,11 @@ public:
                     const std::vector<unsigned char>& groupKey,
                     const std::vector<CipherMesh::Core::VaultEntry>& entries) override;
     
+    // [FIX] Added queueInvite (same signature as inviteUser) for native-lib compatibility
+    void queueInvite(const std::string& groupName, const std::string& userEmail, 
+                     const std::vector<unsigned char>& groupKey,
+                     const std::vector<CipherMesh::Core::VaultEntry>& entries);
+
     void sendInvite(const std::string& recipientId, const std::string& groupName) override;
     void cancelInvite(const std::string& userId) override;
     void respondToInvite(const std::string& senderId, bool accept) override;
@@ -48,8 +54,8 @@ public:
     void onRetryTimer();
     void broadcastSync(const std::string& payload);
     
-    // [FIX] Made public for JNI access from native-lib.cpp
-    void handleSignalingMessage(const std::string& message);
+    // [FIX] Renamed from handleSignalingMessage to match native-lib.cpp
+    void receiveSignalingMessage(const std::string& message);
 
     // Callbacks
     std::function<void(bool)> onConnectionStateChange;
@@ -58,8 +64,9 @@ public:
     std::function<void(const std::string& senderId, const std::string& groupName)> onIncomingInvite;
     std::function<void(const std::string& senderId, const std::string& groupData)> onGroupDataReceived;
     
-    // Callback for sending signaling messages back to Java
-    std::function<void(const std::string&, const std::string&, const std::string&)> onSendSignaling;
+    // [FIX] Renamed from onSendSignaling to match native-lib.cpp usage
+    // Signature: (target, type, payload)
+    std::function<void(std::string, std::string, std::string)> onSignalingMessage;
 
 private:
     std::string m_signalingUrl;
@@ -82,13 +89,15 @@ private:
     std::mutex m_mutex;
 
     // Internal Helpers
-    // [FIX] This declaration was missing or mismatched in the previous version
     void setupPeerConnection(const std::string& peerId, bool isOfferer);
     
     void setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const std::string& peerId);
     void sendSignalingMessage(const std::string& targetId, const std::string& type, const std::string& payload);
     void retryPendingInviteFor(const std::string& remoteId);
     void flushEarlyCandidatesFor(const std::string& peerId);
+    void sendGroupData_unsafe(const std::string& recipientId, const std::string& groupName, 
+                              const std::vector<unsigned char>& groupKey, 
+                              const std::vector<CipherMesh::Core::VaultEntry>& entries);
 };
 
 // =========================================================

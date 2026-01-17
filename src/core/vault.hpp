@@ -18,7 +18,7 @@ namespace Core {
         ~Vault();
 
         void connect(const std::string& path); 
-        bool isConnected() const; // [FIX] Added to prevent re-connects
+        bool isConnected() const;
         std::string getDBPath() const;
 
         bool createNewVault(const std::string& path, const std::string& masterPassword);
@@ -37,8 +37,8 @@ namespace Core {
         // -- Identity --
         void setUserId(const std::string& userId);
         std::string getUserId();
-        void setUsername(const std::string& name); // [FIX] Store readable name
-        std::string getDisplayUsername();          // [FIX] Retrieve readable name
+        void setUsername(const std::string& name); 
+        std::string getDisplayUsername();          
         
         std::string getIdentityPublicKey(); 
         std::string decryptIncomingKey(const std::string& encryptedBase64);
@@ -47,8 +47,9 @@ namespace Core {
         // -- Groups & Entries --
         std::vector<std::string> getGroupNames();
         int getGroupId(const std::string& groupName);
-        bool addGroup(const std::string& groupName);
-        bool addGroup(const std::string& groupName, const std::vector<unsigned char>& key);
+        
+        bool addGroup(const std::string& groupName, const std::vector<unsigned char>& key = {}, const std::string& ownerId = "");
+        
         bool deleteGroup(const std::string& groupName);
         bool groupExists(const std::string& groupName);
         bool setActiveGroup(const std::string& groupName);
@@ -114,6 +115,10 @@ namespace Core {
         int m_activeGroupId;
         std::string m_activeGroupName;
         std::string m_dbPath;
+
+        // [FIX] These are essential
+        std::string m_userId;
+        bool m_isLocked;
     };
 
 } 

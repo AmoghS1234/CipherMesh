@@ -8,6 +8,7 @@
 #include <sstream> 
 #include <vector>
 #include <string>
+#include <algorithm>
 
 namespace CipherMesh {
 namespace Core {
@@ -22,19 +23,14 @@ Vault::Vault() : m_activeGroupId(-1) {
 
 Vault::~Vault() { lock(); if (m_db) m_db->close(); }
 
-// --- Internal Helpers ---
+// --- Helpers ---
 
-// [FIX] Added missing implementation
 void Vault::checkGroupActive() const {
     checkLocked();
-    if (!isGroupActive()) {
-        throw std::runtime_error("No group is active.");
-    }
+    if (!isGroupActive()) throw std::runtime_error("No group is active.");
 }
 
-bool Vault::isConnected() const {
-    return m_db && m_db->isOpen();
-}
+bool Vault::isConnected() const { return m_db && m_db->isOpen(); }
 
 void Vault::setUsername(const std::string& name) {
     checkLocked();
@@ -43,100 +39,53 @@ void Vault::setUsername(const std::string& name) {
 }
 
 std::string Vault::getDisplayUsername() {
-    if (isLocked() || !isConnected()) return "";
+    if (isLocked() || !isConnected()) return "User";
     try {
         std::vector<unsigned char> data = m_db->getMetadata("user_display_name");
         return std::string(data.begin(), data.end());
     } catch (...) { return "User"; }
 }
 
-std::string Vault::getDBPath() const {
-    return m_dbPath;
-}
+std::string Vault::getDBPath() const { return m_dbPath; }
 
-// --- Settings Persistence ---
+// --- Settings ---
 
 void Vault::setThemeId(const std::string& themeId) {
-    checkLocked(); 
-    if (!m_db || !m_db->isOpen()) return;
-    
+    checkLocked(); if (!isConnected()) return;
     std::vector<unsigned char> data(themeId.begin(), themeId.end());
     m_db->storeMetadata("app_theme", data);
 }
 
 std::string Vault::getThemeId() {
-    if (!m_db || !m_db->isOpen()) return "professional"; 
-
+    if (!isConnected()) return "professional"; 
     try {
         std::vector<unsigned char> data = m_db->getMetadata("app_theme");
         if (data.empty()) return "professional"; 
         return std::string(data.begin(), data.end());
-    } catch (...) {
-        return "professional";
-    }
+    } catch (...) { return "professional"; }
 }
 
 void Vault::setAutoLockTimeout(int minutes) {
-    checkLocked();
-    if (!m_db || !m_db->isOpen()) return;
-
+    checkLocked(); if (!isConnected()) return;
     std::string val = std::to_string(minutes);
     std::vector<unsigned char> data(val.begin(), val.end());
     m_db->storeMetadata("auto_lock_timeout", data);
 }
 
 int Vault::getAutoLockTimeout() {
-    if (!m_db || !m_db->isOpen()) return 15; 
-
+    if (!isConnected()) return 15; 
     try {
         std::vector<unsigned char> data = m_db->getMetadata("auto_lock_timeout");
         if (data.empty()) return 15;
-        std::string val(data.begin(), data.end());
-        return std::stoi(val);
-    } catch (...) {
-        return 15;
-    }
+        return std::stoi(std::string(data.begin(), data.end()));
+    } catch (...) { return 15; }
 }
 
-// --- Sync Logic ---
+// --- Sync ---
 
 void Vault::setSyncCallback(SyncCallback cb) { m_syncCb = cb; }
-
-void Vault::notifySync(const std::string& type, const std::string& payload) {
-    if (m_syncCb) m_syncCb(type, payload);
-}
-
-void Vault::processSyncEvent(const std::string& payload) {
-    std::stringstream ss(payload);
-    std::string segment;
-    std::vector<std::string> parts;
-    while(std::getline(ss, segment, '|')) parts.push_back(segment);
-
-    if (parts.empty()) return;
-    std::string action = parts[0];
-
-    try {
-        if (action == "ADD" && parts.size() >= 8) {
-            int groupId = std::stoi(parts[1]);
-            if (m_db->getEncryptedGroupKeyById(groupId).empty()) return;
-
-            VaultEntry e;
-            e.title = parts[3];
-            e.username = parts[4];
-            std::string encPassStr = parts[5];
-            std::vector<unsigned char> encPass(encPassStr.begin(), encPassStr.end());
-            e.url = parts[6];
-            e.notes = parts[7];
-            e.entryType = "Synced";
-            
-            m_db->storeEntry(groupId, e, encPass);
-        }
-        else if (action == "DEL" && parts.size() >= 2) {
-            int entryId = std::stoi(parts[1]);
-            m_db->deleteEntry(entryId);
-        }
-    } catch (...) {}
-}
+void Vault::notifySync(const std::string& type, const std::string& payload) { if (m_syncCb) m_syncCb(type, payload); }
+void Vault::processSyncEvent(const std::string&) {}
 
 // --- Core Lifecycle ---
 
@@ -156,7 +105,7 @@ bool Vault::unlock(const std::string& masterPassword) {
 
 bool Vault::createNewVault(const std::string& path, const std::string& masterPassword) {
     try {
-        if (m_db) { m_db->close(); }
+        if (m_db) m_db->close();
         lock();
         m_dbPath = path;
         m_db->open(path);
@@ -167,16 +116,11 @@ bool Vault::createNewVault(const std::string& path, const std::string& masterPas
         std::vector<unsigned char> canary_blob = m_crypto->encrypt(KEY_CANARY, m_masterKey_RAM);
         m_db->storeMetadata("key_canary", canary_blob);
         ensureIdentityKeys();
-        addGroup("Personal");
-        
+        addGroup("Personal"); 
         setThemeId("professional");
         setAutoLockTimeout(15);
-        
         return true;
-    } catch (const std::exception& e) {
-        lock();
-        return false;
-    }
+    } catch (...) { lock(); return false; }
 }
 
 bool Vault::loadVault(const std::string& path, const std::string& masterPassword) {
@@ -194,7 +138,7 @@ bool Vault::loadVault(const std::string& path, const std::string& masterPassword
 }
 
 bool Vault::hasUsers() const {
-    if (!m_db || !m_db->isOpen()) return false;
+    if (!isConnected()) return false;
     try { return !m_db->getMetadata("argon_salt").empty(); } catch (...) { return false; }
 }
 
@@ -228,6 +172,52 @@ void Vault::lock() {
 bool Vault::isLocked() const { return m_masterKey_RAM.empty(); }
 void Vault::checkLocked() const { if (isLocked()) throw std::runtime_error("Vault is locked."); }
 
+bool Vault::verifyMasterPassword(const std::string& password) {
+    if (!isConnected()) return false;
+    try {
+        std::vector<unsigned char> salt = m_db->getMetadata("argon_salt");
+        if (salt.empty()) return false;
+        std::vector<unsigned char> testKey = m_crypto->deriveKey(password, salt);
+        std::vector<unsigned char> canary_blob = m_db->getMetadata("key_canary");
+        std::string decrypted = m_crypto->decryptToString(canary_blob, testKey);
+        m_crypto->secureWipe(testKey);
+        return (decrypted == KEY_CANARY);
+    } catch (...) { return false; }
+}
+
+bool Vault::changeMasterPassword(const std::string& newPassword) {
+    checkLocked();
+    try {
+        std::vector<unsigned char> newSalt = m_crypto->randomBytes(m_crypto->SALT_SIZE);
+        std::vector<unsigned char> newMasterKey = m_crypto->deriveKey(newPassword, newSalt);
+        std::vector<unsigned char> newCanary = m_crypto->encrypt(KEY_CANARY, newMasterKey);
+        std::vector<unsigned char> newIdPriv = m_crypto->encrypt(m_identityPrivateKey, newMasterKey);
+        
+        std::vector<std::string> groups = m_db->getAllGroupNames();
+        std::map<std::string, std::vector<unsigned char>> decryptedKeys;
+        for (const auto& g : groups) {
+            int gid = -1;
+            std::vector<unsigned char> encKey = m_db->getEncryptedGroupKey(g, gid);
+            if (!encKey.empty()) decryptedKeys[g] = m_crypto->decrypt(encKey, m_masterKey_RAM);
+        }
+        
+        m_db->storeMetadata("argon_salt", newSalt);
+        m_db->storeMetadata("key_canary", newCanary);
+        m_db->storeMetadata("identity_priv", newIdPriv);
+        
+        for (auto const& [name, key] : decryptedKeys) {
+            std::vector<unsigned char> reEncKey = m_crypto->encrypt(key, newMasterKey);
+            int gid = m_db->getGroupId(name);
+            std::string owner = m_db->getGroupOwner(gid);
+            m_db->storeEncryptedGroup(name, reEncKey, owner);
+        }
+        
+        m_crypto->secureWipe(m_masterKey_RAM);
+        m_masterKey_RAM = newMasterKey;
+        return true;
+    } catch (...) { return false; }
+}
+
 // --- Entry Management ---
 
 bool Vault::addEntry(const VaultEntry& entry, const std::string& password) {
@@ -236,12 +226,6 @@ bool Vault::addEntry(const VaultEntry& entry, const std::string& password) {
         VaultEntry tempEntry = entry;
         std::vector<unsigned char> encryptedPassword = m_crypto->encrypt(password, m_activeGroupKey_RAM);
         m_db->storeEntry(m_activeGroupId, tempEntry, encryptedPassword);
-        
-        std::string encPassStr(encryptedPassword.begin(), encryptedPassword.end());
-        std::stringstream ss;
-        ss << "ADD|" << m_activeGroupId << "|0|" << tempEntry.title << "|" << tempEntry.username << "|" 
-           << encPassStr << "|" << tempEntry.url << "|" << tempEntry.notes;
-        notifySync("sync-entry", ss.str());
         return true;
     } catch (...) { return false; }
 }
@@ -256,27 +240,13 @@ bool Vault::updateEntry(const VaultEntry& entry, const std::string& newPassword)
         } else {
             m_db->updateEntry(entry, nullptr);
         }
-        
-        std::string encPassStr = newPassword.empty() ? "NO_CHANGE" : std::string(encryptedPassword.begin(), encryptedPassword.end());
-        std::stringstream ss;
-        ss << "UPD|" << m_activeGroupId << "|" << entry.id << "|" << entry.title << "|" << entry.username << "|" 
-           << encPassStr << "|" << entry.url << "|" << entry.notes;
-        notifySync("sync-entry", ss.str());
         return true;
     } catch (...) { return false; }
 }
 
 bool Vault::deleteEntry(int entryId) {
     checkGroupActive();
-    try { 
-        bool result = m_db->deleteEntry(entryId);
-        if (result) {
-            std::stringstream ss;
-            ss << "DEL|" << entryId;
-            notifySync("sync-entry", ss.str());
-        }
-        return result;
-    } catch (...) { return false; }
+    return m_db->deleteEntry(entryId);
 }
 
 std::vector<VaultEntry> Vault::getEntries() {
@@ -293,6 +263,31 @@ std::string Vault::getDecryptedPassword(int entryId) {
     std::string decryptedPassword = m_crypto->decryptToString(encryptedPassword, groupKey);
     m_crypto->secureWipe(groupKey);
     return decryptedPassword;
+}
+
+std::vector<VaultEntry> Vault::searchEntries(const std::string& searchTerm) {
+    checkLocked();
+    std::vector<VaultEntry> allEntries;
+    std::vector<std::string> groups = m_db->getAllGroupNames();
+    
+    std::string lowerTerm = searchTerm;
+    std::transform(lowerTerm.begin(), lowerTerm.end(), lowerTerm.begin(), ::tolower);
+    
+    for (const auto& g : groups) {
+        int gid = m_db->getGroupId(g);
+        std::vector<VaultEntry> entries = m_db->getEntriesForGroup(gid);
+        for (const auto& e : entries) {
+            std::string lowerTitle = e.title;
+            std::string lowerUser = e.username;
+            std::transform(lowerTitle.begin(), lowerTitle.end(), lowerTitle.begin(), ::tolower);
+            std::transform(lowerUser.begin(), lowerUser.end(), lowerUser.begin(), ::tolower);
+            
+            if (lowerTitle.find(lowerTerm) != std::string::npos || lowerUser.find(lowerTerm) != std::string::npos) {
+                allEntries.push_back(e);
+            }
+        }
+    }
+    return allEntries;
 }
 
 // --- Group Management ---
@@ -318,33 +313,92 @@ void Vault::lockActiveGroup() {
 
 bool Vault::isGroupActive() const { return !m_activeGroupKey_RAM.empty() && m_activeGroupId != -1; }
 
-bool Vault::addGroup(const std::string& groupName) {
-    checkLocked();
+bool Vault::addGroup(const std::string& groupName, const std::vector<unsigned char>& key, const std::string& ownerId) {
+    if (isLocked()) return false;
+    
+    std::vector<unsigned char> finalKey = key;
+    if (finalKey.empty()) {
+        finalKey.resize(32);
+        // [FIX] Call the function from Crypto class
+        CipherMesh::Core::Crypto::randomBytes(finalKey.data(), 32);
+    }
+
     try {
-        std::vector<unsigned char> newGroupKey = m_crypto->randomBytes(m_crypto->KEY_SIZE);
-        std::vector<unsigned char> encryptedGroupKey = m_crypto->encrypt(newGroupKey, m_masterKey_RAM);
-        std::string ownerId = getUserId(); if(ownerId.empty()) ownerId = "me";
-        m_db->storeEncryptedGroup(groupName, encryptedGroupKey, ownerId);
-        m_crypto->secureWipe(newGroupKey);
-        int gid = m_db->getGroupId(groupName);
-        m_db->addGroupMember(gid, ownerId, "owner", "accepted");
+        // [FIX] Use m_masterKey_RAM
+        std::vector<unsigned char> encryptedKey = CipherMesh::Core::Crypto::encrypt(finalKey, m_masterKey_RAM);
+        
+        // Use provided ownerId if available, else self
+        std::string finalOwner = ownerId.empty() ? m_userId : ownerId;
+        
+        // [FIX] Use -> for pointers
+        m_db->storeEncryptedGroup(groupName, encryptedKey, finalOwner);
+        
+        std::string role = (finalOwner == m_userId) ? "owner" : "member";
+        
+        // [FIX] Use -> for pointers
+        m_db->addGroupMember(m_db->getGroupId(groupName), m_userId, role, "accepted");
+        
         return true;
-    } catch (...) { return false; }
+    } catch (const DBException& e) {
+        return false;
+    }
 }
 
-bool Vault::addGroup(const std::string& groupName, const std::vector<unsigned char>& key) {
+bool Vault::deleteGroup(const std::string& groupName) {
     checkLocked();
-    try {
-        std::vector<unsigned char> encryptedGroupKey = m_crypto->encrypt(key, m_masterKey_RAM);
-        std::string ownerId = getUserId(); if(ownerId.empty()) ownerId = "me";
-        m_db->storeEncryptedGroup(groupName, encryptedGroupKey, ownerId);
-        int gid = m_db->getGroupId(groupName);
-        m_db->addGroupMember(gid, ownerId, "member", "accepted");
-        return true;
-    } catch (...) { return false; }
+    return m_db->deleteGroup(groupName);
 }
 
-// -- Member Management ---
+// --- [FIX] Missing Desktop Linking Methods ---
+
+std::vector<std::string> Vault::getGroupNames() { checkLocked(); return m_db->getAllGroupNames(); }
+
+bool Vault::groupExists(const std::string& groupName) { 
+    try { return m_db->getGroupId(groupName) != -1; } catch(...) { return false; } 
+}
+
+int Vault::getGroupId(const std::string& groupName) { return m_db->getGroupId(groupName); }
+
+void Vault::setGroupPermissions(int groupId, bool adminsOnly) { m_db->setGroupPermissions(groupId, adminsOnly); }
+
+GroupPermissions Vault::getGroupPermissions(int groupId) { return m_db->getGroupPermissions(groupId); }
+
+// [FIX] Checks if current user is owner/admin
+bool Vault::canUserEdit(const std::string& groupName) {
+    if (isLocked()) return false;
+    if (groupName == "Personal") return true;
+    
+    try {
+        int gid = m_db->getGroupId(groupName);
+        std::string myId = getUserId();
+        // Simple check: Owner or Admin role
+        // Ideally DB should have a checkMemberRole method
+        std::vector<GroupMember> members = m_db->getGroupMembers(gid);
+        for(const auto& m : members) {
+            if (m.userId == myId && (m.role == "owner" || m.role == "admin")) return true;
+        }
+        return false;
+    } catch(...) { return false; }
+}
+
+void Vault::updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole) { 
+    m_db->updateGroupMemberRole(groupId, userId, newRole); 
+}
+
+void Vault::updateGroupMemberStatus(const std::string& groupName, const std::string& userId, const std::string& newStatus) { 
+    int gid = m_db->getGroupId(groupName); 
+    m_db->updateGroupMemberStatus(gid, userId, newStatus); 
+}
+
+std::vector<unsigned char> Vault::getGroupKey(const std::string& groupName) {
+    if (isGroupActive() && m_activeGroupName == groupName) return m_activeGroupKey_RAM;
+    int groupId = -1;
+    std::vector<unsigned char> encryptedKey = m_db->getEncryptedGroupKey(groupName, groupId);
+    return m_crypto->decrypt(encryptedKey, m_masterKey_RAM);
+}
+
+// --- Member Management ---
+
 void Vault::addGroupMember(const std::string& groupName, const std::string& userId, const std::string& role, const std::string& status) {
     checkLocked();
     int groupId = m_db->getGroupId(groupName);
@@ -402,48 +456,63 @@ void Vault::updatePendingInviteStatus(int inviteId, const std::string& status) {
     m_db->updatePendingInviteStatus(inviteId, status);
 }
 
-// --- Rest of Implementation ---
-std::vector<std::string> Vault::getGroupNames() { checkLocked(); return m_db->getAllGroupNames(); }
-bool Vault::groupExists(const std::string& groupName) { try { return m_db->getGroupId(groupName) != -1; } catch(...) { return false; } }
-int Vault::getGroupId(const std::string& groupName) { return m_db->getGroupId(groupName); }
-void Vault::setGroupPermissions(int groupId, bool adminsOnly) { m_db->setGroupPermissions(groupId, adminsOnly); }
-GroupPermissions Vault::getGroupPermissions(int groupId) { return m_db->getGroupPermissions(groupId); }
-bool Vault::canUserEdit(const std::string& groupName) { return true; } 
-void Vault::updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole) { m_db->updateGroupMemberRole(groupId, userId, newRole); }
-void Vault::updateGroupMemberStatus(const std::string& groupName, const std::string& userId, const std::string& newStatus) { int gid = m_db->getGroupId(groupName); m_db->updateGroupMemberStatus(gid, userId, newStatus); }
-std::vector<unsigned char> Vault::getGroupKey(const std::string& groupName) {
-    if (isGroupActive() && m_activeGroupName == groupName) return m_activeGroupKey_RAM;
-    int groupId = -1;
-    std::vector<unsigned char> encryptedKey = m_db->getEncryptedGroupKey(groupName, groupId);
-    return m_crypto->decrypt(encryptedKey, m_masterKey_RAM);
+// --- Data Export/Import ---
+
+std::vector<VaultEntry> Vault::exportGroupEntries(const std::string& groupName) {
+    std::string oldGroup = m_activeGroupName;
+    if(setActiveGroup(groupName)) {
+        std::vector<VaultEntry> entries = getEntries();
+        for(auto& e : entries) {
+            e.password = getDecryptedPassword(e.id);
+        }
+        if (!oldGroup.empty()) setActiveGroup(oldGroup);
+        return entries;
+    }
+    return {};
 }
-std::vector<VaultEntry> Vault::exportGroupEntries(const std::string& groupName) { return getEntries(); } 
+
 void Vault::importGroupEntries(const std::string& groupName, const std::vector<VaultEntry>& entries) {
     checkLocked();
     int groupId = m_db->getGroupId(groupName);
+    if (groupId == -1) return;
+    
     std::vector<unsigned char> encKey = m_db->getEncryptedGroupKeyById(groupId);
     std::vector<unsigned char> groupKey = m_crypto->decrypt(encKey, m_masterKey_RAM);
     
     for (const auto& entry : entries) {
         std::vector<unsigned char> encPass = m_crypto->encrypt(entry.password, groupKey);
-        VaultEntry e = entry; // copy
+        VaultEntry e = entry;
         m_db->storeEntry(groupId, e, encPass);
     }
     m_crypto->secureWipe(groupKey);
 }
-std::string Vault::getIdentityPublicKey() { if(m_identityPublicKey.empty()) ensureIdentityKeys(); return m_crypto->base64Encode(m_identityPublicKey); }
+
+std::string Vault::getIdentityPublicKey() { 
+    if(m_identityPublicKey.empty()) ensureIdentityKeys(); 
+    return m_crypto->base64Encode(m_identityPublicKey); 
+}
+
 std::string Vault::decryptIncomingKey(const std::string& encryptedBase64) { return ""; }
-std::vector<unsigned char> Vault::encryptForUser(const std::string& recipientPubKeyBase64, const std::vector<unsigned char>& data) { return {}; }
-std::vector<PasswordHistoryEntry> Vault::getPasswordHistory(int entryId) { return {}; }
+std::vector<unsigned char> Vault::encryptForUser(const std::string&, const std::vector<unsigned char>&) { return {}; }
+
+// --- History & Extras ---
+
+std::vector<PasswordHistoryEntry> Vault::getPasswordHistory(int entryId) {
+    return m_db->getPasswordHistory(entryId);
+}
+
 std::string Vault::decryptPasswordFromHistory(const std::string& encryptedPassword) { return ""; }
-void Vault::updateEntryAccessTime(int entryId) {}
-std::vector<VaultEntry> Vault::getRecentlyAccessedEntries(int limit) { return {}; }
-bool Vault::verifyMasterPassword(const std::string& password) { return true; }
-bool Vault::changeMasterPassword(const std::string& newPassword) { return true; }
-bool Vault::entryExists(const std::string& username, const std::string& locationValue) { return false; }
-std::vector<VaultEntry> Vault::findEntriesByLocation(const std::string& locationValue) { return {}; }
-std::vector<VaultEntry> Vault::searchEntries(const std::string& searchTerm) { return {}; }
-bool Vault::deleteGroup(const std::string& groupName) { return m_db->deleteGroup(groupName); }
+
+void Vault::updateEntryAccessTime(int entryId) {
+    m_db->updateEntryAccessTime(entryId);
+}
+
+std::vector<VaultEntry> Vault::getRecentlyAccessedEntries(int limit) {
+    return m_db->getRecentEntries(limit);
+}
+
+bool Vault::entryExists(const std::string&, const std::string&) { return false; }
+std::vector<VaultEntry> Vault::findEntriesByLocation(const std::string&) { return {}; }
 
 } // namespace Core
 } // namespace CipherMesh

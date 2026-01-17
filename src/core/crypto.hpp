@@ -41,6 +41,7 @@ public:
     
     // --- Hashing ---
     static std::string sha1(const std::string& input);
+    static void randomBytes(unsigned char* buffer, size_t length);
 
     // --- Asymmetric / Sealed Box (P2P Security) ---
     

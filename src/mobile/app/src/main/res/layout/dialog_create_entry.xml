@@ -8,66 +8,118 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="New Vault Entry"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="?attr/colorPrimary"
+            android:layout_marginBottom="16dp"/>
 
         <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Title (e.g. Google)"
-            android:layout_marginBottom="16dp"
-            style="@style/CipherMesh.Input">
-
+            android:hint="Title"
+            android:layout_marginBottom="8dp">
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/inputTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:inputType="textCapWords"
-                android:textColor="?android:attr/textColorPrimary"/>
+                android:singleLine="true"/>
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="Username / Email"
-            android:layout_marginBottom="16dp"
-            style="@style/CipherMesh.Input">
-
+            android:layout_marginBottom="8dp">
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/inputUsername"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:inputType="textEmailAddress"
-                android:textColor="?android:attr/textColorPrimary"/>
+                android:singleLine="true"/>
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="Password"
-            android:layout_marginBottom="16dp"
             app:endIconMode="password_toggle"
-            style="@style/CipherMesh.Input">
-
+            android:layout_marginBottom="16dp">
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/inputPassword"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:inputType="textPassword"
-                android:textColor="?android:attr/textColorPrimary"/>
+                android:singleLine="true"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="4dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Locations / URIs"
+                android:textStyle="bold"
+                android:textColor="?android:attr/textColorSecondary"/>
+            
+            <Button
+                android:id="@+id/btnAddLoc"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="+ Add"
+                android:minWidth="0dp"
+                android:paddingHorizontal="8dp"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/locationsContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="16dp"/>
+
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="2FA Secret (Optional)"
+            app:helperText="Base32 key for TOTP"
+            android:layout_marginBottom="8dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/inputTotp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textNoSuggestions"
+                android:singleLine="true"/>
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Website URL"
-            style="@style/CipherMesh.Input">
-
+            android:hint="Notes">
             <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/inputUrl"
+                android:id="@+id/inputNotes"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:inputType="textUri"
-                android:textColor="?android:attr/textColorPrimary"/>
+                android:inputType="textMultiLine"
+                android:minLines="3"
+                android:gravity="top|start"/>
         </com.google.android.material.textfield.TextInputLayout>
 
     </LinearLayout>

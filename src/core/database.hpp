@@ -35,6 +35,7 @@ public:
     bool isOpen() const;
     void exec(const std::string& sql); // Helper for raw SQL
     void createTables();
+    std::vector<VaultEntry> getRecentEntries(int limit);
 
     // -- Group Management --
     void storeEncryptedGroup(const std::string& name, const std::vector<unsigned char>& encryptedKey, const std::string& ownerId);

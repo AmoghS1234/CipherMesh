@@ -962,11 +962,12 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
         auto invites = m_vault->getPendingInvites();
         for(const auto& inv : invites) {
             if(inv.id == m_currentSelectedInviteId) {
+                // [FIX] Changed inv.sender to inv.senderId
                 m_inviteInfoLabel->setText(QString("<b>Incoming Group Invite</b><br><br>"
                                                    "User <b>%1</b> wants to share the group<br>"
                                                    "<b>'%2'</b> with you.<br><br>"
                                                    "Click Accept to add this group to your vault.")
-                                                   .arg(QString::fromStdString(inv.senderId))
+                                                   .arg(QString::fromStdString(inv.senderId)) 
                                                    .arg(QString::fromStdString(inv.groupName)));
                 break;
             }
@@ -976,15 +977,21 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
         return;
     }
 
-    // Get the actual group name from text, removing invite suffix if present
     QString groupNameQStr = current->text();
     if (groupNameQStr.endsWith(INVITE_SUFFIX)) {
         groupNameQStr = groupNameQStr.left(groupNameQStr.length() - INVITE_SUFFIX.length());
     }
     std::string groupName = groupNameQStr.toStdString();
-    bool canEdit = m_vault->canUserEdit(groupName);
-    m_newEntryButton->setEnabled(canEdit);
 
+    // Permission Logic
+    std::string myId = m_vault->getUserId();
+    std::string ownerId = m_vault->getGroupOwner(m_vault->getGroupId(groupName));
+    
+    bool isPersonal = (groupName == "Personal");
+    bool isOwner = (ownerId == myId);
+    bool canEdit = isPersonal || isOwner || m_vault->canUserEdit(groupName);
+
+    m_newEntryButton->setEnabled(canEdit);
     m_detailsStack->setCurrentIndex(0); 
     
     try {
@@ -996,8 +1003,6 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
                 m_entryListWidget->addItem(item);
                 m_entryMap[item] = entry;
             }
-            
-            // Update recent menu when group changes
             updateRecentMenu();
         }
     } catch (const std::exception& e) {

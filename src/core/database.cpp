@@ -356,6 +356,8 @@ void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned c
     }
 }
 
+// ... inside src/core/database.cpp
+
 bool Database::entryExists(const std::string& username, const std::string& locationValue) {
     SqlStatement q(m_db_handle, "SELECT count(*) FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = ? AND l.value = ?");
     q.bind(1, username); q.bind(2, locationValue);
@@ -499,6 +501,29 @@ void Database::deletePendingInvite(int inviteId) {
     SqlStatement q(m_db_handle, "DELETE FROM pending_invites WHERE id = ?");
     q.bind(1, inviteId);
     q.exec();
+}
+
+std::vector<VaultEntry> Database::getRecentEntries(int limit) {
+    std::vector<VaultEntry> res;
+    SqlStatement q(m_db_handle, "SELECT id, group_id, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry FROM entries ORDER BY last_accessed DESC LIMIT ?");
+    q.bind(1, limit);
+    while (q.step()) {
+        VaultEntry e;
+        e.id = q.getInt(0);
+        e.groupId = q.getInt(1);
+        e.title = q.getString(2);
+        e.username = q.getString(3);
+        e.url = q.getString(4);
+        e.notes = q.getString(5);
+        e.totpSecret = q.getString(6);
+        e.entryType = q.getString(7);
+        e.createdAt = q.getInt64(8);
+        e.updatedAt = q.getInt64(9);
+        e.lastAccessed = q.getInt64(10);
+        e.passwordExpiry = q.getInt64(11);
+        res.push_back(e);
+    }
+    return res;
 }
 
 } // namespace Core
@@ -1152,6 +1177,35 @@ void Database::deletePendingInvite(int inviteId) {
     q.prepare("DELETE FROM pending_invites WHERE id = :id");
     q.bindValue(":id", inviteId);
     q.exec();
+}
+
+std::vector<VaultEntry> Database::getRecentEntries(int limit) {
+    std::vector<VaultEntry> results;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT id, group_id, title, username, url, notes, totp_secret, entry_type, "
+              "created_at, updated_at, last_accessed, password_expiry "
+              "FROM entries ORDER BY last_accessed DESC LIMIT :lim");
+    q.bindValue(":lim", limit);
+
+    if (q.exec()) {
+        while (q.next()) {
+            VaultEntry e;
+            e.id = q.value(0).toInt();
+            e.groupId = q.value(1).toInt();
+            e.title = q.value(2).toString().toStdString();
+            e.username = q.value(3).toString().toStdString();
+            e.url = q.value(4).toString().toStdString();
+            e.notes = q.value(5).toString().toStdString();
+            e.totpSecret = q.value(6).toString().toStdString();
+            e.entryType = q.value(7).toString().toStdString();
+            e.createdAt = q.value(8).toLongLong();
+            e.updatedAt = q.value(9).toLongLong();
+            e.lastAccessed = q.value(10).toLongLong();
+            e.passwordExpiry = q.value(11).toLongLong();
+            results.push_back(e);
+        }
+    }
+    return results;
 }
 
 } // namespace Core
