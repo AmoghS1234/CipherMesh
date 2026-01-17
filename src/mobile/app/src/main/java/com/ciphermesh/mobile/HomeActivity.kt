@@ -46,6 +46,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
     companion object {
         private val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+        private const val ENTRY_DETAILS_PARTS_COUNT = 8
     }
 
     private val vault = Vault()
@@ -651,7 +652,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private fun showEntryDetails(id: Int) {
         val raw = vault.getEntryFullDetails(id)
         val parts = raw.split("|")
-        if (parts.size < 8) return
+        if (parts.size < ENTRY_DETAILS_PARTS_COUNT) return
         
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_entry_details, null)
         
@@ -676,11 +677,18 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         detailPass.setText(parts[2])
         detailNotes.setText(parts[3])
         
-        // Format timestamps with thread-safe date formatter
-        synchronized(dateFormat) {
-            textCreatedAt.text = getString(R.string.created_at, dateFormat.format(Date(parts[5].toLong() * 1000)))
-            textUpdatedAt.text = getString(R.string.updated_at, dateFormat.format(Date(parts[6].toLong() * 1000)))
-            textLastAccessed.text = getString(R.string.last_accessed, dateFormat.format(Date(parts[7].toLong() * 1000)))
+        // Format timestamps with thread-safe date formatter and error handling
+        try {
+            synchronized(dateFormat) {
+                textCreatedAt.text = getString(R.string.created_at, dateFormat.format(Date(parts[5].toLong() * 1000)))
+                textUpdatedAt.text = getString(R.string.updated_at, dateFormat.format(Date(parts[6].toLong() * 1000)))
+                textLastAccessed.text = getString(R.string.last_accessed, dateFormat.format(Date(parts[7].toLong() * 1000)))
+            }
+        } catch (e: NumberFormatException) {
+            // If timestamps are invalid, show default text
+            textCreatedAt.text = getString(R.string.created_at, "N/A")
+            textUpdatedAt.text = getString(R.string.updated_at, "N/A")
+            textLastAccessed.text = getString(R.string.last_accessed, "N/A")
         }
         
         btnCopyPass.setOnClickListener {
@@ -720,7 +728,12 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         for (raw in historyRaw) {
             val parts = raw.split("|")
             if (parts.size >= 3) {
-                historyItems.add(PasswordHistoryItem(parts[1], parts[2].toLong()))
+                try {
+                    historyItems.add(PasswordHistoryItem(parts[1], parts[2].toLong()))
+                } catch (e: NumberFormatException) {
+                    // Skip invalid timestamp entries
+                    continue
+                }
             }
         }
         

@@ -43,9 +43,19 @@ class PasswordHistoryAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = items[position]
         
-        // Format timestamp with thread-safe date formatter
-        val dateStr = synchronized(dateFormat) {
-            dateFormat.format(Date(item.timestamp * 1000))
+        // Format timestamp with thread-safe date formatter and overflow prevention
+        val dateStr = try {
+            synchronized(dateFormat) {
+                // Safely multiply timestamp, checking for reasonable range (after year 1970, before year 3000)
+                val timestamp = item.timestamp
+                if (timestamp in 0..32503680000) { // Unix epoch to year 3000
+                    dateFormat.format(Date(timestamp * 1000))
+                } else {
+                    "Invalid date"
+                }
+            }
+        } catch (e: Exception) {
+            "Invalid date"
         }
         holder.textTimestamp.text = context.getString(R.string.password_changed_at, dateStr)
         

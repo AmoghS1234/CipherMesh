@@ -17,6 +17,10 @@ import java.io.File
 
 class RecentEntriesActivity : AppCompatActivity() {
 
+    companion object {
+        private const val ENTRY_DETAILS_PARTS_COUNT = 8
+    }
+
     private val vault = Vault()
     private lateinit var listView: ListView
     private lateinit var adapter: CustomAdapter
@@ -85,7 +89,7 @@ class RecentEntriesActivity : AppCompatActivity() {
     private fun showEntryDetails(id: Int) {
         val raw = vault.getEntryFullDetails(id)
         val parts = raw.split("|")
-        if (parts.size < 8) return
+        if (parts.size < ENTRY_DETAILS_PARTS_COUNT) return
 
         MaterialAlertDialogBuilder(this)
             .setTitle(parts[0])
