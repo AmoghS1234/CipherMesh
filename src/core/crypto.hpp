@@ -38,6 +38,7 @@ public:
     static void secureWipe(std::vector<unsigned char>& data);
     static void secureWipe(std::string& str);
     static std::string generatePassword(const PasswordOptions& options);
+    static std::string generateUUID(); // [ADDED] Generate RFC4122 UUID v4
     
     // --- Hashing ---
     static std::string sha1(const std::string& input);

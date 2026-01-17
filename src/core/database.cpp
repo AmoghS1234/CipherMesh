@@ -247,19 +247,25 @@ void Database::updateGroupMemberStatus(int groupId, const std::string& userId, c
 
 // -- Entries --
 void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsigned char>& encryptedPassword) {
-    SqlStatement q(m_db_handle, "INSERT INTO entries (group_id, title, username, encrypted_password, url, notes, totp_secret, entry_type, created_at, updated_at, password_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    // [FIX] Generate UUID if not present
+    if (entry.uuid.empty()) {
+        entry.uuid = CipherMesh::Core::Crypto::generateUUID();
+    }
+    
+    SqlStatement q(m_db_handle, "INSERT INTO entries (group_id, uuid, title, username, encrypted_password, url, notes, totp_secret, entry_type, created_at, updated_at, password_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     q.bind(1, groupId);
-    q.bind(2, entry.title);
-    q.bind(3, entry.username);
-    q.bind(4, encryptedPassword);
-    q.bind(5, entry.url);
-    q.bind(6, entry.notes);
-    q.bind(7, entry.totpSecret);
-    q.bind(8, entry.entryType);
-    q.bind(9, now);
+    q.bind(2, entry.uuid);
+    q.bind(3, entry.title);
+    q.bind(4, entry.username);
+    q.bind(5, encryptedPassword);
+    q.bind(6, entry.url);
+    q.bind(7, entry.notes);
+    q.bind(8, entry.totpSecret);
+    q.bind(9, entry.entryType);
     q.bind(10, now);
-    q.bind(11, entry.passwordExpiry);
+    q.bind(11, now);
+    q.bind(12, entry.passwordExpiry);
     
     if (q.exec()) {
         entry.id = (int)sqlite3_last_insert_rowid(getHandle(m_db_handle));
@@ -276,22 +282,25 @@ void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsi
 
 std::vector<VaultEntry> Database::getEntriesForGroup(int groupId) {
     std::vector<VaultEntry> list;
-    SqlStatement q(m_db_handle, "SELECT id, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry FROM entries WHERE group_id = ?");
+    // [FIX] Select uuid and is_deleted, filter out deleted entries
+    SqlStatement q(m_db_handle, "SELECT id, uuid, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry, is_deleted FROM entries WHERE group_id = ? AND (is_deleted IS NULL OR is_deleted = 0)");
     q.bind(1, groupId);
     while (q.step()) {
         VaultEntry e;
         e.id = q.getInt(0);
+        e.uuid = q.getString(1);
         e.groupId = groupId;
-        e.title = q.getString(1);
-        e.username = q.getString(2);
-        e.url = q.getString(3);
-        e.notes = q.getString(4);
-        e.totpSecret = q.getString(5);
-        e.entryType = q.getString(6);
-        e.createdAt = q.getInt64(7);
-        e.updatedAt = q.getInt64(8);
-        e.lastAccessed = q.getInt64(9);
-        e.passwordExpiry = q.getInt64(10);
+        e.title = q.getString(2);
+        e.username = q.getString(3);
+        e.url = q.getString(4);
+        e.notes = q.getString(5);
+        e.totpSecret = q.getString(6);
+        e.entryType = q.getString(7);
+        e.createdAt = q.getInt64(8);
+        e.updatedAt = q.getInt64(9);
+        e.lastAccessed = q.getInt64(10);
+        e.passwordExpiry = q.getInt64(11);
+        e.isDeleted = (q.getInt(12) != 0);
         e.locations = getLocationsForEntry(e.id);
         list.push_back(e);
     }
@@ -320,8 +329,12 @@ std::vector<unsigned char> Database::getEncryptedPassword(int entryId) {
 }
 
 bool Database::deleteEntry(int entryId) {
-    SqlStatement q(m_db_handle, "DELETE FROM entries WHERE id = ?");
-    q.bind(1, entryId);
+    // [FIX] Use tombstoning instead of hard delete for sync support
+    long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    SqlStatement q(m_db_handle, "UPDATE entries SET is_deleted = 1, updated_at = ? WHERE id = ?");
+    q.bind(1, now);
+    q.bind(2, entryId);
     return q.exec();
 }
 
@@ -637,6 +650,7 @@ void Database::createTables() {
     if (!q.exec("CREATE TABLE IF NOT EXISTS entries ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                 "group_id INTEGER, "
+                "uuid TEXT UNIQUE, "
                 "title TEXT, "
                 "username TEXT, "
                 "encrypted_password BLOB, "
@@ -649,8 +663,13 @@ void Database::createTables() {
                 "access_count INTEGER DEFAULT 0, "
                 "last_accessed INTEGER DEFAULT 0, "
                 "password_expiry INTEGER DEFAULT 0, "
+                "is_deleted INTEGER DEFAULT 0, "
                 "FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)"))
         throw DBException(q.lastError().text().toStdString());
+    
+    // [FIX] Migration: Add uuid and is_deleted columns if they don't exist
+    q.exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
+    q.exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
 
     // 5. Locations (Geo-fencing)
     if (!q.exec("CREATE TABLE IF NOT EXISTS locations ("
@@ -851,13 +870,19 @@ void Database::updateGroupMemberStatus(int groupId, const std::string& userId, c
 void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsigned char>& encryptedPassword) {
     m_db.transaction();
     
+    // [FIX] Generate UUID if not present
+    if (entry.uuid.empty()) {
+        entry.uuid = CipherMesh::Core::Crypto::generateUUID();
+    }
+    
     QSqlQuery q(m_db);
-    q.prepare("INSERT INTO entries (group_id, title, username, encrypted_password, url, notes, totp_secret, entry_type, created_at, updated_at, password_expiry) "
-              "VALUES (:gid, :title, :user, :pass, :url, :notes, :totp, :type, :created, :updated, :expiry)");
+    q.prepare("INSERT INTO entries (group_id, uuid, title, username, encrypted_password, url, notes, totp_secret, entry_type, created_at, updated_at, password_expiry) "
+              "VALUES (:gid, :uuid, :title, :user, :pass, :url, :notes, :totp, :type, :created, :updated, :expiry)");
     
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     
     q.bindValue(":gid", groupId);
+    q.bindValue(":uuid", QString::fromStdString(entry.uuid));
     q.bindValue(":title", QString::fromStdString(entry.title));
     q.bindValue(":user", QString::fromStdString(entry.username));
     q.bindValue(":pass", toQByteArray(encryptedPassword));
@@ -893,13 +918,15 @@ void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsi
 std::vector<VaultEntry> Database::getEntriesForGroup(int groupId) {
     std::vector<VaultEntry> results;
     QSqlQuery q(m_db);
-    q.prepare("SELECT id, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry FROM entries WHERE group_id = :gid");
+    // [FIX] Select uuid and is_deleted, filter out deleted entries
+    q.prepare("SELECT id, uuid, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry, is_deleted FROM entries WHERE group_id = :gid AND (is_deleted IS NULL OR is_deleted = 0)");
     q.bindValue(":gid", groupId);
     
     if (q.exec()) {
         while (q.next()) {
             VaultEntry e;
             e.id = q.value("id").toInt();
+            e.uuid = q.value("uuid").toString().toStdString();
             e.groupId = groupId;
             e.title = q.value("title").toString().toStdString();
             e.username = q.value("username").toString().toStdString();
@@ -911,6 +938,7 @@ std::vector<VaultEntry> Database::getEntriesForGroup(int groupId) {
             e.updatedAt = q.value("updated_at").toLongLong();
             e.lastAccessed = q.value("last_accessed").toLongLong();
             e.passwordExpiry = q.value("password_expiry").toLongLong();
+            e.isDeleted = q.value("is_deleted").toInt() != 0;
             
             e.locations = getLocationsForEntry(e.id);
             results.push_back(e);
@@ -947,8 +975,10 @@ std::vector<unsigned char> Database::getEncryptedPassword(int entryId) {
 }
 
 bool Database::deleteEntry(int entryId) {
+    // [FIX] Use tombstoning instead of hard delete for sync support
     QSqlQuery q(m_db);
-    q.prepare("DELETE FROM entries WHERE id = :id");
+    q.prepare("UPDATE entries SET is_deleted = 1, updated_at = :now WHERE id = :id");
+    q.bindValue(":now", QDateTime::currentMSecsSinceEpoch());
     q.bindValue(":id", entryId);
     return q.exec();
 }

@@ -98,6 +98,27 @@ void Crypto::secureWipe(std::string& str) {
     if (!str.empty()) sodium_memzero(&str[0], str.size());
 }
 
+std::string Crypto::generateUUID() {
+    // Generate RFC4122 UUID v4 (random)
+    unsigned char bytes[16];
+    randombytes_buf(bytes, 16);
+    
+    // Set version (4) and variant bits
+    bytes[6] = (bytes[6] & 0x0F) | 0x40; // Version 4
+    bytes[8] = (bytes[8] & 0x3F) | 0x80; // Variant 10
+    
+    // Format as 8-4-4-4-12 hex string
+    char uuid[37];
+    snprintf(uuid, sizeof(uuid),
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11],
+        bytes[12], bytes[13], bytes[14], bytes[15]);
+    
+    return std::string(uuid);
+}
+
 std::string Crypto::generatePassword(const PasswordOptions& options) {
     if (options.length <= 0) return "";
 
