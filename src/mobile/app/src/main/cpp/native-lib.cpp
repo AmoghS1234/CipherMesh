@@ -561,9 +561,11 @@ Java_com_ciphermesh_mobile_core_Vault_removeUser(JNIEnv* env, jobject thiz, jstr
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_com_ciphermesh_mobile_core_Vault_searchEntries(JNIEnv* env, jobject thiz, jstring searchTerm) {
     std::lock_guard<std::mutex> lock(g_vaultMutex);
-    if (!g_vault) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
+    if (!g_vault || !searchTerm) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
     
     const char* term = env->GetStringUTFChars(searchTerm, 0);
+    if (!term) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
+    
     auto entries = g_vault->searchEntries(term);
     env->ReleaseStringUTFChars(searchTerm, term);
     
@@ -620,9 +622,11 @@ Java_com_ciphermesh_mobile_core_Vault_getPasswordHistory(JNIEnv* env, jobject th
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_ciphermesh_mobile_core_Vault_decryptPasswordFromHistory(JNIEnv* env, jobject thiz, jstring encryptedPassword) {
     std::lock_guard<std::mutex> lock(g_vaultMutex);
-    if (!g_vault) return env->NewStringUTF("");
+    if (!g_vault || !encryptedPassword) return env->NewStringUTF("");
     
     const char* encrypted = env->GetStringUTFChars(encryptedPassword, 0);
+    if (!encrypted) return env->NewStringUTF("");
+    
     std::string decrypted = g_vault->decryptPasswordFromHistory(encrypted);
     env->ReleaseStringUTFChars(encryptedPassword, encrypted);
     

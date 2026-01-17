@@ -44,6 +44,10 @@ import java.util.*
 
 class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener {
 
+    companion object {
+        private val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+    }
+
     private val vault = Vault()
     private lateinit var drawerLayout: DrawerLayout
     private lateinit var listView: ListView
@@ -672,11 +676,12 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         detailPass.setText(parts[2])
         detailNotes.setText(parts[3])
         
-        // Format timestamps
-        val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
-        textCreatedAt.text = getString(R.string.created_at, sdf.format(Date(parts[5].toLong() * 1000)))
-        textUpdatedAt.text = getString(R.string.updated_at, sdf.format(Date(parts[6].toLong() * 1000)))
-        textLastAccessed.text = getString(R.string.last_accessed, sdf.format(Date(parts[7].toLong() * 1000)))
+        // Format timestamps with thread-safe date formatter
+        synchronized(dateFormat) {
+            textCreatedAt.text = getString(R.string.created_at, dateFormat.format(Date(parts[5].toLong() * 1000)))
+            textUpdatedAt.text = getString(R.string.updated_at, dateFormat.format(Date(parts[6].toLong() * 1000)))
+            textLastAccessed.text = getString(R.string.last_accessed, dateFormat.format(Date(parts[7].toLong() * 1000)))
+        }
         
         btnCopyPass.setOnClickListener {
             copyToClipboardSecure("Pass", parts[2], "Password copied")

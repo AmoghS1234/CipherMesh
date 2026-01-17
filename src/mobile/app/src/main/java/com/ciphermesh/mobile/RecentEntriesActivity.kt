@@ -83,9 +83,9 @@ class RecentEntriesActivity : AppCompatActivity() {
     }
 
     private fun showEntryDetails(id: Int) {
-        val raw = vault.getEntryDetails(id)
+        val raw = vault.getEntryFullDetails(id)
         val parts = raw.split("|")
-        if (parts.size < 3) return
+        if (parts.size < 8) return
 
         MaterialAlertDialogBuilder(this)
             .setTitle(parts[0])

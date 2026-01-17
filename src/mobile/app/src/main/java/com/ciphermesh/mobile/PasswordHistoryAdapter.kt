@@ -24,6 +24,10 @@ class PasswordHistoryAdapter(
     private val onCopy: (String) -> Unit
 ) : RecyclerView.Adapter<PasswordHistoryAdapter.ViewHolder>() {
 
+    companion object {
+        private val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+    }
+
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val textPasswordMasked: TextView = view.findViewById(R.id.textPasswordMasked)
         val textTimestamp: TextView = view.findViewById(R.id.textTimestamp)
@@ -39,9 +43,10 @@ class PasswordHistoryAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = items[position]
         
-        // Format timestamp
-        val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
-        val dateStr = sdf.format(Date(item.timestamp * 1000))
+        // Format timestamp with thread-safe date formatter
+        val dateStr = synchronized(dateFormat) {
+            dateFormat.format(Date(item.timestamp * 1000))
+        }
         holder.textTimestamp.text = context.getString(R.string.password_changed_at, dateStr)
         
         holder.btnCopy.setOnClickListener {
