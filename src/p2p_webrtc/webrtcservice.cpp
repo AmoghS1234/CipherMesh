@@ -135,31 +135,37 @@ void WebRTCService::inviteUser(const std::string& groupName, const std::string& 
                                const std::vector<CipherMesh::Core::VaultEntry>& entries) {
     LOGI("Inviting user: %s to group: %s", userEmail.c_str(), groupName.c_str());
     
-    std::lock_guard<std::mutex> lock(m_mutex);
-    
-    // Clean up any existing connection to ensure fresh start
-    // CRITICAL: Must fully remove peer before creating new offer
-    if (m_peers.count(userEmail)) {
-        LOGI("Cleaning up existing peer connection for %s before inviting", userEmail.c_str());
-        auto existingPeer = m_peers[userEmail];
-        if (existingPeer) {
-            existingPeer->close();
-            // Force immediate cleanup - don't wait for close() to complete
-            existingPeer = nullptr;
+    // [CRITICAL FIX] Use scoped lock to avoid deadlock with onGatheringStateChange callback
+    // The lock is released before calling setupPeerConnection to prevent race condition where
+    // setLocalDescription() completes synchronously and callback fires while lock is still held
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        
+        // Clean up any existing connection to ensure fresh start
+        // CRITICAL: Must fully remove peer before creating new offer
+        if (m_peers.count(userEmail)) {
+            LOGI("Cleaning up existing peer connection for %s before inviting", userEmail.c_str());
+            auto existingPeer = m_peers[userEmail];
+            if (existingPeer) {
+                existingPeer->close();
+                // Force immediate cleanup - don't wait for close() to complete
+                existingPeer = nullptr;
+            }
+            m_peers.erase(userEmail);
+            LOGI("Peer removed, m_peers.count(%s) = %zu", userEmail.c_str(), m_peers.count(userEmail));
         }
-        m_peers.erase(userEmail);
-        LOGI("Peer removed, m_peers.count(%s) = %zu", userEmail.c_str(), m_peers.count(userEmail));
-    }
-    if (m_channels.count(userEmail)) {
-        LOGI("Removing existing data channel for %s", userEmail.c_str());
-        m_channels.erase(userEmail);
-    }
+        if (m_channels.count(userEmail)) {
+            LOGI("Removing existing data channel for %s", userEmail.c_str());
+            m_channels.erase(userEmail);
+        }
+        
+        m_pendingInvites[userEmail] = groupName;
+        m_pendingKeys[userEmail] = groupKey;
+        m_pendingEntries[userEmail] = entries;
+    } // Lock is released here
     
-    m_pendingInvites[userEmail] = groupName;
-    m_pendingKeys[userEmail] = groupKey;
-    m_pendingEntries[userEmail] = entries;
-    
-    // Start the Handshake
+    // Start the Handshake WITHOUT holding the lock
+    // This prevents deadlock when onGatheringStateChange callback fires during setLocalDescription()
     setupPeerConnection(userEmail, true); // true = We are Offerer
     // Note: createAndSendOffer called implicitly by setupPeerConnection callback logic or explicitly here
 }
@@ -167,24 +173,31 @@ void WebRTCService::inviteUser(const std::string& groupName, const std::string& 
 void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOfferer) {
     LOGI("setupPeerConnection() called for %s, isOfferer=%d", peerId.c_str(), isOfferer ? 1 : 0);
     
-    // Check if peer already exists - if it does, something went wrong with cleanup
-    if (m_peers.count(peerId)) {
-        LOGE("CRITICAL BUG: Peer connection already exists for %s! This should not happen after cleanup!", peerId.c_str());
-        // Force cleanup and continue - this is a defensive measure
-        auto existingPeer = m_peers[peerId];
-        if (existingPeer) {
-            existingPeer->close();
-            existingPeer = nullptr;
+    // [CRITICAL FIX] Use scoped lock only for peer map operations
+    // Don't hold lock during callback registration to avoid deadlock
+    std::shared_ptr<rtc::PeerConnection> pc;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        
+        // Check if peer already exists - if it does, something went wrong with cleanup
+        if (m_peers.count(peerId)) {
+            LOGE("CRITICAL BUG: Peer connection already exists for %s! This should not happen after cleanup!", peerId.c_str());
+            // Force cleanup and continue - this is a defensive measure
+            auto existingPeer = m_peers[peerId];
+            if (existingPeer) {
+                existingPeer->close();
+                existingPeer = nullptr;
+            }
+            m_peers.erase(peerId);
+            LOGI("Force-removed stale peer connection, continuing with fresh setup");
         }
-        m_peers.erase(peerId);
-        LOGI("Force-removed stale peer connection, continuing with fresh setup");
-    }
 
-    rtc::Configuration config;
-    config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+        rtc::Configuration config;
+        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
 
-    auto pc = std::make_shared<rtc::PeerConnection>(config);
-    m_peers[peerId] = pc;
+        pc = std::make_shared<rtc::PeerConnection>(config);
+        m_peers[peerId] = pc;
+    } // Lock released here before setting up callbacks
 
     // [FIX] Add error handlers for peer connection state changes
     pc->onStateChange([this, peerId](rtc::PeerConnection::State state) {
