@@ -280,8 +280,8 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
     private fun showManageGroupDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_share_group, null)
-        val inputId = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.inputInviteId)
-        val btnInvite = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnInvite)
+        val inputId = dialogView.findViewById<EditText>(R.id.inputInviteId)
+        val btnInvite = dialogView.findViewById<Button>(R.id.btnInvite)
         val membersLayout = dialogView.findViewById<LinearLayout>(R.id.layoutMembersList)
 
         // Load and display group members with Material Design 3 styling
