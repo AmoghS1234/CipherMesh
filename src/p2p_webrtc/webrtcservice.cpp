@@ -68,7 +68,7 @@ std::string extractJsonValue(const std::string& json, const std::string& key) {
 
 // --- Implementation ---
 
-WebRTCService::WebRTCService(const std::string& signalingUrl, const std::string& localUserId)
+WebRTCService::WebRTCService(const std::string& signalingUrl, const std::string& localUserId, void* parent)
     : m_signalingUrl(signalingUrl), m_localUserId(localUserId), m_isConnected(false), m_isAuthenticated(false) {}
 
 WebRTCService::~WebRTCService() { disconnect(); }
@@ -187,7 +187,7 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
     });
 }
 
-void WebRTCService::handleSignalingMessage(const std::string& message) {
+void WebRTCService::receiveSignalingMessage(const std::string& message) {
     std::string type = extractJsonValue(message, "type");
     std::string sender = extractJsonValue(message, "sender");
     if (sender.empty()) return;
@@ -236,7 +236,7 @@ void WebRTCService::handleSignalingMessage(const std::string& message) {
 }
 
 void WebRTCService::sendSignalingMessage(const std::string& targetId, const std::string& type, const std::string& payload) {
-    if (onSendSignaling) onSendSignaling(targetId, type, payload);
+    if (onSignalingMessage) onSignalingMessage(targetId, type, payload);
 }
 
 void WebRTCService::retryPendingInviteFor(const std::string& remoteId) {
