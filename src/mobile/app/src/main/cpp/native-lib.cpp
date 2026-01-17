@@ -20,6 +20,11 @@ std::unique_ptr<WebRTCService> g_p2p; // [FIX] Use WebRTCService directly
 std::mutex g_inviteMutex;
 std::vector<CipherMesh::Core::PendingInvite> g_pendingInvites;
 
+// [FIX] Add mutexes to protect global state from race conditions
+std::mutex g_vaultMutex;  // Protects g_vault access
+std::mutex g_p2pMutex;    // Protects g_p2p access
+std::mutex g_jniMutex;    // Protects JNI globals (g_jvm, g_context, g_signalingCallback)
+
 // --- JNI Callbacks ---
 JavaVM* g_jvm = nullptr;
 jobject g_context = nullptr;
@@ -27,6 +32,8 @@ jobject g_signalingCallback = nullptr; // Reference to P2PManager.kt
 
 // --- Helper: Send Signaling Message to Kotlin ---
 void sendSignalingToKotlin(const std::string& target, const std::string& type, const std::string& payload) {
+    // [FIX] Lock JNI globals access to prevent race conditions
+    std::lock_guard<std::mutex> lock(g_jniMutex);
     if (!g_jvm || !g_signalingCallback) return;
     
     JNIEnv* env;
@@ -58,6 +65,8 @@ void sendSignalingToKotlin(const std::string& target, const std::string& type, c
 
 // --- Helper: Send Toast to Android ---
 void showToastFromNative(const std::string& message) {
+    // [FIX] Lock JNI globals access
+    std::lock_guard<std::mutex> lock(g_jniMutex);
     if (!g_jvm || !g_context) return;
     JNIEnv* env;
     bool attached = false;
@@ -123,7 +132,10 @@ Java_com_ciphermesh_mobile_core_Vault_init(JNIEnv* env, jobject thiz, jstring db
     const char* path = env->GetStringUTFChars(db_path, 0);
     if (!path) return; // [FIX] Check for null
     
-    // [FIX] Only create new vault if it doesn't exist
+    // [FIX] Lock vault access to prevent race conditions
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
+    
+    // Only create new vault if it doesn't exist
     // This preserves the unlocked state across activities
     if (!g_vault) {
         g_vault = std::make_unique<CipherMesh::Core::Vault>();
@@ -137,12 +149,16 @@ Java_com_ciphermesh_mobile_core_Vault_init(JNIEnv* env, jobject thiz, jstring db
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_ciphermesh_mobile_core_Vault_setActivityContext(JNIEnv* env, jobject thiz, jobject activity) {
+    // [FIX] Lock JNI globals access
+    std::lock_guard<std::mutex> lock(g_jniMutex);
     if (g_context) env->DeleteGlobalRef(g_context);
     g_context = env->NewGlobalRef(activity);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_ciphermesh_mobile_core_Vault_unlock(JNIEnv* env, jobject thiz, jstring password) {
+    // [FIX] Lock vault access
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
     if (!g_vault) return false;
     const char* pwd = env->GetStringUTFChars(password, 0);
     bool result = g_vault->unlock(pwd);
@@ -152,6 +168,8 @@ Java_com_ciphermesh_mobile_core_Vault_unlock(JNIEnv* env, jobject thiz, jstring 
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_ciphermesh_mobile_core_Vault_isLocked(JNIEnv* env, jobject thiz) {
+    // [FIX] Lock vault access
+    std::lock_guard<std::mutex> lock(g_vaultMutex);
     if (!g_vault) return true;
     return g_vault->isLocked();
 }
@@ -191,6 +209,8 @@ Java_com_ciphermesh_mobile_core_Vault_getUserId(JNIEnv* env, jobject thiz) {
 // [NEW] Register P2PManager as the signaling callback
 extern "C" JNIEXPORT void JNICALL
 Java_com_ciphermesh_mobile_core_Vault_registerSignalingCallback(JNIEnv* env, jobject thiz, jobject callback) {
+    // [FIX] Lock JNI globals access
+    std::lock_guard<std::mutex> lock(g_jniMutex);
     if (g_signalingCallback) env->DeleteGlobalRef(g_signalingCallback);
     g_signalingCallback = env->NewGlobalRef(callback);
 }
@@ -198,6 +218,8 @@ Java_com_ciphermesh_mobile_core_Vault_registerSignalingCallback(JNIEnv* env, job
 // [NEW] Receive message from Kotlin and pass to C++ service
 extern "C" JNIEXPORT void JNICALL
 Java_com_ciphermesh_mobile_core_Vault_receiveSignalingMessage(JNIEnv* env, jobject thiz, jstring message) {
+    // [FIX] Lock p2p access
+    std::lock_guard<std::mutex> lock(g_p2pMutex);
     if (!g_p2p) return;
     const char* msg = env->GetStringUTFChars(message, 0);
     g_p2p->receiveSignalingMessage(msg); 
@@ -206,6 +228,10 @@ Java_com_ciphermesh_mobile_core_Vault_receiveSignalingMessage(JNIEnv* env, jobje
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring signaling_url) {
+    // [FIX] Lock both vault and p2p access
+    std::lock_guard<std::mutex> vaultLock(g_vaultMutex);
+    std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
+    
     if (!g_vault) return;
     
     // [FIX] Initialize WebRTCService
@@ -238,6 +264,8 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
 
     // 2. Handle Received Group Data (Sync/Accept)
     g_p2p->onGroupDataReceived = [](std::string senderId, std::string json) {
+        // [FIX] Lock vault access to prevent race conditions from P2P callbacks
+        std::lock_guard<std::mutex> vaultLock(g_vaultMutex);
         if (!g_vault || g_vault->isLocked()) return;
         
         std::string type = extractJsonValueJNI(json, "type");
