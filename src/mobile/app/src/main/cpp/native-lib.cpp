@@ -123,10 +123,16 @@ Java_com_ciphermesh_mobile_core_Vault_init(JNIEnv* env, jobject thiz, jstring db
     const char* path = env->GetStringUTFChars(db_path, 0);
     if (!path) return; // [FIX] Check for null
     
-    g_vault = std::make_unique<CipherMesh::Core::Vault>();
-    g_vault->connect(path);
+    // [FIX] Only create new vault if it doesn't exist
+    // This preserves the unlocked state across activities
+    if (!g_vault) {
+        g_vault = std::make_unique<CipherMesh::Core::Vault>();
+        g_vault->connect(path);
+        LOGI("Vault Initialized at: %s", path);
+    } else {
+        LOGI("Vault already initialized, preserving state");
+    }
     env->ReleaseStringUTFChars(db_path, path);
-    LOGI("Vault Initialized at: %s", path);
 }
 
 extern "C" JNIEXPORT void JNICALL
