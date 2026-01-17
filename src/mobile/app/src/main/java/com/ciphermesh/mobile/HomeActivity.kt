@@ -673,6 +673,9 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 prefs.edit().putInt("theme_index", (prefs.getInt("theme_index", 0) + 1) % 5).apply()
                 finish(); startActivity(intent)
             }
+            R.id.nav_settings -> {
+                startActivity(Intent(this, SettingsActivity::class.java))
+            }
             R.id.nav_lock -> { finish(); startActivity(Intent(this, MainActivity::class.java)) }
         }
         drawerLayout.closeDrawer(GravityCompat.START)
