@@ -361,6 +361,16 @@ Java_com_ciphermesh_mobile_core_Vault_respondToInvite(JNIEnv* env, jobject thiz,
     const char* grp = env->GetStringUTFChars(groupName, 0);
     const char* snd = env->GetStringUTFChars(senderId, 0);
     
+    if (!grp || !snd) {
+        if (grp) env->ReleaseStringUTFChars(groupName, grp);
+        if (snd) env->ReleaseStringUTFChars(senderId, snd);
+        return;
+    }
+    
+    // [FIX] Lock both mutexes to prevent race conditions
+    std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
+    std::lock_guard<std::mutex> vaultLock(g_vaultMutex);
+    
     if (g_p2p) {
         if (accept) {
             // Send accept message
