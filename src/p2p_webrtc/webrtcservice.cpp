@@ -231,6 +231,10 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
                     onSyncMessage(enriched.str());
                 }
             }
+            else if (type == "member-list" || type == "member-leave") {
+                // [FIX] Handle member list messages over data channel
+                if (onGroupDataReceived) onGroupDataReceived(peerId, msg);
+            }
         }
     });
 }
@@ -544,6 +548,10 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
             QString enrichedStr = QJsonDocument(enriched).toJson(QJsonDocument::Compact);
             onSyncMessage(enrichedStr.toStdString());
         }
+    }
+    else if (type == "member-list" || type == "member-leave") {
+        // [FIX] Handle member list messages (already handled by Desktop's callback)
+        if (onGroupDataReceived) onGroupDataReceived(remoteId.toStdString(), message.toStdString());
     }
 }
 
