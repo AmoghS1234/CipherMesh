@@ -22,6 +22,7 @@ class Vault {
     external fun isLocked(): Boolean
     external fun verifyMasterPassword(password: String): Boolean
     external fun hasUsers(): Boolean
+    external fun generateTOTP(secret: String): String
     
     // Sync Hooks
     external fun onPeerOnline(userId: String)
@@ -56,7 +57,7 @@ class Vault {
     }
     
     // Matches Java_com_ciphermesh_mobile_core_Vault_addEntryNative in native-lib.cpp
-    private external fun addEntryNative(title: String, user: String, pass: String, url: String, notes: String)
+    external fun addEntryNative(title: String, user: String, pass: String, url: String, notes: String)
 
     // 'getEntryDetails' removed (duplicate/missing). Use getEntryFullDetails.
     external fun deleteEntry(id: Int): Boolean

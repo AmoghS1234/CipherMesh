@@ -91,6 +91,9 @@ public:
     void setSyncCallback(SyncCallback cb);
     void notifySync(const std::string& type, const std::string& payload);
     void processSyncEvent(const std::string& payload);
+    
+    // [FIX] Add this declaration
+    void addEncryptedEntry(const VaultEntry& entry, const std::string& base64Ciphertext);
 
     // --- Invite System ---
     void sendP2PInvite(const std::string& groupName, const std::string& targetUser);

@@ -108,8 +108,13 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
                     vault.handleSyncMessage(sender, payload)
                 }
             }
-            "offer", "answer", "ice-candidate" -> {
-                vault.receiveSignalingMessage(rawText)
+            "offer", "answer", "ice-candidate", "invite-accept" -> {
+                // IMPORTANT: C++ needs to know the sender. 
+                // We ensure the JSON passed to JNI has the sender field.
+                if (!json.has("sender") && sender.isNotEmpty()) {
+                    json.put("sender", sender)
+                }
+                vault.receiveSignalingMessage(json.toString())
             }
             "error" -> Log.e("P2P", "Server Error: ${json.optString("message")}")
         }

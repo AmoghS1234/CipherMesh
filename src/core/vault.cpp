@@ -114,6 +114,24 @@ bool Vault::createNewVault(const std::string& path, const std::string& masterPas
     } catch (...) { lock(); return false; }
 }
 
+void Vault::addEncryptedEntry(const VaultEntry& entry, const std::string& base64Ciphertext) {
+    checkGroupActive();
+    try {
+        VaultEntry temp = entry;
+        if(temp.uuid.empty()) temp.uuid = m_crypto->generateUUID();
+        
+        // 1. Decode Base64 ciphertext
+        std::vector<unsigned char> encryptedBlob;
+        if(!base64Ciphertext.empty()) {
+            encryptedBlob = m_crypto->base64Decode(base64Ciphertext);
+        }
+        
+        // 2. Store directly in DB
+        m_db->storeEntry(m_activeGroupId, temp, encryptedBlob);
+        
+    } catch (...) {}
+}
+
 bool Vault::loadVault(const std::string& path, const std::string& masterPassword) {
     try {
         if (!m_db->isOpen() || m_dbPath != path) connect(path);
@@ -647,42 +665,27 @@ void Vault::sendP2PInvite(const std::string&, const std::string&) {}
 std::vector<VaultEntry> Vault::exportGroupEntries(const std::string& groupName) {
     checkLocked();
     
-    // Get group ID
     int groupId = m_db->getGroupId(groupName);
-    if (groupId == -1) {
-        return {}; // Group not found
-    }
-    
-    // Get encrypted group key
-    std::vector<unsigned char> encryptedGroupKey = m_db->getEncryptedGroupKeyById(groupId);
-    if (encryptedGroupKey.empty()) {
-        return {}; // No group key
-    }
-    
-    // Decrypt group key
-    std::vector<unsigned char> groupKey = m_crypto->decrypt(encryptedGroupKey, m_masterKey_RAM);
-    
-    // Get all entries for the group
+    if (groupId == -1) return {}; 
+
     std::vector<VaultEntry> entries = m_db->getEntriesForGroup(groupId);
     
-    // Decrypt passwords for each entry
     for (auto& entry : entries) {
         try {
+            // 1. Get the RAW encrypted bytes from DB (AES-GCM ciphertext)
             std::vector<unsigned char> encryptedPassword = m_db->getEncryptedPassword(entry.id);
+            
             if (!encryptedPassword.empty()) {
-                entry.password = m_crypto->decryptToString(encryptedPassword, groupKey);
+                // 2. Convert to Base64 to transport safely via JSON
+                // The receiver (Mobile) has the Group Key, so they can use this blob directly.
+                entry.password = m_crypto->base64Encode(encryptedPassword);
+            } else {
+                entry.password = "";
             }
-        } catch (const std::exception& e) {
-            // Log decryption failure for debugging
-            std::cerr << "Warning: Failed to decrypt password for entry " << entry.id 
-                     << " in group " << groupName << ": " << e.what() << std::endl;
-            // Leave password empty but continue with other entries
+        } catch (...) {
             entry.password = "";
         }
     }
-    
-    // Securely wipe the group key from memory
-    m_crypto->secureWipe(groupKey);
     
     return entries;
 }
@@ -710,15 +713,20 @@ void Vault::importGroupEntries(const std::string& groupName, const std::vector<V
     int groupId = m_db->getGroupId(groupName);
     if (groupId == -1) return;
     
-    std::vector<unsigned char> encKey = m_db->getEncryptedGroupKeyById(groupId);
-    std::vector<unsigned char> groupKey = m_crypto->decrypt(encKey, m_masterKey_RAM);
-    
     for (const auto& entry : entries) {
-        std::vector<unsigned char> encPass = m_crypto->encrypt(entry.password, groupKey);
+        // 1. Decode the Base64 ciphertext coming from the sender
+        std::vector<unsigned char> encPass;
+        if(!entry.password.empty()) {
+            encPass = m_crypto->base64Decode(entry.password);
+        }
+        
         VaultEntry e = entry;
+        e.id = -1; // Reset ID for new DB insertion
+        
+        // 2. Store the ciphertext directly. 
+        // No re-encryption needed because it is ALREADY encrypted with the Group Key!
         m_db->storeEntry(groupId, e, encPass);
     }
-    m_crypto->secureWipe(groupKey);
 }
 
 } // namespace Core

@@ -98,15 +98,15 @@ class StructureParser(private val structure: AssistStructure) {
     }
 }
 
-// Extension functions to traverse AssistStructure tree
-private inline fun AssistStructure.traverse(crossinline callback: (AssistStructure.ViewNode) -> Unit) {
+// [FIXED] Removed 'inline' and 'crossinline' to allow recursion
+private fun AssistStructure.traverse(callback: (AssistStructure.ViewNode) -> Unit) {
     for (i in 0 until windowNodeCount) {
         val windowNode = getWindowNodeAt(i)
         windowNode.rootViewNode.traverse(callback)
     }
 }
 
-private inline fun AssistStructure.ViewNode.traverse(crossinline callback: (AssistStructure.ViewNode) -> Unit) {
+private fun AssistStructure.ViewNode.traverse(callback: (AssistStructure.ViewNode) -> Unit) {
     callback(this)
     for (i in 0 until childCount) {
         getChildAt(i).traverse(callback)
