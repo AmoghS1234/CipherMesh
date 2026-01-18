@@ -295,13 +295,18 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         triggerJavaRefresh();
     };
 
+    // [FIX] Added onSyncMessage callback to handle sync messages over data channel
     g_p2p->onSyncMessage = [](std::string message) {
-        std::string sender = extractJsonValueJNI(message, "sender");
-        std::string type = extractJsonValueJNI(message, "type");
+        std::lock_guard<std::recursive_mutex> vaultLock(g_vaultMutex);
+        if (!g_vault || g_vault->isLocked()) return;
         
-        if (type == "invite-accept" && !sender.empty()) {
-            handleInviteAccept(sender, message);
+        std::string sender = extractJsonValueJNI(message, "sender");
+        if (sender.empty()) {
+            LOGW("Sync message received without sender");
+            return;
         }
+        
+        g_vault->handleIncomingSync(sender, message);
     };
 
     g_p2p->onGroupDataReceived = [&](std::string senderId, std::string json) {
@@ -592,24 +597,9 @@ Java_com_ciphermesh_mobile_core_Vault_receiveSignalingMessage(JNIEnv* env, jobje
     // [DEBUG] Monitor exactly what C++ sees in the signaling pipe
     LOGI("JNI receiveSignalingMessage: %s", msg);
 
-    std::string type = extractJsonValueJNI(jsonStr, "type");
-    std::string sender = extractJsonValueJNI(jsonStr, "sender");
-
-    // Intercept invite-accept messages arriving via Signaling (WebSocket)
-    // This triggers the sync even if the Data Channel isn't fully ready yet.
-    if (type == "invite-accept") {
-        if (!sender.empty()) {
-            handleInviteAccept(sender, jsonStr);
-        } else {
-            // Fallback: helper will attempt lookup via g_outgoingInvites
-            LOGW("Invite accept received without sender key. Attempting fallback...");
-            handleInviteAccept("", jsonStr); 
-        }
-        
-        // Return early if intercepted so we don't double-process in the engine
-        env->ReleaseStringUTFChars(message, msg);
-        return; 
-    }
+    // [FIX] Removed invite-accept interception - it should be handled by WebRTCService
+    // data channel onMessage handler, not via WebSocket signaling
+    // invite-accept is a P2P message, not a WebRTC signaling message
 
     // Standard WebRTC signaling (Offer/Answer/ICE) passes through to the engine
     g_p2p->receiveSignalingMessage(msg); 

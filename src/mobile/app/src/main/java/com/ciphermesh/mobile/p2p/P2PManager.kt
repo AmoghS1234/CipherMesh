@@ -108,13 +108,19 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
                     vault.handleSyncMessage(sender, payload)
                 }
             }
-            "offer", "answer", "ice-candidate", "invite-accept" -> {
+            "offer", "answer", "ice-candidate" -> {
                 // IMPORTANT: C++ needs to know the sender. 
                 // We ensure the JSON passed to JNI has the sender field.
                 if (!json.has("sender") && sender.isNotEmpty()) {
                     json.put("sender", sender)
                 }
                 vault.receiveSignalingMessage(json.toString())
+            }
+            "invite-accept" -> {
+                // [FIX] invite-accept should NOT go through receiveSignalingMessage
+                // It's handled by the C++ WebRTCService data channel onMessage handler
+                // This message coming via WebSocket is likely a fallback/duplicate
+                Log.d("P2P", "⚠️ Received invite-accept via WebSocket (expected via DataChannel)")
             }
             "error" -> Log.e("P2P", "Server Error: ${json.optString("message")}")
         }

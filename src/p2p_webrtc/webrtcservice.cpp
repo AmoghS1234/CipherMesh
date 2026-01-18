@@ -177,11 +177,16 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
 
     dc->onOpen([this, peerId]() {
         LOGI("Data Channel OPEN for %s", peerId.c_str());
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_pendingInvites.count(peerId)) {
-            std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
-            if (m_channels.count(peerId)) m_channels[peerId]->send(msg);
-        }
+        
+        // [FIX] Add 500ms delay to allow remote peer to register onMessage listener
+        std::thread([this, peerId]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_pendingInvites.count(peerId)) {
+                std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
+                if (m_channels.count(peerId)) m_channels[peerId]->send(msg);
+            }
+        }).detach();
     });
 
     dc->onMessage([this, peerId](auto data) {
@@ -210,6 +215,21 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             }
             else if (type == "entry-data") {
                 if (onGroupDataReceived) onGroupDataReceived(peerId, msg);
+            }
+            else if (type == "sync-payload" || type == "sync-ack") {
+                // [FIX] Handle sync messages over data channel for offline sync
+                // Add sender to the message so handleIncomingSync knows who sent it
+                if (onSyncMessage) {
+                    std::ostringstream enriched;
+                    enriched << "{\"sender\":\"" << peerId << "\",";
+                    // Skip the opening brace from original message
+                    if (msg.length() > 1 && msg[0] == '{') {
+                        enriched << msg.substr(1);
+                    } else {
+                        enriched << msg << "}";
+                    }
+                    onSyncMessage(enriched.str());
+                }
             }
         }
     });
@@ -513,6 +533,16 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
             m_pendingInvites.remove(remoteId); m_pendingKeys.erase(remoteId); m_pendingEntries.erase(remoteId);
             locker.unlock();
             if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), false);
+        }
+    }
+    else if (type == "sync-payload" || type == "sync-ack") {
+        // [FIX] Handle sync messages over data channel for offline sync
+        // Add sender to the message so handleIncomingSync knows who sent it
+        if (onSyncMessage) {
+            QJsonObject enriched = obj;
+            enriched["sender"] = remoteId;
+            QString enrichedStr = QJsonDocument(enriched).toJson(QJsonDocument::Compact);
+            onSyncMessage(enrichedStr.toStdString());
         }
     }
 }
