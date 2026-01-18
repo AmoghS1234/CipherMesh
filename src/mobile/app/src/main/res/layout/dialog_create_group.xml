@@ -4,72 +4,33 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="24dp"
-    android:background="?attr/colorWindowBg">
+    android:paddingTop="16dp"
+    android:paddingHorizontal="24dp">
 
     <TextView
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Create New Group"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:textColor="?attr/colorTextPrimary"
-        android:layout_marginBottom="8dp"
-        app:drawableStartCompat="@android:drawable/ic_menu_today"
-        android:drawablePadding="8dp"
-        app:drawableTint="?attr/colorTextPrimary"/>
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Enter a name for your new password group."
-        android:textColor="?attr/colorTextSecondary"
+        android:text="Enter a name for your new group."
+        android:textColor="?android:attr/textColorSecondary"
         android:textSize="14sp"
-        android:layout_marginBottom="24dp" />
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Group Name:"
-        android:textColor="?attr/colorTextPrimary"
-        android:layout_marginBottom="8dp" />
+        android:layout_marginBottom="16dp" />
 
     <com.google.android.material.textfield.TextInputLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:theme="@style/CipherMesh.Input"
-        android:layout_marginBottom="24dp">
+        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+        app:boxStrokeColor="?attr/colorPrimary"
+        app:hintTextColor="?attr/colorPrimary"
+        android:textColorHint="?android:attr/textColorSecondary"
+        android:hint="Group Name">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/dialogInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="e.g., Work, Personal, Banking..."
-            android:textColor="?attr/colorTextPrimary" />
+            android:inputType="textCapWords"
+            android:textColor="?android:attr/textColorPrimary"
+            android:maxLines="1" />
     </com.google.android.material.textfield.TextInputLayout>
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="end">
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/dialogCancel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Cancel"
-            android:textColor="?attr/colorTextPrimary"
-            app:backgroundTint="?attr/colorSurface"
-            app:strokeColor="?attr/colorInputBorder"
-            app:strokeWidth="1dp"
-            android:layout_marginEnd="12dp"/>
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/dialogOk"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Create Group"
-            android:textColor="@color/white"
-            app:backgroundTint="?attr/colorActionPrimary" />
-    </LinearLayout>
 </LinearLayout>

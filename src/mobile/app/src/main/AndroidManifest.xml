@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.ciphermesh.mobile">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <application
         android:allowBackup="false"
@@ -14,8 +16,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.CipherMesh"
+        android:usesCleartextTraffic="true"
         tools:targetApi="31">
-        
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -24,12 +27,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        
-        <activity android:name=".HomeActivity" />
-        <activity android:name=".SettingsActivity" 
+
+        <activity 
+            android:name=".HomeActivity"
+            android:exported="false" />
+
+        <activity 
+            android:name=".SettingsActivity" 
+            android:exported="false"
             android:parentActivityName=".HomeActivity" />
-        <activity android:name=".RecentEntriesActivity"
+
+        <activity 
+            android:name=".RecentEntriesActivity"
+            android:exported="false"
             android:parentActivityName=".HomeActivity" />
+
     </application>
 
 </manifest>

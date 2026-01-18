@@ -116,25 +116,25 @@ void Database::createTables() {
     exec("CREATE TABLE IF NOT EXISTS password_history (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER, encrypted_password BLOB, timestamp INTEGER, FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
     exec("CREATE TABLE IF NOT EXISTS pending_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, sender_id TEXT, group_name TEXT, payload TEXT, status TEXT)");
     
-    // [FIX] Migration: Add uuid and is_deleted columns if they don't exist (for existing databases)
-    // SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we try and ignore errors
+    // [NEW] Sync Queue (Outbox) for Store-and-Forward
+    exec("CREATE TABLE IF NOT EXISTS sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, target_user TEXT, group_name TEXT, operation TEXT, payload TEXT, created_at INTEGER)");
+    
+    // Migrations
     try {
         exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
-    } catch (...) {
-        // Column already exists, ignore
-    }
+    } catch (...) {}
     try {
         exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
-    } catch (...) {
-        // Column already exists, ignore
-    }
+    } catch (...) {}
 }
 
 // -- Groups --
 void Database::storeEncryptedGroup(const std::string& name, const std::vector<unsigned char>& encryptedKey, const std::string& ownerId) {
     SqlStatement q(m_db_handle, "INSERT INTO groups (name, encrypted_key, owner_id) VALUES (?, ?, ?)");
-    q.bind(1, name); q.bind(2, encryptedKey); q.bind(3, ownerId);
-    if (!q.exec()) throw DBException("Failed to add group");
+    q.bind(1, name); 
+    q.bind(2, encryptedKey); 
+    q.bind(3, ownerId);
+    if (!q.exec()) throw DBException("Failed to add group to database");
 }
 
 std::vector<unsigned char> Database::getEncryptedGroupKey(const std::string& name, int& groupId) {
@@ -257,7 +257,6 @@ void Database::updateGroupMemberStatus(int groupId, const std::string& userId, c
 
 // -- Entries --
 void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsigned char>& encryptedPassword) {
-    // [FIX] Generate UUID if not present
     if (entry.uuid.empty()) {
         entry.uuid = CipherMesh::Core::Crypto::generateUUID();
     }
@@ -382,8 +381,6 @@ void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned c
         }
     }
 }
-
-// ... inside src/core/database.cpp
 
 bool Database::entryExists(const std::string& username, const std::string& locationValue) {
     SqlStatement q(m_db_handle, "SELECT count(*) FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = ? AND l.value = ?");
@@ -553,6 +550,41 @@ std::vector<VaultEntry> Database::getRecentEntries(int limit) {
     return res;
 }
 
+// -- Sync Queue Implementation (Android) --
+void Database::storeSyncJob(const std::string& targetUser, const std::string& groupName, const std::string& operation, const std::string& payload) {
+    SqlStatement q(m_db_handle, "INSERT INTO sync_queue (target_user, group_name, operation, payload, created_at) VALUES (?, ?, ?, ?, ?)");
+    long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    q.bind(1, targetUser);
+    q.bind(2, groupName);
+    q.bind(3, operation);
+    q.bind(4, payload);
+    q.bind(5, now);
+    q.exec();
+}
+
+std::vector<SyncJob> Database::getSyncJobsForUser(const std::string& userId) {
+    std::vector<SyncJob> jobs;
+    SqlStatement q(m_db_handle, "SELECT id, target_user, group_name, operation, payload, created_at FROM sync_queue WHERE target_user = ? ORDER BY created_at ASC");
+    q.bind(1, userId);
+    while(q.step()) {
+        SyncJob j;
+        j.id = q.getInt(0);
+        j.targetUser = q.getString(1);
+        j.groupName = q.getString(2);
+        j.operation = q.getString(3);
+        j.payload = q.getString(4);
+        j.createdAt = q.getInt64(5);
+        jobs.push_back(j);
+    }
+    return jobs;
+}
+
+void Database::deleteSyncJob(int jobId) {
+    SqlStatement q(m_db_handle, "DELETE FROM sync_queue WHERE id = ?");
+    q.bind(1, jobId);
+    q.exec();
+}
+
 } // namespace Core
 } // namespace CipherMesh
 
@@ -630,87 +662,82 @@ void Database::exec(const std::string& sql) {
 }
 
 void Database::createTables() {
-    QSqlQuery q(m_db);
-    
     // 1. Metadata
-    if (!q.exec("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB)")) 
-        throw DBException(q.lastError().text().toStdString());
+    exec("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB)");
 
     // 2. Groups
-    if (!q.exec("CREATE TABLE IF NOT EXISTS groups ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "name TEXT UNIQUE NOT NULL, "
-                "encrypted_key BLOB NOT NULL, "
-                "owner_id TEXT, "
-                "admins_only_write INTEGER DEFAULT 0, "
-                "admins_only_invite INTEGER DEFAULT 0)"))
-        throw DBException(q.lastError().text().toStdString());
+    exec("CREATE TABLE IF NOT EXISTS groups ("
+         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+         "name TEXT NOT NULL, "
+         "encrypted_key BLOB NOT NULL, "
+         "owner_id TEXT, "
+         "admins_only_write INTEGER DEFAULT 0, "
+         "admins_only_invite INTEGER DEFAULT 0)");
 
     // 3. Group Members
-    if (!q.exec("CREATE TABLE IF NOT EXISTS group_members ("
-                "group_id INTEGER, "
-                "user_id TEXT, "
-                "role TEXT, "
-                "status TEXT, "
-                "PRIMARY KEY(group_id, user_id), "
-                "FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)"))
-        throw DBException(q.lastError().text().toStdString());
+    exec("CREATE TABLE IF NOT EXISTS group_members ("
+         "group_id INTEGER, "
+         "user_id TEXT, "
+         "role TEXT, "
+         "status TEXT, "
+         "PRIMARY KEY(group_id, user_id), "
+         "FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
 
     // 4. Entries
-    if (!q.exec("CREATE TABLE IF NOT EXISTS entries ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "group_id INTEGER, "
-                "uuid TEXT UNIQUE, "
-                "title TEXT, "
-                "username TEXT, "
-                "encrypted_password BLOB, "
-                "url TEXT, "
-                "notes TEXT, "
-                "totp_secret TEXT, "
-                "entry_type TEXT, "
-                "created_at INTEGER, "
-                "updated_at INTEGER, "
-                "access_count INTEGER DEFAULT 0, "
-                "last_accessed INTEGER DEFAULT 0, "
-                "password_expiry INTEGER DEFAULT 0, "
-                "is_deleted INTEGER DEFAULT 0, "
-                "FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)"))
-        throw DBException(q.lastError().text().toStdString());
-    
-    // [FIX] Migration: Add uuid and is_deleted columns if they don't exist
-    // Qt's QSqlQuery doesn't throw exceptions, it returns false on error
-    // We check for errors only if they're not "column already exists"
-    q.exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
-    // Ignore errors (column likely already exists)
-    q.exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
-    // Ignore errors (column likely already exists)
+    exec("CREATE TABLE IF NOT EXISTS entries ("
+         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+         "group_id INTEGER, "
+         "uuid TEXT UNIQUE, "
+         "title TEXT, "
+         "username TEXT, "
+         "encrypted_password BLOB, "
+         "url TEXT, "
+         "notes TEXT, "
+         "totp_secret TEXT, "
+         "entry_type TEXT, "
+         "created_at INTEGER, "
+         "updated_at INTEGER, "
+         "access_count INTEGER DEFAULT 0, "
+         "last_accessed INTEGER DEFAULT 0, "
+         "password_expiry INTEGER DEFAULT 0, "
+         "is_deleted INTEGER DEFAULT 0, "
+         "FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
 
-    // 5. Locations (Geo-fencing)
-    if (!q.exec("CREATE TABLE IF NOT EXISTS locations ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "entry_id INTEGER, "
-                "type TEXT, "
-                "value TEXT, "
-                "FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)"))
-        throw DBException(q.lastError().text().toStdString());
+    // 5. Locations
+    exec("CREATE TABLE IF NOT EXISTS locations ("
+         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+         "entry_id INTEGER, "
+         "type TEXT, "
+         "value TEXT, "
+         "FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
 
     // 6. Password History
-    if (!q.exec("CREATE TABLE IF NOT EXISTS password_history ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "entry_id INTEGER, "
-                "encrypted_password BLOB, "
-                "timestamp INTEGER, "
-                "FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)"))
-        throw DBException(q.lastError().text().toStdString());
+    exec("CREATE TABLE IF NOT EXISTS password_history ("
+         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+         "entry_id INTEGER, "
+         "encrypted_password BLOB, "
+         "timestamp INTEGER, "
+         "FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
 
     // 7. Pending Invites
-    if (!q.exec("CREATE TABLE IF NOT EXISTS pending_invites ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "sender_id TEXT, "
-                "group_name TEXT, "
-                "payload TEXT, "
-                "status TEXT)"))
-        throw DBException(q.lastError().text().toStdString());
+    exec("CREATE TABLE IF NOT EXISTS pending_invites ("
+         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+         "sender_id TEXT, "
+         "group_name TEXT, "
+         "payload TEXT, "
+         "status TEXT)");
+
+    // [NEW] Sync Queue (Outbox)
+    exec("CREATE TABLE IF NOT EXISTS sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, target_user TEXT, group_name TEXT, operation TEXT, payload TEXT, created_at INTEGER)");
+
+    // Migrations
+    try {
+        exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
+    } catch (...) {}
+    
+    try {
+        exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
+    } catch (...) {}
 }
 
 // Group Management
@@ -884,7 +911,6 @@ void Database::updateGroupMemberStatus(int groupId, const std::string& userId, c
 void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsigned char>& encryptedPassword) {
     m_db.transaction();
     
-    // [FIX] Generate UUID if not present
     if (entry.uuid.empty()) {
         entry.uuid = CipherMesh::Core::Crypto::generateUUID();
     }
@@ -932,7 +958,6 @@ void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsi
 std::vector<VaultEntry> Database::getEntriesForGroup(int groupId) {
     std::vector<VaultEntry> results;
     QSqlQuery q(m_db);
-    // [FIX] Select uuid and is_deleted, filter out deleted entries
     q.prepare("SELECT id, uuid, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry, is_deleted FROM entries WHERE group_id = :gid AND (is_deleted IS NULL OR is_deleted = 0)");
     q.bindValue(":gid", groupId);
     
@@ -989,7 +1014,6 @@ std::vector<unsigned char> Database::getEncryptedPassword(int entryId) {
 }
 
 bool Database::deleteEntry(int entryId) {
-    // [FIX] Use tombstoning instead of hard delete for sync support
     QSqlQuery q(m_db);
     q.prepare("UPDATE entries SET is_deleted = 1, updated_at = :now WHERE id = :id");
     q.bindValue(":now", QDateTime::currentMSecsSinceEpoch());
@@ -1256,7 +1280,46 @@ std::vector<VaultEntry> Database::getRecentEntries(int limit) {
     return results;
 }
 
+// -- Sync Queue Implementation (Desktop) --
+void Database::storeSyncJob(const std::string& targetUser, const std::string& groupName, const std::string& operation, const std::string& payload) {
+    QSqlQuery q(m_db);
+    q.prepare("INSERT INTO sync_queue (target_user, group_name, operation, payload, created_at) VALUES (:target, :group, :op, :payload, :created)");
+    q.bindValue(":target", QString::fromStdString(targetUser));
+    q.bindValue(":group", QString::fromStdString(groupName));
+    q.bindValue(":op", QString::fromStdString(operation));
+    q.bindValue(":payload", QString::fromStdString(payload));
+    q.bindValue(":created", QDateTime::currentMSecsSinceEpoch());
+    if(!q.exec()) throw DBException("Failed to queue sync job: " + q.lastError().text().toStdString());
+}
+
+std::vector<SyncJob> Database::getSyncJobsForUser(const std::string& userId) {
+    std::vector<SyncJob> jobs;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT id, target_user, group_name, operation, payload, created_at FROM sync_queue WHERE target_user = :target ORDER BY created_at ASC");
+    q.bindValue(":target", QString::fromStdString(userId));
+    if (q.exec()) {
+        while(q.next()) {
+            SyncJob j;
+            j.id = q.value("id").toInt();
+            j.targetUser = q.value("target_user").toString().toStdString();
+            j.groupName = q.value("group_name").toString().toStdString();
+            j.operation = q.value("operation").toString().toStdString();
+            j.payload = q.value("payload").toString().toStdString();
+            j.createdAt = q.value("created_at").toLongLong();
+            jobs.push_back(j);
+        }
+    }
+    return jobs;
+}
+
+void Database::deleteSyncJob(int jobId) {
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM sync_queue WHERE id = :id");
+    q.bindValue(":id", jobId);
+    q.exec();
+}
+
 } // namespace Core
 } // namespace CipherMesh
 
-#endif // DESKTOP implementation block
+#endif

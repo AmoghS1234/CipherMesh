@@ -17,7 +17,9 @@
         <item name="colorOnSurface">@color/prof_text_primary</item>
         <item name="android:textColorPrimary">@color/prof_text_primary</item>
         <item name="android:textColorSecondary">@color/prof_text_secondary</item>
-        <item name="colorOnPrimary">@color/prof_bg</item>
+        
+        <item name="colorOnPrimary">@color/black</item>
+        
         <item name="colorPrimary">@color/prof_primary</item>
         <item name="colorPrimaryVariant">@color/prof_variant</item>
         <item name="colorSecondary">@color/prof_secondary</item>

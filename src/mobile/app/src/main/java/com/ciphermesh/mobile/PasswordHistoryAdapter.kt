@@ -1,13 +1,10 @@
 package com.ciphermesh.mobile
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import android.widget.Toast
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import java.text.SimpleDateFormat
@@ -30,8 +27,10 @@ class PasswordHistoryAdapter(
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val textPasswordMasked: TextView = view.findViewById(R.id.textPasswordMasked)
-        val textTimestamp: TextView = view.findViewById(R.id.textTimestamp)
-        val btnCopy: MaterialButton = view.findViewById(R.id.btnCopyHistoryPassword)
+        // [FIX] Updated ID to match item_password_history.xml
+        val textTimestamp: TextView = view.findViewById(R.id.textHistoryDate) 
+        // [FIX] Updated ID to match item_password_history.xml
+        val btnCopy: MaterialButton = view.findViewById(R.id.btnHistoryCopy) 
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -43,12 +42,10 @@ class PasswordHistoryAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = items[position]
         
-        // Format timestamp with thread-safe date formatter and overflow prevention
         val dateStr = try {
             synchronized(dateFormat) {
-                // Safely multiply timestamp, checking for reasonable range (after year 1970, before year 3000)
                 val timestamp = item.timestamp
-                if (timestamp in 0..32503680000) { // Unix epoch to year 3000
+                if (timestamp in 0..32503680000) { 
                     dateFormat.format(Date(timestamp * 1000))
                 } else {
                     "Invalid date"
@@ -57,6 +54,7 @@ class PasswordHistoryAdapter(
         } catch (e: Exception) {
             "Invalid date"
         }
+        
         holder.textTimestamp.text = context.getString(R.string.password_changed_at, dateStr)
         
         holder.btnCopy.setOnClickListener {

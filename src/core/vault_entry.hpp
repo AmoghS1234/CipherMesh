@@ -18,30 +18,28 @@ struct Location {
 // --- 2. Vault Entry (The main data item) ---
 struct VaultEntry {
     int id;
-    int groupId; // [ADDED] Missing in previous version
-    std::string uuid; // [ADDED] UUID for sync conflict resolution
+    int groupId;
+    std::string uuid; 
     std::string title;
     std::string username;
     std::string notes;
     std::string password; // Plaintext (only in RAM)
-    std::string url;      // [ADDED]
+    std::string url;      
     std::vector<Location> locations; 
     
     long long createdAt;
-    long long updatedAt;      // [RENAMED] from lastModified to match Android code
+    long long updatedAt;      
     long long lastAccessed;
     long long passwordExpiry;
     
-    std::string totpSecret;   // [RENAMED] from totp_secret (camelCase standard)
-    std::string entryType;    // [RENAMED] from entry_type (camelCase standard)
-    bool isDeleted;           // [ADDED] For tombstoning (sync deletions)
+    std::string totpSecret;   
+    std::string entryType;    
+    bool isDeleted;           
 
-    // Default Constructor
     VaultEntry() 
         : id(-1), groupId(-1), createdAt(0), updatedAt(0), lastAccessed(0), passwordExpiry(0), 
           totpSecret(""), entryType("password"), isDeleted(false) {}
 
-    // Convenience Constructor
     VaultEntry(int id, std::string t, std::string u, std::string n) 
         : id(id), groupId(-1), title(std::move(t)), username(std::move(u)), notes(std::move(n)), 
           createdAt(0), updatedAt(0), lastAccessed(0), passwordExpiry(0), 
@@ -65,7 +63,7 @@ struct PendingInvite {
     int id;
     std::string senderId;
     std::string groupName;
-    std::string payloadJson; // Encrypted key/data
+    std::string payloadJson; 
     long long timestamp;
     std::string status; 
 };
@@ -75,11 +73,21 @@ struct PasswordHistoryEntry {
     int id;
     int entryId;
     std::string encryptedPassword;
-    long long changedAt; // Unix timestamp
+    long long changedAt; 
     
     PasswordHistoryEntry() : id(-1), entryId(-1), changedAt(0) {}
     PasswordHistoryEntry(int id, int eId, std::string pwd, long long ts)
         : id(id), entryId(eId), encryptedPassword(std::move(pwd)), changedAt(ts) {}
+};
+
+// --- 6. Syncing (The Outbox) ---
+struct SyncJob {
+    int id;
+    std::string targetUser;
+    std::string groupName;
+    std::string operation; // "UPSERT", "DELETE", "MEMBER_ADD", "MEMBER_KICK"
+    std::string payload;   // Encrypted JSON content
+    long long createdAt;
 };
 
 } // namespace Core

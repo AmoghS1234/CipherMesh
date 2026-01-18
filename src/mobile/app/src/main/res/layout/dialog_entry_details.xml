@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="?attr/colorWindowBg">
+    android:background="?attr/colorSurface">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -25,23 +25,24 @@
                 android:text="Entry Details"
                 android:textSize="22sp"
                 android:textStyle="bold"
-                android:textColor="?attr/colorTextPrimary" />
+                android:textColor="?attr/colorOnSurface" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnEdit"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Edit" />
+                android:text="Edit" 
+                style="@style/Widget.Material3.Button.TextButton"/>
         </LinearLayout>
 
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/layoutDetailPass"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="8dp"
             android:hint="Password"
-            app:endIconMode="password_toggle"
-            android:theme="@style/CipherMesh.Input">
+            app:endIconMode="password_toggle">
             
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/detailPass"
@@ -49,7 +50,7 @@
                 android:layout_height="wrap_content"
                 android:inputType="textPassword"
                 android:enabled="false"
-                android:textColor="?attr/colorTextPrimary"/>
+                android:textColor="?attr/colorOnSurface"/>
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.button.MaterialButton
@@ -58,11 +59,12 @@
             android:layout_height="wrap_content"
             android:text="Copy Password"
             android:layout_gravity="end"
-            android:layout_marginBottom="16dp"/>
+            android:layout_marginBottom="16dp"
+            app:icon="@drawable/ic_content_copy"/>
 
         <TextView
             android:text="2FA Code"
-            android:textColor="?attr/colorTextSecondary"
+            android:textColor="?android:attr/textColorSecondary"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"/>
 
@@ -82,49 +84,50 @@
                 android:textSize="24sp"
                 android:letterSpacing="0.1"
                 android:padding="8dp"
-                android:textColor="?attr/colorHighlight"
+                android:textColor="?attr/colorPrimary"
                 android:textStyle="bold"/>
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnCopyTotp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Copy" />
+                android:text="Copy"
+                style="@style/Widget.Material3.Button.TextButton" />
         </LinearLayout>
 
         <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:theme="@style/CipherMesh.Input">
+            android:layout_marginBottom="8dp">
             <EditText
                 android:id="@+id/detailTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="Title"
                 android:enabled="false"
-                android:textColor="?attr/colorTextPrimary"/>
+                android:textColor="?attr/colorOnSurface"/>
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:theme="@style/CipherMesh.Input">
+            android:layout_marginBottom="8dp">
             <EditText
                 android:id="@+id/detailUser"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="Username"
                 android:enabled="false"
-                android:textColor="?attr/colorTextPrimary"/>
+                android:textColor="?attr/colorOnSurface"/>
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="24dp"
-            android:theme="@style/CipherMesh.Input">
+            android:layout_marginBottom="24dp">
             <EditText
                 android:id="@+id/detailNotes"
                 android:layout_width="match_parent"
@@ -133,10 +136,9 @@
                 android:enabled="false"
                 android:minLines="3"
                 android:gravity="top"
-                android:textColor="?attr/colorTextPrimary"/>
+                android:textColor="?attr/colorOnSurface"/>
         </com.google.android.material.textfield.TextInputLayout>
         
-        <!-- Timestamps Section -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -145,7 +147,7 @@
             android:textStyle="bold"
             android:layout_marginTop="16dp"
             android:layout_marginBottom="8dp"
-            android:textColor="?attr/colorTextPrimary" />
+            android:textColor="?attr/colorOnSurface" />
         
         <TextView
             android:id="@+id/textCreatedAt"
@@ -153,7 +155,7 @@
             android:layout_height="wrap_content"
             android:textSize="12sp"
             android:layout_marginBottom="4dp"
-            android:textColor="?attr/colorTextSecondary" />
+            android:textColor="?android:attr/textColorSecondary" />
         
         <TextView
             android:id="@+id/textUpdatedAt"
@@ -161,7 +163,7 @@
             android:layout_height="wrap_content"
             android:textSize="12sp"
             android:layout_marginBottom="4dp"
-            android:textColor="?attr/colorTextSecondary" />
+            android:textColor="?android:attr/textColorSecondary" />
         
         <TextView
             android:id="@+id/textLastAccessed"
@@ -169,9 +171,8 @@
             android:layout_height="wrap_content"
             android:textSize="12sp"
             android:layout_marginBottom="16dp"
-            android:textColor="?attr/colorTextSecondary" />
+            android:textColor="?android:attr/textColorSecondary" />
         
-        <!-- Action Buttons -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -184,7 +185,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:layout_marginEnd="4dp"
-                android:text="@string/action_view_history"
+                android:text="History"
                 style="@style/Widget.Material3.Button.OutlinedButton" />
             
             <com.google.android.material.button.MaterialButton
@@ -193,7 +194,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:layout_marginStart="4dp"
-                android:text="@string/action_duplicate"
+                android:text="Duplicate"
                 style="@style/Widget.Material3.Button.OutlinedButton" />
         </LinearLayout>
         

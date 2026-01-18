@@ -1,8 +1,9 @@
 package com.ciphermesh.mobile.p2p
 
 import android.app.Activity
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
-import android.widget.Toast
 import com.ciphermesh.mobile.core.SignalingCallback
 import com.ciphermesh.mobile.core.Vault
 import okhttp3.*
@@ -12,79 +13,148 @@ import java.util.concurrent.TimeUnit
 class P2PManager(private val activity: Activity, private val vault: Vault) : SignalingCallback {
 
     private val SIGNALING_URL = "wss://ciphermesh-signal-server.onrender.com" 
-    
     private var webSocket: WebSocket? = null
+    
+    // Track connection state
+    private var isConnected = false
+    private var isRegistered = false
+    
+    // Handlers for retries
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private val retryRegisterHandler = Handler(Looper.getMainLooper())
+    
+    // OkHttp Client with Aggressive Ping to keep connection alive
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS) 
-        .pingInterval(30, TimeUnit.SECONDS)
+        .pingInterval(10, TimeUnit.SECONDS) // Ping every 10s to prevent silent disconnects
         .build()
 
     fun connect() {
-        // [CRITICAL] Register this class so C++ can call sendSignalingMessage
+        if (isConnected) return 
+
+        // 1. Register Core Callback so C++ can trigger sends
         vault.registerSignalingCallback(this)
 
         val request = Request.Builder().url(SIGNALING_URL).build()
-        Log.d("P2P", "Connecting to $SIGNALING_URL")
+        Log.d("P2P", "🚀 Connecting to $SIGNALING_URL ...")
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d("P2P", "✅ Connected to Server")
-                activity.runOnUiThread { 
-                    Toast.makeText(activity, "Connected!", Toast.LENGTH_SHORT).show() 
-                }
-                registerUser()
+                Log.d("P2P", "✅ WebSocket Opened")
+                isConnected = true
+                isRegistered = false
+                
+                // 2. Start the Registration Loop immediately
+                attemptRegistration()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 Log.d("P2P", "📩 Received: $text")
-                // Pass everything to C++ logic
-                vault.receiveSignalingMessage(text)
-                
-                // Also handle UI updates manually for now
-                activity.runOnUiThread { handleUiMessage(text) }
+                try {
+                    val json = JSONObject(text)
+                    val type = json.optString("type")
+                    
+                    // 3. Stop retrying once server confirms
+                    if (type == "register-success") {
+                        Log.d("P2P", "✅ Registration Confirmed by Server")
+                        isRegistered = true
+                        retryRegisterHandler.removeCallbacksAndMessages(null) 
+                    } else {
+                        handleMessage(json, text)
+                    }
+                } catch (e: Exception) {
+                    Log.e("P2P", "Error parsing message: ${e.message}", e)
+                }
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                Log.d("P2P", "⚠️ Closing: $code / $reason")
+                isConnected = false
+                isRegistered = false
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.d("P2P", "❌ Closed: $code / $reason")
+                isConnected = false
+                isRegistered = false
+                // 4. Auto-Reconnect if closed
+                scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e("P2P", "❌ Connection Failed: ${t.message}")
+                isConnected = false
+                isRegistered = false
+                scheduleReconnect()
             }
         })
     }
 
-    private fun registerUser() {
-        val userId = vault.getUserId()
-        if (userId.isNotEmpty() && userId != "Locked") {
-            val regMsg = JSONObject()
-            regMsg.put("type", "register")
-            regMsg.put("id", userId)
-            regMsg.put("pubKey", "") 
-            webSocket?.send(regMsg.toString())
-            
-            sendPing() // Announce presence immediately
+    private fun handleMessage(json: JSONObject, rawText: String) {
+        val type = json.optString("type")
+        val sender = json.optString("sender")
+
+        when (type) {
+            "user-online" -> {
+                val onlineUser = json.optString("user")
+                if (onlineUser.isNotEmpty()) {
+                    Log.d("P2P", "Peer Online: $onlineUser")
+                    vault.onPeerOnline(onlineUser)
+                }
+            }
+            "sync-packet" -> {
+                val payload = json.optString("payload")
+                if (payload.isNotEmpty()) {
+                    vault.handleSyncMessage(sender, payload)
+                }
+            }
+            "offer", "answer", "ice-candidate" -> {
+                vault.receiveSignalingMessage(rawText)
+            }
+            "error" -> Log.e("P2P", "Server Error: ${json.optString("message")}")
         }
     }
 
-    // [FIX] This method was missing in previous builds
-    fun sendPing() {
-        val userId = vault.getUserId()
-        if (webSocket != null && userId.isNotEmpty()) {
-            val pingMsg = JSONObject()
-            pingMsg.put("type", "online-ping")
-            pingMsg.put("sender", userId)
-            webSocket?.send(pingMsg.toString())
-            Log.d("P2P", "📡 Sent Ping")
+    private fun attemptRegistration() {
+        // Stop any existing attempts first
+        retryRegisterHandler.removeCallbacksAndMessages(null)
+        
+        val runnable = object : Runnable {
+            override fun run() {
+                if (isConnected && !isRegistered && webSocket != null) {
+                    val userId = vault.getUserId()
+                    if (userId.isNotEmpty()) {
+                        val json = JSONObject()
+                        json.put("type", "register")
+                        json.put("user", userId)
+                        webSocket?.send(json.toString())
+                        Log.d("P2P", "🔄 Sending Register Request for: $userId")
+                        
+                        // Retry again in 3 seconds if not confirmed
+                        retryRegisterHandler.postDelayed(this, 3000)
+                    } else {
+                        Log.w("P2P", "⚠️ User ID empty, cannot register yet.")
+                    }
+                }
+            }
         }
+        // Run immediately
+        runnable.run()
     }
 
-    // Called BY C++ (via JNI) to send data out
+    private fun scheduleReconnect() {
+        reconnectHandler.removeCallbacksAndMessages(null)
+        reconnectHandler.postDelayed({
+            Log.d("P2P", "🔄 Attempting Reconnect...")
+            connect()
+        }, 10000) // Retry every 5s
+    }
+
     override fun sendSignalingMessage(targetId: String, type: String, payload: String) {
-        // Synchronized access to webSocket to prevent race conditions
         synchronized(this) {
             val ws = webSocket
-            if (ws == null) {
-                Log.e("P2P", "❌ Cannot send $type: WebSocket is null")
-                activity.runOnUiThread {
-                    Toast.makeText(activity, "Connection lost. Please reconnect.", Toast.LENGTH_SHORT).show()
-                }
+            if (ws == null || !isConnected) {
+                Log.e("P2P", "❌ Cannot send $type: Not Connected")
                 return
             }
             
@@ -95,30 +165,26 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
                 json.put("sender", userId)
                 json.put("target", targetId)
                 
-                // Format payload based on type
                 if (type == "offer" || type == "answer") {
                     json.put("sdp", payload)
-                } else if (type == "ice-candidate") {
-                    json.put("payload", payload)
                 } else {
                     json.put("payload", payload)
                 }
 
-                val str = json.toString()
-                Log.d("P2P", "📤 C++ Sending: $str")
-                ws.send(str)
+                ws.send(json.toString())
+                Log.d("P2P", "➡️ Sent $type to $targetId")
             } catch (e: Exception) {
                 Log.e("P2P", "❌ Error sending message: ${e.message}", e)
             }
         }
     }
-
-    private fun handleUiMessage(jsonStr: String) {
-        try {
-            val json = JSONObject(jsonStr)
-            val type = json.optString("type")
-            // [REMOVED] Don't show toast on 'offer' - wait for actual invite-request
-            // The toast is now shown from native code when invite-request arrives
-        } catch (e: Exception) { }
+    
+    fun disconnect() {
+        retryRegisterHandler.removeCallbacksAndMessages(null)
+        reconnectHandler.removeCallbacksAndMessages(null)
+        webSocket?.close(1000, "App closing")
+        webSocket = null
+        isConnected = false
+        isRegistered = false
     }
 }

@@ -1,66 +1,65 @@
 package com.ciphermesh.mobile
 
 import android.content.Context
-import android.graphics.Typeface
-import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.ImageView
 import android.widget.TextView
+import java.util.ArrayList
 
-class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel>) 
-    : ArrayAdapter<EntryModel>(context, R.layout.item_vault_entry, dataList) {
-
-    // Helper to get theme color safely
-    private fun getThemeColor(attrId: Int): Int {
-        val typedValue = TypedValue()
-        context.theme.resolveAttribute(attrId, typedValue, true)
-        return typedValue.data
-    }
-
-    private val defaultTextColor: Int by lazy { getThemeColor(android.R.attr.textColorPrimary) }
-    private val primaryColor: Int by lazy { getThemeColor(com.google.android.material.R.attr.colorPrimary) } // FIX: Use Material R
-    private val errorColor: Int by lazy { context.getColor(R.color.error_red) }
+class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel>) : ArrayAdapter<EntryModel>(context, R.layout.item_list_row, dataList) {
 
     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-        val entry = getItem(position) ?: return convertView ?: View(context)
-        val view = convertView ?: LayoutInflater.from(context).inflate(R.layout.item_vault_entry, parent, false)
+        // 1. Inflate the new custom layout (item_list_row)
+        val view = convertView ?: LayoutInflater.from(context).inflate(R.layout.item_list_row, parent, false)
 
-        val title = view.findViewById<TextView>(R.id.itemTitle)
-        val subtitle = view.findViewById<TextView>(R.id.itemSubtitle)
-        val icon = view.findViewById<ImageView>(R.id.itemIcon)
+        // 2. Get the data item for this position
+        val item = getItem(position) ?: return view
 
-        title.text = entry.title
-        subtitle.text = entry.subtitle
-        subtitle.visibility = View.VISIBLE
+        // 3. Find views in the new layout
+        val titleText = view.findViewById<TextView>(R.id.rowTitle)
+        val subtitleText = view.findViewById<TextView>(R.id.rowSubtitle)
+        val iconImg = view.findViewById<ImageView>(R.id.rowIcon)
 
-        // Reset Styles
-        title.setTextColor(defaultTextColor)
-        title.typeface = Typeface.DEFAULT_BOLD
-        icon.alpha = 1.0f
-        icon.colorFilter = null 
+        // 4. Set Text Data
+        titleText.text = item.title
+        subtitleText.text = item.subtitle
 
-        // Conditional Styling
-        if (entry.subtitle == "Pending" || entry.subtitle == "Syncing...") {
-            title.setTextColor(errorColor)
-            icon.setImageResource(android.R.drawable.ic_dialog_email)
-            icon.setColorFilter(errorColor)
-            if (entry.subtitle == "Syncing...") icon.alpha = 0.5f
-        } 
-        else if (entry.subtitle == "Owner" || entry.subtitle == "Member") {
-            icon.setImageResource(android.R.drawable.ic_menu_my_calendar)
-            icon.setColorFilter(primaryColor) // FIX: Use cached color
-        } 
-        else {
-            icon.setImageResource(android.R.drawable.ic_lock_lock)
-            icon.setColorFilter(primaryColor) // FIX: Use cached color
+        // 5. Set Logic for Icon based on ID
+        // - ID < -1000: Pending Invite
+        // - ID == -1:   Syncing Status
+        // - ID == 0:    Group (Folder)
+        // - ID > 0:     Vault Entry (Lock)
+        
+        when {
+            item.id < -1000 -> {
+                // Pending Invite
+                iconImg.setImageResource(android.R.drawable.ic_dialog_email)
+                iconImg.alpha = 0.7f // Dim it slightly
+            }
+            item.id == -1 -> {
+                // Syncing / Loading
+                iconImg.setImageResource(android.R.drawable.stat_notify_sync)
+                iconImg.alpha = 0.5f
+            }
+            item.id > 0 -> {
+                // Actual Password Entry
+                iconImg.setImageResource(android.R.drawable.ic_lock_lock)
+                iconImg.alpha = 1.0f
+            }
+            else -> {
+                // Group (ID is usually 0 for groups in this app logic)
+                iconImg.setImageResource(android.R.drawable.ic_menu_myplaces) 
+                iconImg.alpha = 1.0f
+            }
         }
+
         return view
     }
 
-    fun updateData(newData: List<EntryModel>) {
+    fun updateData(newData: ArrayList<EntryModel>) {
         dataList.clear()
         dataList.addAll(newData)
         notifyDataSetChanged()

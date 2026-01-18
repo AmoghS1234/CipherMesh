@@ -37,8 +37,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:background="@drawable/bg_list_border"
-            android:padding="12dp"
+            android:background="?android:attr/selectableItemBackground"
+            android:padding="4dp"
             android:layout_marginBottom="16dp">
             
             <TextView
@@ -120,7 +120,6 @@
             android:orientation="vertical"
             android:divider="?android:attr/listDivider"
             android:showDividers="middle"
-            android:background="@drawable/bg_list_border"
             android:animateLayoutChanges="true"/>
 
     </LinearLayout>

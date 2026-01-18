@@ -77,7 +77,7 @@ set(USE_MBEDTLS OFF CACHE BOOL "" FORCE)
 set(USE_OPENSSL ON CACHE BOOL "" FORCE)
 set(USE_NICE OFF CACHE BOOL "" FORCE)
 
-# [FIX] Enable WebSockets for Signaling!
+# Enable WebSockets for Signaling
 set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)
 
 set(NO_MEDIA ON CACHE BOOL "" FORCE)
@@ -94,6 +94,7 @@ FetchContent_MakeAvailable(LibDataChannel)
 
 # --- 4. SQLite / Qt ---
 if(NOT ANDROID)
+    # [FIX] Core Sql is REQUIRED for database.hpp
     find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Concurrent Quick WebSockets Widgets Svg)
 endif()
 
@@ -135,8 +136,6 @@ set(CORE_SOURCES
     src/core/database.cpp
     src/utils/totp.cpp
     src/utils/passwordstrength.cpp
-    
-    # [FIX] Moved P2P sources here so they compile on Android too
     src/p2p/ip2pservice.cpp
     src/p2p_webrtc/webrtcservice.cpp
 )
@@ -156,7 +155,6 @@ if(ANDROID)
     target_include_directories(ciphermesh-core PRIVATE "${ANDROID_SQLITE_INCLUDE_DIR}")
 endif()
 
-# [FIX] Changed PRIVATE to PUBLIC so 'ciphermesh_jni' can find rtc/rtc.hpp
 target_link_libraries(ciphermesh-core PUBLIC
     LibDataChannel::LibDataChannelStatic
 )
@@ -171,7 +169,10 @@ target_link_libraries(ciphermesh-core PRIVATE
 if(ANDROID)
     target_link_libraries(ciphermesh-core PRIVATE log)
 else()
-    target_link_libraries(ciphermesh-core PRIVATE
+    # [CRITICAL FIX] Changed PRIVATE to PUBLIC. 
+    # Because database.hpp includes <QSqlDatabase>, consumers of this library 
+    # (like Desktop) MUST inherit the Qt6::Sql include paths.
+    target_link_libraries(ciphermesh-core PUBLIC
         Qt6::Core Qt6::Network Qt6::Sql Qt6::Concurrent Qt6::WebSockets
     )
 endif()
@@ -179,12 +180,19 @@ endif()
 # --- 6. Targets ---
 if(ANDROID)
     add_library(ciphermesh_jni SHARED src/mobile/app/src/main/cpp/native-lib.cpp)
-    target_link_options(ciphermesh_jni PRIVATE "-Wl,-z,max-page-size=16384")
+    
+    target_link_options(ciphermesh_jni PRIVATE 
+        "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384"
+    )
+    
     target_link_libraries(ciphermesh_jni PRIVATE ciphermesh-core log android)
 else()
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/desktop/main.cpp")
         file(GLOB_RECURSE DESKTOP_SOURCES "src/desktop/*.cpp" "src/desktop/*.hpp" "src/desktop/*.h")
+        
         qt_add_executable(CipherMesh-Desktop ${DESKTOP_SOURCES})
+        
         target_link_libraries(CipherMesh-Desktop PRIVATE
             ciphermesh-core
             Qt6::Quick Qt6::Core Qt6::Network Qt6::WebSockets Qt6::Widgets Qt6::Svg

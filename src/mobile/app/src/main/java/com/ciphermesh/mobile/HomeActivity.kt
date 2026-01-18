@@ -10,13 +10,13 @@ import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
-import android.util.TypedValue
-import android.view.Gravity
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
-import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -26,8 +26,8 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.Toolbar
 import androidx.appcompat.widget.SearchView
+import androidx.appcompat.widget.Toolbar
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -38,6 +38,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -47,6 +48,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     companion object {
         private val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
         private const val ENTRY_DETAILS_PARTS_COUNT = 8
+        private const val TAG = "HomeActivity"
     }
 
     private val vault = Vault()
@@ -56,23 +58,20 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private lateinit var adapter: CustomAdapter
     private lateinit var p2pManager: P2PManager
     
+    private lateinit var toggle: ActionBarDrawerToggle
+    
     private var isShowingGroups = true 
     private var currentGroup = ""
     private var isGroupOwner = false 
     
-    // [NEW] For search functionality
     private var allEntries = ArrayList<EntryModel>()
     
-    // [NEW] Handler for clipboard auto-clear
-    private val clipboardHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val clipboardHandler = Handler(Looper.getMainLooper())
     private var clipboardClearRunnable: Runnable? = null
     
-    // [NEW] Track if receiver is registered to prevent unregister crash
     private var isReceiverRegistered = false
-
     private val processingInvites = mutableSetOf<String>()
 
-    // Helper Class to hold location data in memory before saving
     data class LocationData(var type: String, var value: String) {
         override fun toString(): String = "[$type] $value"
     }
@@ -80,10 +79,10 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private val refreshReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (isShowingGroups) runOnUiThread { loadGroups() }
+            else runOnUiThread { loadEntries() }
         }
     }
 
-    // [FIX] Robust Ownership Check: Compares Group Owner ID with Current User ID
     private fun checkOwnership(groupName: String) {
         if (groupName == "Personal") {
             isGroupOwner = true
@@ -92,10 +91,10 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val ownerId = vault.getGroupOwner(groupName)
         val myId = vault.getUserId()
         isGroupOwner = (ownerId == myId)
+        Log.d(TAG, "Ownership Check: Group=$groupName, Owner=$ownerId, Me=$myId, IsOwner=$isGroupOwner")
     }
 
     private fun showGroupOptionsDialog(groupName: String) {
-        // [LOGIC] Define options based on ownership
         val options = if (isGroupOwner) {
             arrayOf("Manage Group", "Delete Group")
         } else {
@@ -106,15 +105,8 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             .setTitle(groupName)
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> {
-                        // Option 0: "Manage Group" (Owner) or "Members" (Member)
-                        // Both open the same dialog, but it adapts internally
-                        showManageGroupDialog() 
-                    }
-                    1 -> {
-                        // Option 1: "Delete Group" (Owner) or "Leave Group" (Member)
-                        showDeleteGroupConfirmation(groupName)
-                    }
+                    0 -> showManageGroupDialog() 
+                    1 -> showDeleteGroupConfirmation(groupName)
                 }
             }
             .show()
@@ -124,7 +116,6 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         applySavedTheme()
         super.onCreate(savedInstanceState)
         
-        // [SECURITY] Prevent screenshots and screen recording
         window.setFlags(
             android.view.WindowManager.LayoutParams.FLAG_SECURE,
             android.view.WindowManager.LayoutParams.FLAG_SECURE
@@ -138,19 +129,24 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         if (vault.isLocked()) {
             Toast.makeText(this, "Session Expired", Toast.LENGTH_SHORT).show()
-            startActivity(Intent(this, MainActivity::class.java))
+            val intent = Intent(this, MainActivity::class.java)
+            startActivity(intent)
             finish()
             return
         }
+
+        vault.initP2P("wss://ciphermesh-signal-server.onrender.com")
 
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
         
         drawerLayout = findViewById(R.id.drawer_layout)
         val navView = findViewById<NavigationView>(R.id.nav_view)
-        val toggle = ActionBarDrawerToggle(this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close)
+        
+        toggle = ActionBarDrawerToggle(this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close)
         drawerLayout.addDrawerListener(toggle)
         toggle.syncState()
+        
         navView.setNavigationItemSelectedListener(this)
 
         val headerView = navView.getHeaderView(0)
@@ -158,10 +154,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val userId = vault.getUserId()
         userText.text = userId
         userText.setOnClickListener {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("User ID", userId)
-            clipboard.setPrimaryClip(clip)
-            Toast.makeText(this, "ID Copied", Toast.LENGTH_SHORT).show()
+            copyToClipboardSecure("User ID", userId, "ID Copied")
         }
 
         listView = findViewById(R.id.listViewEntries)
@@ -175,16 +168,17 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         adapter = CustomAdapter(this, arrayListOf())
         listView.adapter = adapter
 
-        // [UPDATE] On Item Click (Entry / Group)
         listView.setOnItemClickListener { _, _, position, _ ->
+            val entry = adapter.getItem(position) ?: return@setOnItemClickListener
+            
             if (isShowingGroups) {
-                val entry = adapter.getItem(position) ?: return@setOnItemClickListener
-                
                 if (entry.subtitle == "Pending" && entry.id < -1000) {
                     val inviteId = -(entry.id + 1000)
                     val regex = """^(.+) \(Invite from (.+)\)$""".toRegex()
                     val match = regex.find(entry.title ?: "")
-                    if (match != null) showAcceptRejectInviteDialog(inviteId, match.groupValues[2], match.groupValues[1])
+                    if (match != null) {
+                        showAcceptRejectInviteDialog(inviteId, match.groupValues[2], match.groupValues[1])
+                    }
                     return@setOnItemClickListener
                 }
                 
@@ -194,23 +188,28 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 }
                 
                 val groupName = entry.title ?: return@setOnItemClickListener
+                Log.d(TAG, "Opening Group: $groupName")
+                
                 if (vault.setActiveGroup(groupName)) {
                     currentGroup = groupName
-                    checkOwnership(groupName) // <--- Use new ownership check
+                    checkOwnership(groupName)
                     loadEntries()
+                } else {
+                    Log.e(TAG, "Failed to set active group: $groupName")
+                    Toast.makeText(this, "Error opening group", Toast.LENGTH_SHORT).show()
                 }
             } else {
-                val entryId = adapter.getItem(position)?.id ?: return@setOnItemClickListener
+                val entryId = entry.id
                 showEntryDetails(entryId)
             }
         }
-        // [FIXED] Long Press now opens the Options Menu
+
         listView.setOnItemLongClickListener { _, _, position, _ ->
             if (isShowingGroups) {
                 val groupName = adapter.getItem(position)?.title ?: return@setOnItemLongClickListener false
                 currentGroup = groupName
                 checkOwnership(groupName)
-                showGroupOptionsDialog(groupName) // Calls the menu logic below
+                showGroupOptionsDialog(groupName)
                 true
             } else false
         }
@@ -231,50 +230,45 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (drawerLayout.isDrawerOpen(GravityCompat.START)) drawerLayout.closeDrawer(GravityCompat.START)
-                else if (!isShowingGroups) loadGroups()
-                else finish() 
+                if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
+                    drawerLayout.closeDrawer(GravityCompat.START)
+                } else if (!isShowingGroups) {
+                    loadGroups()
+                } else {
+                    finish() 
+                }
             }
         })
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // [FIX] Only unregister if it was successfully registered
+        p2pManager.disconnect()
         if (isReceiverRegistered) {
             try {
                 unregisterReceiver(refreshReceiver)
                 isReceiverRegistered = false
-            } catch (e: IllegalArgumentException) {
-                // Receiver already unregistered, ignore
-            }
+            } catch (e: IllegalArgumentException) {}
         }
-        // [NEW] Cancel any pending clipboard clear when activity is destroyed
         clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
     }
     
-    // [NEW] Copy text to clipboard with auto-clear after 60 seconds
     private fun copyToClipboardSecure(label: String, text: String, toastMessage: String = "Copied") {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText(label, text)
         clipboard.setPrimaryClip(clip)
         
-        // Cancel any previous auto-clear
         clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
         
-        // Schedule clipboard clear after 60 seconds
         clipboardClearRunnable = Runnable {
             try {
                 val emptyClip = ClipData.newPlainText("", "")
                 clipboard.setPrimaryClip(emptyClip)
-            } catch (e: Exception) {
-                // Ignore errors (user may have copied something else)
-            }
+            } catch (e: Exception) {}
         }
         clipboardClearRunnable?.let {
-            clipboardHandler.postDelayed(it, 60000) // 60 seconds
+            clipboardHandler.postDelayed(it, 60000) 
         }
-        
         Toast.makeText(this, "$toastMessage (clears in 60s)", Toast.LENGTH_SHORT).show()
     }
 
@@ -284,16 +278,25 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         invalidateOptionsMenu() 
         fabAdd.setImageResource(android.R.drawable.ic_input_add)
         
+        toggle.isDrawerIndicatorEnabled = false
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        
+        toggle.setToolbarNavigationClickListener {
+            onBackPressedDispatcher.onBackPressed()
+        }
+        
         val entriesRaw = vault.getEntries()
         val entryList = ArrayList<EntryModel>()
         if (entriesRaw != null) {
             for (raw in entriesRaw) {
-                val parts = raw.split(":")
+                val parts = raw.split("|")
                 if (parts.size >= 3) {
-                    entryList.add(EntryModel(parts[0].toInt(), parts[1], parts[2]))
+                    val id = parts[0].toIntOrNull() ?: 0
+                    entryList.add(EntryModel(id, parts[1], parts[2])) 
                 }
             }
         }
+        
         allEntries = entryList
         adapter.updateData(entryList)
     }
@@ -304,18 +307,25 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         invalidateOptionsMenu()
         fabAdd.setImageResource(android.R.drawable.ic_input_add)
 
+        supportActionBar?.setDisplayHomeAsUpEnabled(false)
+        toggle.isDrawerIndicatorEnabled = true
+        toggle.syncState()
+
         val groupList = ArrayList<EntryModel>()
-        val prefs = getSharedPreferences("memberships", Context.MODE_PRIVATE)
-        
+        val myId = vault.getUserId()
+
         val rawInvites = vault.getPendingInvites()
         for (invite in rawInvites) {
-            val parts = invite.split("|")
+            val parts = invite.split("|") 
             if (parts.size >= 3) {
-                val inviteId = parts[0].toIntOrNull() ?: continue
-                if (processingInvites.contains(parts[2])) {
-                    groupList.add(EntryModel(-1, "Joining '${parts[2]}'...", "Syncing..."))
+                val inviteId = parts[0].toIntOrNull() ?: 0
+                val sender = parts[1]
+                val groupName = parts[2]
+                
+                if (processingInvites.contains(groupName)) {
+                    groupList.add(EntryModel(-1, "Joining '$groupName'...", "Syncing..."))
                 } else {
-                    groupList.add(EntryModel(-inviteId - 1000, "${parts[2]} (Invite from ${parts[1]})", "Pending"))
+                    groupList.add(EntryModel(-inviteId - 1000, "$groupName (Invite from $sender)", "Pending"))
                 }
             }
         }
@@ -323,30 +333,23 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val groupsRaw = vault.getGroupNames()
         if (groupsRaw != null) {
             for (g in groupsRaw) {
-                val isMember = prefs.getBoolean(g, false)
-                val role = if (isMember) "Member" else "Owner"
-                groupList.add(EntryModel(-1, g, role))
+                val ownerId = vault.getGroupOwner(g)
+                val roleLabel = if (ownerId == myId || ownerId.isEmpty()) "Owner" else "Member"
+                groupList.add(EntryModel(0, g, roleLabel)) 
             }
         }
+        
         adapter.updateData(groupList)
     }
 
-    // [NEW] Manage Group Dialog: Handles Sync, Invites, and Members in one place
-    // ... inside HomeActivity class ...
-
     private fun showManageGroupDialog() {
-        // [FIX] Ensure we are inflating the correct new layout
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_manage_group, null)
-        
-        // Views
+
         val contentLayout = dialogView.findViewById<LinearLayout>(R.id.manageGroupContentLayout)
         val titleText = dialogView.findViewById<TextView>(R.id.textGroupTitle)
         val sectionSync = dialogView.findViewById<LinearLayout>(R.id.sectionSyncSettings)
         val sectionInvite = dialogView.findViewById<LinearLayout>(R.id.sectionInvite)
-        
-        // [FIX] Changed to generic Switch or SwitchMaterial to match XML
-        val switchMemberSync = dialogView.findViewById<android.widget.CompoundButton>(R.id.switchMemberSync)
-        
+        val switchMemberSync = dialogView.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switchMemberSync)
         val btnManualSync = dialogView.findViewById<Button>(R.id.btnManualSync)
         val inputInvite = dialogView.findViewById<TextInputEditText>(R.id.inputInviteId)
         val btnSendInvite = dialogView.findViewById<Button>(R.id.btnSendInvite)
@@ -357,11 +360,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         if (isGroupOwner) {
             sectionSync.visibility = View.VISIBLE
             sectionInvite.visibility = View.VISIBLE
-            
+
             val prefs = getSharedPreferences("group_settings", Context.MODE_PRIVATE)
             val isSyncEnabled = prefs.getBoolean("sync_$currentGroup", false)
             switchMemberSync.isChecked = isSyncEnabled
-            
+
             switchMemberSync.setOnCheckedChangeListener { _, isChecked ->
                 prefs.edit().putBoolean("sync_$currentGroup", isChecked).apply()
                 Toast.makeText(this, "Sync Policy Updated", Toast.LENGTH_SHORT).show()
@@ -383,7 +386,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         } else {
             sectionSync.visibility = View.GONE
             sectionInvite.visibility = View.GONE
-            
+
             val btnLeave = Button(this)
             btnLeave.text = "Leave Group"
             btnLeave.setTextColor(Color.RED)
@@ -391,57 +394,70 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             btnLeave.setOnClickListener {
                 showDeleteGroupConfirmation(currentGroup)
             }
-            // [FIX] Safe add to the LinearLayout, not ScrollView
-            contentLayout?.addView(btnLeave) 
+            contentLayout?.addView(btnLeave)
         }
 
         fun loadMembers() {
             membersContainer.removeAllViews()
             val members = vault.getGroupMembers(currentGroup)
             val myId = vault.getUserId()
-            
-            if (members.isEmpty()) return
+
+            if (members.isNullOrEmpty()) {
+                val emptyView = TextView(this)
+                emptyView.text = "No other members"
+                emptyView.setPadding(16, 16, 16, 16)
+                membersContainer.addView(emptyView)
+                return
+            }
 
             for (m in members) {
                 val parts = m.split("|")
-                if(parts.size < 3) continue
-                val uid = parts[0]; val role = parts[1]; val status = parts[2]
-                
-                // [FIX] Inflate the specific item_member_row layout
+                if (parts.size < 3) continue
+
+                val uid = parts[0]
+                val role = parts[1]
+                val status = parts[2]
+
                 val row = LayoutInflater.from(this).inflate(R.layout.item_member_row, membersContainer, false)
                 val nameTxt = row.findViewById<TextView>(R.id.memberName)
                 val statusTxt = row.findViewById<TextView>(R.id.memberStatus)
                 val btnRemove = row.findViewById<View>(R.id.btnRemove)
 
-                // [FIX] Safety check if row views are found
-                if (nameTxt != null) {
-                    var disp = uid
-                    if(uid == myId) disp += " (You)"
-                    if(role == "owner") disp = "👑 $disp"
-                    nameTxt.text = disp
-                }
-                
-                if (statusTxt != null) {
-                    statusTxt.text = status.uppercase()
+                nameTxt?.apply {
+                    var display = uid
+                    if (uid == myId) display += " (You)"
+                    if (role.equals("owner", ignoreCase = true)) display = "👑 $display"
+                    text = display
                 }
 
-                if(isGroupOwner && uid != myId && btnRemove != null) {
-                    btnRemove.visibility = View.VISIBLE
-                    btnRemove.setOnClickListener {
-                        vault.removeUser(currentGroup, uid)
-                        loadMembers()
+                statusTxt?.text = status.uppercase()
+
+                if (isGroupOwner && uid != myId) {
+                    btnRemove?.visibility = View.VISIBLE
+                    btnRemove?.setOnClickListener {
+                        MaterialAlertDialogBuilder(this)
+                            .setTitle("Remove Member")
+                            .setMessage("Are you sure you want to kick $uid?")
+                            .setPositiveButton("Remove") { _, _ ->
+                                vault.removeUser(currentGroup, uid)
+                                loadMembers() 
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
                     }
                 } else {
                     btnRemove?.visibility = View.GONE
                 }
+
                 membersContainer.addView(row)
             }
         }
+
         loadMembers()
 
         MaterialAlertDialogBuilder(this)
             .setView(dialogView)
-            .setPositiveButton("Done", null)
+            .setPositiveButton("Close", null)
             .show()
     }
 
@@ -474,32 +490,27 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             btnAccept.isEnabled = false; btnAccept.text = "Joining..."; btnReject.isEnabled = false; btnReject.alpha = 0.5f
             getSharedPreferences("memberships", Context.MODE_PRIVATE).edit().putBoolean(groupName, true).apply()
             processingInvites.add(groupName)
-            vault.respondToInvite(inviteId, true)
+            vault.respondToInvite(groupName, fromUser, true)
             Toast.makeText(this, "Accepted. Syncing...", Toast.LENGTH_SHORT).show()
             loadGroups(); view.postDelayed({ dialog.dismiss() }, 800)
         }
-        btnReject.setOnClickListener { vault.respondToInvite(inviteId, false); dialog.dismiss(); loadGroups() }
+        btnReject.setOnClickListener { vault.respondToInvite(groupName, fromUser, false); dialog.dismiss(); loadGroups() }
         dialog.show()
     }
 
-    // --- Sub-Dialog for Adding/Editing a single location ---
     private fun showLocationEditDialog(existing: LocationData?, onResult: (LocationData) -> Unit) {
         val view = LayoutInflater.from(this).inflate(R.layout.dialog_edit_location, null)
         
         val spinner = view.findViewById<android.widget.Spinner>(R.id.spinnerLocationType)
         val inputVal = view.findViewById<TextInputEditText>(R.id.inputLocationValue)
-        
-        // [FIX] Get layout to set placeholder text to avoid overlap issues
-        val layoutVal = view.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.layoutLocationValue)
-        
-        val layoutCustom = view.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.layoutCustomType)
+        val layoutVal = view.findViewById<TextInputLayout>(R.id.layoutLocationValue)
+        val layoutCustom = view.findViewById<TextInputLayout>(R.id.layoutCustomType)
         val inputCustom = view.findViewById<TextInputEditText>(R.id.inputCustomType)
 
         val types = arrayOf("URL", "Android App", "iOS App", "WiFi SSID", "Other")
         val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, types)
         spinner.adapter = adapter
 
-        // Pre-fill logic
         if (existing != null) {
             inputVal.setText(existing.value)
             if (types.contains(existing.type)) {
@@ -511,13 +522,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             }
         }
 
-        // Spinner Logic with Placeholder Fix
         spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p0: android.widget.AdapterView<*>?, p1: View?, pos: Int, p3: Long) {
                 val selected = types[pos]
                 layoutCustom.visibility = if (selected == "Other") View.VISIBLE else View.GONE
                 
-                // Set placeholderText on the Layout, NOT hint on the EditText
                 layoutVal.placeholderText = when(selected) {
                     "URL" -> "https://example.com"
                     "Android App" -> "com.example.app"
@@ -554,13 +563,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val totpEdit = dialogView.findViewById<TextInputEditText>(R.id.inputTotp)
         val notesEdit = dialogView.findViewById<TextInputEditText>(R.id.inputNotes)
         
-        // Location UI Components
         val locationsContainer = dialogView.findViewById<LinearLayout>(R.id.locationsContainer)
         val btnAdd = dialogView.findViewById<Button>(R.id.btnAddLoc)
 
         val locationsList = ArrayList<LocationData>()
 
-        // Function to refresh the visual list
         fun refreshLocationsList() {
             locationsContainer.removeAllViews()
             
@@ -574,7 +581,6 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 typeText.text = loc.type
                 valueText.text = loc.value
 
-                // Click row to Edit
                 clickArea.setOnClickListener {
                     showLocationEditDialog(loc) { updatedLoc ->
                         locationsList[index] = updatedLoc
@@ -582,7 +588,6 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     }
                 }
 
-                // Click X to Remove
                 btnRemove.setOnClickListener {
                     locationsList.removeAt(index)
                     refreshLocationsList()
@@ -602,7 +607,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         MaterialAlertDialogBuilder(this)
             .setTitle("Add Entry")
             .setView(dialogView)
-            .setCancelable(false) // Prevent accidental close
+            .setCancelable(false) 
             .setPositiveButton("Save") { _, _ ->
                 val title = titleEdit.text.toString().trim()
                 val user = userEdit.text.toString().trim()
@@ -610,10 +615,8 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 val totp = totpEdit.text.toString().trim()
                 val notes = notesEdit.text.toString().trim()
 
-                // Serialize locations to JSON manually
                 val locListJson = ArrayList<String>()
                 for (loc in locationsList) {
-                    // Basic escaping for safety
                     val t = loc.type.replace("\"", "\\\"")
                     val v = loc.value.replace("\"", "\\\"")
                     locListJson.add("{\"type\":\"$t\", \"value\":\"$v\"}")
@@ -623,17 +626,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 if (title.isNotEmpty() && pass.isNotEmpty()) {
                     vault.addEntry(title, user, pass, "Login", locationsJson, notes, totp)
                     loadEntries()
-                    
-                    // [AUTO SYNC LOGIC]
-                    val prefs = getSharedPreferences("group_settings", Context.MODE_PRIVATE)
-                    val syncAllowed = isGroupOwner || prefs.getBoolean("sync_$currentGroup", false)
-                    
-                    if (currentGroup != "Personal" && syncAllowed) {
-                        vault.broadcastSync(currentGroup)
-                        Toast.makeText(this, "Saved & Synced", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this, "Saved Locally", Toast.LENGTH_SHORT).show()
-                    }
+                    Toast.makeText(this, "Saved & Synced", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(this, "Title/Pass required", Toast.LENGTH_SHORT).show()
                 }
@@ -643,10 +636,26 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
 
     private fun showCreateGroupDialog() {
-        val input = EditText(this); input.hint = "Group Name"; val ctr = android.widget.FrameLayout(this); ctr.setPadding(50,20,50,0); ctr.addView(input)
-        MaterialAlertDialogBuilder(this).setTitle("New Group").setView(ctr).setPositiveButton("Create"){_,_->
-            if(input.text.toString().isNotEmpty()) if(vault.addGroup(input.text.toString())) loadGroups()
-        }.setNegativeButton("Cancel",null).show()
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_group, null)
+        val input = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.dialogInput)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Create New Group")
+            .setIcon(android.R.drawable.ic_menu_add) 
+            .setView(dialogView)
+            .setPositiveButton("Create") { _, _ ->
+                val groupName = input.text.toString().trim()
+                if (groupName.isNotEmpty()) {
+                    if (vault.addGroup(groupName)) {
+                        loadGroups()
+                        Toast.makeText(this, "Group Created", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "Failed to create group", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showEntryDetails(id: Int) {
@@ -661,35 +670,13 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val detailPass = dialogView.findViewById<TextInputEditText>(R.id.detailPass)
         val detailNotes = dialogView.findViewById<EditText>(R.id.detailNotes)
         val btnCopyPass = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnCopyPass)
-        
-        // Timestamp TextViews
-        val textCreatedAt = dialogView.findViewById<TextView>(R.id.textCreatedAt)
-        val textUpdatedAt = dialogView.findViewById<TextView>(R.id.textUpdatedAt)
-        val textLastAccessed = dialogView.findViewById<TextView>(R.id.textLastAccessed)
-        
-        // Action Buttons
         val btnPasswordHistory = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnPasswordHistory)
         val btnDuplicate = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnDuplicate)
         
-        // Format: title|username|password|notes|totpSecret|createdAt|updatedAt|lastAccessed
         detailTitle.setText(parts[0])
         detailUser.setText(parts[1])
         detailPass.setText(parts[2])
         detailNotes.setText(parts[3])
-        
-        // Format timestamps with thread-safe date formatter and error handling
-        try {
-            synchronized(dateFormat) {
-                textCreatedAt.text = getString(R.string.created_at, dateFormat.format(Date(parts[5].toLong() * 1000)))
-                textUpdatedAt.text = getString(R.string.updated_at, dateFormat.format(Date(parts[6].toLong() * 1000)))
-                textLastAccessed.text = getString(R.string.last_accessed, dateFormat.format(Date(parts[7].toLong() * 1000)))
-            }
-        } catch (e: NumberFormatException) {
-            // If timestamps are invalid, show default text
-            textCreatedAt.text = getString(R.string.created_at, "N/A")
-            textUpdatedAt.text = getString(R.string.updated_at, "N/A")
-            textLastAccessed.text = getString(R.string.last_accessed, "N/A")
-        }
         
         btnCopyPass.setOnClickListener {
             copyToClipboardSecure("Pass", parts[2], "Password copied")
@@ -703,7 +690,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             duplicateEntry(id, parts[0], parts[1], parts[2], parts[3], parts[4])
         }
         
-        val dialog = MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder(this)
             .setView(dialogView)
             .setNegativeButton("Close", null)
             .setNeutralButton("Delete") { _, _ ->
@@ -712,9 +699,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     Toast.makeText(this, "Entry deleted", Toast.LENGTH_SHORT).show()
                 }
             }
-            .create()
-        
-        dialog.show()
+            .show()
     }
     
     private fun showPasswordHistoryDialog(entryId: Int) {
@@ -730,10 +715,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             if (parts.size >= 3) {
                 try {
                     historyItems.add(PasswordHistoryItem(parts[1], parts[2].toLong()))
-                } catch (e: NumberFormatException) {
-                    // Skip invalid timestamp entries
-                    continue
-                }
+                } catch (e: NumberFormatException) { continue }
             }
         }
         
@@ -759,7 +741,6 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     
     private fun duplicateEntry(originalId: Int, title: String, username: String, password: String, notes: String, totpSecret: String) {
         val newTitle = "$title (Copy)"
-        
         if (vault.addEntry(newTitle, username, password, "Login", "{\"locations\":[]}", notes, totpSecret)) {
             Toast.makeText(this, getString(R.string.entry_duplicated), Toast.LENGTH_SHORT).show()
             loadEntries()
@@ -778,9 +759,9 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val resultList = ArrayList<EntryModel>()
         
         for (raw in searchResults) {
-            val parts = raw.split(":")
+            val parts = raw.split("|") 
             if (parts.size >= 3) {
-                resultList.add(EntryModel(parts[0].toInt(), parts[1], parts[2]))
+                resultList.add(EntryModel(0, parts[0], parts[1]))
             }
         }
         
@@ -790,7 +771,6 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onCreateOptionsMenu(menu: Menu?): Boolean { 
         menuInflater.inflate(R.menu.menu_home, menu)
         
-        // Setup search functionality
         val searchItem = menu?.findItem(R.id.action_search)
         val searchView = searchItem?.actionView as? SearchView
         
@@ -807,7 +787,6 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             }
         })
         
-        // Restore full list when search is closed
         searchItem?.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
             override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
             
@@ -828,12 +807,10 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val settingsItem = menu?.findItem(R.id.action_group_settings)
 
         if (isShowingGroups) {
-            // Main Screen: Show Reconnect, Hide Settings and Search
             searchItem?.isVisible = false
             reconnectItem?.isVisible = true
             settingsItem?.isVisible = false
         } else {
-            // Group Screen: Show Search and Settings, Hide Reconnect
             searchItem?.isVisible = true
             reconnectItem?.isVisible = false
             settingsItem?.isVisible = true
@@ -849,7 +826,6 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 return true
             }
             R.id.action_group_settings -> {
-                // Clicked the gear icon inside a group
                 showManageGroupDialog()
                 return true
             }
@@ -860,19 +836,15 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
         when(item.itemId) {
             R.id.nav_groups -> loadGroups()
-            R.id.nav_recent_entries -> {
-                startActivity(Intent(this, RecentEntriesActivity::class.java))
-            }
+            R.id.nav_recent_entries -> startActivity(Intent(this, RecentEntriesActivity::class.java))
             R.id.nav_add_group -> showCreateGroupDialog()
             R.id.nav_theme -> { 
                 val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
                 prefs.edit().putInt("theme_index", (prefs.getInt("theme_index", 0) + 1) % 5).apply()
                 finish(); startActivity(intent)
             }
-            R.id.nav_settings -> {
-                startActivity(Intent(this, SettingsActivity::class.java))
-            }
-            R.id.nav_lock -> { finish(); startActivity(Intent(this, MainActivity::class.java)) }
+            R.id.nav_settings -> startActivity(Intent(this, SettingsActivity::class.java))
+            R.id.nav_lock -> { finish(); } 
         }
         drawerLayout.closeDrawer(GravityCompat.START)
         return true
@@ -884,6 +856,12 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         if(idx in themes.indices) setTheme(themes[idx])
     }
 
-    fun showToast(msg: String) { runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); if(msg.contains("invite", true)) loadGroups() } }
-    fun triggerGroupRefresh() { runOnUiThread { loadGroups() } }
+    fun showToast(msg: String) { 
+        runOnUiThread { 
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            if(msg.contains("Invite received", true) || msg.contains("Joined Group", true)) {
+                loadGroups()
+            }
+        } 
+    }
 }

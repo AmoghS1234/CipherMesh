@@ -86,6 +86,12 @@ public:
     std::vector<PendingInvite> getPendingInvites();
     void deletePendingInvite(int inviteId);
 
+    // -- Sync Queue (The Outbox) --
+    // [NEW] These methods manage the Store-and-Forward queue
+    void storeSyncJob(const std::string& targetUser, const std::string& groupName, const std::string& operation, const std::string& payload);
+    std::vector<SyncJob> getSyncJobsForUser(const std::string& userId);
+    void deleteSyncJob(int jobId);
+
 private:
 #ifdef __ANDROID__
     void* m_db_handle = nullptr; // SQLite3 handle (void* to avoid headers)

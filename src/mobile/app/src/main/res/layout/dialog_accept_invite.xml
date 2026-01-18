@@ -4,8 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="24dp"
-    android:background="?attr/colorSurface">
+    android:padding="24dp">
 
     <ImageView
         android:layout_width="48dp"
@@ -14,7 +13,6 @@
         app:tint="?attr/colorPrimary"
         android:layout_gravity="center_horizontal"
         android:layout_marginBottom="16dp"
-        android:background="@drawable/bg_circle_icon"
         android:padding="10dp"/>
 
     <TextView

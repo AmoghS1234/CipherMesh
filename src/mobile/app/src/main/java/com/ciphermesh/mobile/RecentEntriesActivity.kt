@@ -25,20 +25,39 @@ class RecentEntriesActivity : AppCompatActivity() {
     private lateinit var listView: ListView
     private lateinit var adapter: CustomAdapter
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_recent_entries)
+    // [FIX] Helper to load the correct theme
+    private fun applySavedTheme() {
+        val idx = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getInt("theme_index", 0)
+        val themes = listOf(
+            R.style.Theme_CipherMesh_Professional, 
+            R.style.Theme_CipherMesh_ModernLight, 
+            R.style.Theme_CipherMesh_Ocean, 
+            R.style.Theme_CipherMesh_Warm, 
+            R.style.Theme_CipherMesh_Vibrant
+        )
+        if(idx in themes.indices) setTheme(themes[idx])
+    }
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // [FIX] Apply Theme BEFORE super.onCreate
+        applySavedTheme()
+        super.onCreate(savedInstanceState)
+        
         // Security: Prevent screenshots
         window.setFlags(
             android.view.WindowManager.LayoutParams.FLAG_SECURE,
             android.view.WindowManager.LayoutParams.FLAG_SECURE
         )
 
-        val toolbar = findViewById<Toolbar>(R.id.toolbar)
+        setContentView(R.layout.activity_recent_entries)
+
+        val toolbar = findViewById<com.google.android.material.appbar.MaterialToolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         supportActionBar?.title = getString(R.string.recently_accessed_title)
+        
+        // [FIX] Ensure back button works
+        toolbar.setNavigationOnClickListener { finish() }
 
         val dbPath = File(filesDir, "vault.db").absolutePath
         vault.init(dbPath)
@@ -63,11 +82,6 @@ class RecentEntriesActivity : AppCompatActivity() {
             val entryId = adapter.getItem(position)?.id ?: return@setOnItemClickListener
             showEntryDetails(entryId)
         }
-    }
-
-    override fun onSupportNavigateUp(): Boolean {
-        finish()
-        return true
     }
 
     private fun loadRecentEntries() {
