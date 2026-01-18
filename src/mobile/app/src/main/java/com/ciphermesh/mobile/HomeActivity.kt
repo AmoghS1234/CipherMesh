@@ -522,11 +522,44 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 nameTxt?.apply {
                     var display = uid
                     if (uid == myId) display += " (You)"
-                    if (role.equals("owner", ignoreCase = true)) display = "👑 $display"
+                    
+                    // [FIX] Add role indicators matching desktop
+                    when {
+                        role.equals("owner", ignoreCase = true) -> {
+                            display = "★ $display"  // Owner with star
+                            setTextColor(Color.parseColor("#4CAF50")) // Green
+                            setTypeface(null, android.graphics.Typeface.BOLD)
+                        }
+                        role.equals("admin", ignoreCase = true) -> {
+                            display = "🛡️ $display"  // Admin with shield
+                            setTextColor(Color.parseColor("#2196F3")) // Blue
+                            setTypeface(null, android.graphics.Typeface.BOLD)
+                        }
+                        else -> {
+                            setTextColor(Color.WHITE) // Default white for members
+                            setTypeface(null, android.graphics.Typeface.NORMAL)
+                        }
+                    }
                     text = display
                 }
 
-                statusTxt?.text = status.uppercase()
+                statusTxt?.apply {
+                    text = status.uppercase()
+                    // [FIX] Color code status - pending=red, accepted=green
+                    when {
+                        status.equals("pending", ignoreCase = true) -> {
+                            setTextColor(Color.parseColor("#FFA000")) // Orange for pending
+                            text = "(Invite Sent)"
+                        }
+                        status.equals("accepted", ignoreCase = true) -> {
+                            setTextColor(Color.parseColor("#4CAF50")) // Green for accepted
+                            text = "Active"
+                        }
+                        else -> {
+                            setTextColor(Color.LTGRAY)
+                        }
+                    }
+                }
 
                 if (isGroupOwner && uid != myId) {
                     btnRemove?.visibility = View.VISIBLE

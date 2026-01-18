@@ -453,6 +453,8 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
                     }
                 }
             }
+            // [FIX] Trigger UI refresh after member list updated
+            triggerJavaRefresh();
         }
         else if (type == "member-leave") {
             std::string originalGroup = extractJsonValueJNI(json, "group");
