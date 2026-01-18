@@ -119,8 +119,9 @@ std::string TOTP::generateCode(const std::string& secretKey) {
     // Calculate HMAC-SHA1
     std::vector<uint8_t> hash = MiniSHA1::hmac_sha1(key, data);
 
-    // Truncate - SHA1 always produces 20 bytes, but validate to be safe
-    if (hash.size() < 20) return "000000"; // Safety check
+    // Truncate - SHA1 should always produce exactly 20 bytes
+    // Defensive check in case HMAC implementation changes or has bugs
+    if (hash.size() < 20) return "000000"; 
     
     int offset = hash[hash.size() - 1] & 0x0F;
     
