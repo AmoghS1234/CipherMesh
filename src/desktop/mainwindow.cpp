@@ -334,6 +334,10 @@ void MainWindow::handleInviteCancelled(const QString& senderId) {
 void MainWindow::handlePeerOnline(const QString& userId) {
     if (!m_vault || !m_p2pService) return;
     qDebug() << "DEBUG: Peer came online:" << userId;
+    
+    // [FIX] Process outbox for this user (send pending sync jobs)
+    m_vault->processOutboxForUser(userId.toStdString());
+    
     auto invites = m_vault->getPendingInvites();
     for (const auto& invite : invites) {
         if (invite.senderId == userId.toStdString() && invite.status == "accepted") {
