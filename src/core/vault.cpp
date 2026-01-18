@@ -340,6 +340,15 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                  m_db->addGroupMember(gid, uid, "member", status.empty() ? "accepted" : status);
              }
         }
+        else if (op == "MEMBER_KICK") {
+             // [FIX] Handle being kicked from a group
+             // The group owner has removed us from the group
+             // We should remove ourselves from the group locally
+             std::string myId = getUserId();
+             m_db->removeGroupMember(gid, myId);
+             // Optionally: delete the entire group if we were just a member
+             // For now, just remove our membership
+        }
         else if (op == "DELETE") {
              // [FIX] Handle password deletion via sync
              std::string uuid = getJsonString(dataJson, "uuid");
