@@ -144,11 +144,22 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
     }
 
     private fun scheduleReconnect() {
+        // Don't reconnect if already connected
+        if (isConnected) {
+            Log.d("P2P", "ℹ️ Already connected, skipping reconnect")
+            return
+        }
+        
         reconnectHandler.removeCallbacksAndMessages(null)
         reconnectHandler.postDelayed({
-            Log.d("P2P", "🔄 Attempting Reconnect...")
-            connect()
-        }, 10000) // Retry every 5s
+            // Double-check connection state before reconnecting
+            if (!isConnected) {
+                Log.d("P2P", "🔄 Attempting Reconnect...")
+                connect()
+            } else {
+                Log.d("P2P", "ℹ️ Connection restored, canceling reconnect")
+            }
+        }, 10000) // Retry every 10s
     }
 
     override fun sendSignalingMessage(targetId: String, type: String, payload: String) {

@@ -74,6 +74,9 @@ std::vector<unsigned char> Crypto::decrypt(const std::vector<unsigned char>& cip
             nonce.data(), key.data()) != 0) {
         throw std::runtime_error("Decryption failed");
     }
+    
+    // Resize to actual decrypted length to avoid returning garbage bytes
+    plaintext.resize(plaintext_len);
     return plaintext;
 }
 

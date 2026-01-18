@@ -57,8 +57,17 @@ std::string extractJsonValue(const std::string& json, const std::string& key) {
     size_t start = json.find(search);
     if (start == std::string::npos) return "";
     start += search.length();
+    
+    // Bounds check before accessing json[start]
+    if (start >= json.length()) return "";
+    
     bool isString = false;
-    if (json[start] == ' ' || json[start] == '\"') { start = json.find("\"", start) + 1; isString = true; }
+    if (json[start] == ' ' || json[start] == '\"') { 
+        size_t quotePos = json.find("\"", start);
+        if (quotePos == std::string::npos) return ""; // Check for npos before adding
+        start = quotePos + 1;
+        isString = true;
+    }
     size_t end = isString ? json.find("\"", start) : json.find_first_of(",}", start);
     if (end == std::string::npos) return "";
     std::string value = json.substr(start, end - start);
@@ -113,10 +122,15 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
     pc->onStateChange([this, peerId](rtc::PeerConnection::State state) {
         LOGI("PC State %s: %d", peerId.c_str(), (int)state);
         if (state == rtc::PeerConnection::State::Failed) {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_channels.count(peerId)) m_channels.erase(peerId);
-            if (m_peers.count(peerId)) m_peers.erase(peerId);
-            if (m_pendingInvites.count(peerId)) {
+            bool shouldRetry = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                if (m_channels.count(peerId)) m_channels.erase(peerId);
+                if (m_peers.count(peerId)) m_peers.erase(peerId);
+                shouldRetry = m_pendingInvites.count(peerId) > 0;
+            }
+            // Don't hold lock during sleep and retry
+            if (shouldRetry) {
                 std::this_thread::sleep_for(std::chrono::seconds(2));
                 retryPendingInviteFor(peerId);
             }
@@ -163,6 +177,7 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
 
     dc->onOpen([this, peerId]() {
         LOGI("Data Channel OPEN for %s", peerId.c_str());
+        std::lock_guard<std::mutex> lock(m_mutex);
         if (m_pendingInvites.count(peerId)) {
             std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
             if (m_channels.count(peerId)) m_channels[peerId]->send(msg);
@@ -180,12 +195,14 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
                 if (onIncomingInvite) onIncomingInvite(peerId, extractJsonValue(msg, "group"));
             }
             else if (type == "invite-accept") {
+                std::lock_guard<std::mutex> lock(m_mutex);
                 if (m_pendingInvites.count(peerId) && m_pendingKeys.count(peerId)) {
                     sendGroupData(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], m_pendingEntries[peerId]);
                 }
                 m_pendingInvites.erase(peerId); m_pendingKeys.erase(peerId); m_pendingEntries.erase(peerId);
             }
             else if (type == "invite-reject") {
+                std::lock_guard<std::mutex> lock(m_mutex);
                 m_pendingInvites.erase(peerId); m_pendingKeys.erase(peerId); m_pendingEntries.erase(peerId);
             }
             else if (type == "group-data") {

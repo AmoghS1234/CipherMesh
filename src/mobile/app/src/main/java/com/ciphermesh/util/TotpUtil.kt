@@ -28,8 +28,16 @@ object TotpUtil {
             mac.init(signKey)
             val hash = mac.doFinal(data)
 
-            // Truncate
+            // Truncate - HMAC-SHA1 always produces 20 bytes, but validate to be safe
+            if (hash.size < 20) return "000000" // Safety check
+            
             val offset = hash[hash.size - 1].toInt() and 0xF
+            
+            // Validate offset bounds: need offset + 3 < hash.size
+            if (offset + 3 >= hash.size) {
+                return "000000" // Invalid offset, return safe default
+            }
+            
             var binary = ((hash[offset].toInt() and 0x7f) shl 24) or
                     ((hash[offset + 1].toInt() and 0xff) shl 16) or
                     ((hash[offset + 2].toInt() and 0xff) shl 8) or
