@@ -228,10 +228,20 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
                 m_pendingInvites.erase(peerId); m_pendingKeys.erase(peerId); m_pendingEntries.erase(peerId);
             }
             else if (type == "group-data") {
-                if (onGroupDataReceived) onGroupDataReceived(peerId, msg);
+                LOGI("Received group-data message from %s", peerId.c_str());
+                if (onGroupDataReceived) {
+                    onGroupDataReceived(peerId, msg);
+                } else {
+                    LOGE("onGroupDataReceived callback is NULL!");
+                }
             }
             else if (type == "entry-data") {
-                if (onGroupDataReceived) onGroupDataReceived(peerId, msg);
+                LOGI("Received entry-data message from %s", peerId.c_str());
+                if (onGroupDataReceived) {
+                    onGroupDataReceived(peerId, msg);
+                } else {
+                    LOGE("onGroupDataReceived callback is NULL!");
+                }
             }
             else if (type == "sync-payload" || type == "sync-ack") {
                 // [FIX] Handle sync messages over data channel for offline sync

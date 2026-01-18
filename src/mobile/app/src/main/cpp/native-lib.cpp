@@ -316,9 +316,13 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         std::string type = extractJsonValueJNI(json, "type");
 
         if (type == "group-data") {
+            LOGI("Processing group-data from %s", senderId.c_str());
             std::string originalGroupName = extractJsonValueJNI(json, "group");
             std::string keyBase64 = extractJsonValueJNI(json, "key");
+            LOGI("Group: %s, Key length: %zu", originalGroupName.c_str(), keyBase64.length());
+            
             std::vector<unsigned char> groupKey = decodeBase64(keyBase64);
+            LOGI("Decoded key size: %zu bytes", groupKey.size());
             
             std::string finalName = originalGroupName;
             if (g_vault->groupExists(finalName)) {
@@ -336,6 +340,7 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
             try {
                 g_vault->addGroup(finalName, groupKey, senderId);
                 showToastFromNative("Joined Group: " + finalName);
+                LOGI("Successfully added group: %s", finalName.c_str());
                 
                 std::lock_guard<std::mutex> l(g_inviteMutex);
                 for(auto it=g_pendingInvites.begin(); it!=g_pendingInvites.end();) {
@@ -343,12 +348,17 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
                 }
                 
                 triggerJavaRefresh();
-            } catch (...) { LOGE("Failed to add group from P2P"); }
+            } catch (...) { 
+                LOGE("Failed to add group from P2P");
+            }
         }
         else if (type == "entry-data") {
+            LOGI("Processing entry-data from %s", senderId.c_str());
             std::string originalGroup = extractJsonValueJNI(json, "group");
             std::string sessionKey = senderId + ":" + originalGroup;
             std::string targetGroup = g_p2pNameMapper.count(sessionKey) ? g_p2pNameMapper[sessionKey] : originalGroup;
+            
+            LOGI("Entry for group: %s -> %s", originalGroup.c_str(), targetGroup.c_str());
 
             if (g_vault->setActiveGroup(targetGroup)) {
                 CipherMesh::Core::VaultEntry e;
@@ -358,7 +368,10 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
                 e.notes = extractJsonValueJNI(json, "notes");
                 e.totpSecret = extractJsonValueJNI(json, "totpSecret");
                 
+                LOGI("Entry: title='%s', username='%s'", e.title.c_str(), e.username.c_str());
+                
                 std::string encryptedPassBase64 = extractJsonValueJNI(json, "password");
+                LOGI("Encrypted password length: %zu", encryptedPassBase64.length());
                 
                 size_t locStart = json.find("\"locations\":[");
                 if (locStart != std::string::npos) {
@@ -380,7 +393,10 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
                 }
                 
                 g_vault->addEncryptedEntry(e, encryptedPassBase64);
+                LOGI("Successfully added entry: %s", e.title.c_str());
                 triggerJavaRefresh();
+            } else {
+                LOGE("Failed to set active group: %s", targetGroup.c_str());
             }
         }
         else if (type == "member-list") {
