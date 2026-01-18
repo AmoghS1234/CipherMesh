@@ -140,6 +140,9 @@ public:
     void queueInvite(const std::string& groupName, const std::string& userEmail, 
                      const std::vector<unsigned char>& groupKey,
                      const std::vector<CipherMesh::Core::VaultEntry>& entries);
+    
+    // Public helper for sending P2P messages (needed for member list sync)
+    void sendP2PMessage(const QString& remoteId, const QJsonObject& payload);
 
 public slots:
     void startSignaling();
@@ -179,7 +182,6 @@ private:
     void handleAnswer(const QJsonObject& obj);
     void handleCandidate(const QJsonObject& obj);
     void handleP2PMessage(const QString& remoteId, const QString& message);
-    void sendP2PMessage(const QString& remoteId, const QJsonObject& payload);
     void flushEarlyCandidatesFor(const QString& peerId);
     void retryPendingInviteFor(const QString& remoteId);
 };

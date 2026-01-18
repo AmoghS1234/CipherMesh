@@ -1636,10 +1636,30 @@ void MainWindow::handleDataRequested(const QString& requesterId, const QString& 
         // 4. Export Entries
         std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(groupName.toStdString());
         
-        // 5. Send the ENCRYPTED key
+        // 5. Send the ENCRYPTED key and entries
         m_p2pService->sendGroupData(requesterId.toStdString(), groupName.toStdString(), encryptedKey, entries);
         
-        // 6. Cleanup
+        // 6. Send member list so new member knows who else is in the group
+        std::vector<CipherMesh::Core::GroupMember> members = m_vault->getGroupMembers(groupName.toStdString());
+        QJsonObject memberListMsg;
+        memberListMsg["type"] = "member-list";
+        memberListMsg["group"] = groupName;
+        QJsonArray membersArray;
+        for (const auto& member : members) {
+            // Format: "userId|role|status"
+            QString memberStr = QString::fromStdString(member.userId + "|" + member.role + "|" + member.status);
+            membersArray.append(memberStr);
+        }
+        memberListMsg["members"] = membersArray;
+        
+        // Send via P2P data channel
+        auto* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
+        if (webrtcService) {
+            webrtcService->sendP2PMessage(QString::fromStdString(requesterId.toStdString()), memberListMsg);
+            qDebug() << "Sent member list with" << members.size() << "members to" << requesterId;
+        }
+        
+        // 7. Cleanup
         CipherMesh::Core::Crypto::secureWipe(rawGroupKey);
         
         qDebug() << "Successfully sent ENCRYPTED group data to" << requesterId;

@@ -334,6 +334,14 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
         m_channels[recipientId]->send(entryJson.str());
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+    
+    // Send member list (new member gets added automatically on accept)
+    // TODO: Android version needs vault access or callback to send member list
+    // For now, only Desktop→Mobile member sync is fully supported
+    // Mobile→Desktop will work but may miss initial member list
+    LOGI("Sent %zu entries for group '%s'", entries.size(), groupName.c_str());
+    LOGI("WARNING: Member list not sent in Android implementation - needs vault callback");
+    
     m_pendingKeys.erase(recipientId);
     m_pendingEntries.erase(recipientId);
 }
