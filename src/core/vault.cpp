@@ -669,7 +669,10 @@ std::vector<VaultEntry> Vault::exportGroupEntries(const std::string& groupName) 
                 entry.password = m_crypto->decryptToString(encryptedPassword, groupKey);
             }
         } catch (const std::exception& e) {
-            // If decryption fails, leave password empty but continue with other entries
+            // Log decryption failure for debugging
+            std::cerr << "Warning: Failed to decrypt password for entry " << entry.id 
+                     << " in group " << groupName << ": " << e.what() << std::endl;
+            // Leave password empty but continue with other entries
             entry.password = "";
         }
     }

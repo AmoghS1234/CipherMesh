@@ -609,12 +609,18 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             updatePasswordStrength()
         }
         
-        // Monitor password field changes for strength meter
+        // Monitor password field changes for strength meter with debouncing
+        val strengthUpdateHandler = Handler(Looper.getMainLooper())
+        var strengthUpdateRunnable: Runnable? = null
+        
         passEdit.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
-                updatePasswordStrength()
+                // Debounce: cancel pending update and schedule new one
+                strengthUpdateRunnable?.let { strengthUpdateHandler.removeCallbacks(it) }
+                strengthUpdateRunnable = Runnable { updatePasswordStrength() }
+                strengthUpdateHandler.postDelayed(strengthUpdateRunnable!!, 300) // 300ms debounce
             }
         })
 
