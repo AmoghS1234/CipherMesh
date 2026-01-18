@@ -988,17 +988,21 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
         return;
     }
 
-    QString groupNameQStr = current->text();
-    // Strip suffixes: (Invite), (Owner), (Member)
-    if (groupNameQStr.endsWith(INVITE_SUFFIX)) {
-        groupNameQStr = groupNameQStr.left(groupNameQStr.length() - INVITE_SUFFIX.length());
-    }
-    if (groupNameQStr.endsWith(" (Owner)")) {
-        groupNameQStr = groupNameQStr.left(groupNameQStr.length() - QString(" (Owner)").length());
-    }
-    if (groupNameQStr.endsWith(" (Member)")) {
-        groupNameQStr = groupNameQStr.left(groupNameQStr.length() - QString(" (Member)").length());
-    }
+    // Helper function to strip role suffixes
+    auto stripRoleSuffix = [](QString text) -> QString {
+        if (text.endsWith(INVITE_SUFFIX)) {
+            text = text.left(text.length() - INVITE_SUFFIX.length());
+        }
+        if (text.endsWith(" (Owner)")) {
+            text = text.left(text.length() - QString(" (Owner)").length());
+        }
+        if (text.endsWith(" (Member)")) {
+            text = text.left(text.length() - QString(" (Member)").length());
+        }
+        return text;
+    };
+    
+    QString groupNameQStr = stripRoleSuffix(current->text());
     std::string groupName = groupNameQStr.toStdString();
 
     // Permission Logic
@@ -1037,6 +1041,22 @@ void MainWindow::onGroupContextMenuRequested(const QPoint &pos)
 
     m_groupListWidget->setCurrentItem(item);
     
+    // Helper to strip role suffixes
+    auto stripRoleSuffix = [](QString text) -> QString {
+        if (text.endsWith(INVITE_SUFFIX)) {
+            text = text.left(text.length() - INVITE_SUFFIX.length());
+        }
+        if (text.endsWith(" (Owner)")) {
+            text = text.left(text.length() - QString(" (Owner)").length());
+        }
+        if (text.endsWith(" (Member)")) {
+            text = text.left(text.length() - QString(" (Member)").length());
+        }
+        return text;
+    };
+    
+    QString groupName = stripRoleSuffix(item->text());
+    
     QMenu contextMenu(this);
     QAction* shareAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "Share Group...");
     QAction* deleteAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Delete Group...");
@@ -1044,7 +1064,7 @@ void MainWindow::onGroupContextMenuRequested(const QPoint &pos)
     connect(shareAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
     connect(deleteAction, &QAction::triggered, this, &MainWindow::onDeleteGroupClicked);
 
-    if (m_groupListWidget->count() <= 1 || item->text().startsWith("Personal")) {
+    if (m_groupListWidget->count() <= 1 || groupName == "Personal") {
         deleteAction->setEnabled(false);
     }
 
