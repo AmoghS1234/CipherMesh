@@ -619,8 +619,9 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             override fun afterTextChanged(s: android.text.Editable?) {
                 // Debounce: cancel pending update and schedule new one
                 strengthUpdateRunnable?.let { strengthUpdateHandler.removeCallbacks(it) }
-                strengthUpdateRunnable = Runnable { updatePasswordStrength() }
-                strengthUpdateHandler.postDelayed(strengthUpdateRunnable!!, 300) // 300ms debounce
+                val newRunnable = Runnable { updatePasswordStrength() }
+                strengthUpdateRunnable = newRunnable
+                strengthUpdateHandler.postDelayed(newRunnable, 300) // 300ms debounce
             }
         })
 
