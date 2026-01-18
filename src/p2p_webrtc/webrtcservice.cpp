@@ -684,7 +684,7 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
         entry.password = obj["password"].toString().toStdString();
         entry.notes = obj["notes"].toString().toStdString();
         entry.totpSecret = obj["totpSecret"].toString().toStdString();
-        entry.url = ""; // Not sent in P2P messages
+        entry.url = obj["url"].toString().toStdString(); // [FIX] Parse URL field
         
         // Parse locations
         QJsonArray locArray = obj["locations"].toArray();
