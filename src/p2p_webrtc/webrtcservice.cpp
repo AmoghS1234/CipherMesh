@@ -201,10 +201,27 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             }
             else if (type == "invite-accept") {
                 std::lock_guard<std::mutex> lock(m_mutex);
-                if (m_pendingInvites.count(peerId) && m_pendingKeys.count(peerId)) {
-                    sendGroupData(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], m_pendingEntries[peerId]);
+                LOGI("Received invite-accept from %s", peerId.c_str());
+                
+                bool hasPendingInvite = m_pendingInvites.count(peerId) > 0;
+                bool hasPendingKeys = m_pendingKeys.count(peerId) > 0;
+                bool hasPendingEntries = m_pendingEntries.count(peerId) > 0;
+                
+                LOGI("Pending data for %s: invite=%d, keys=%d, entries=%d", 
+                     peerId.c_str(), hasPendingInvite, hasPendingKeys, hasPendingEntries);
+                
+                if (hasPendingInvite && hasPendingKeys && hasPendingEntries) {
+                    LOGI("Sending group data for group: %s to %s", m_pendingInvites[peerId].c_str(), peerId.c_str());
+                    // [FIX] Call _unsafe version since we already hold m_mutex
+                    sendGroupData_unsafe(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], m_pendingEntries[peerId]);
+                } else {
+                    LOGE("Cannot send group data - missing: invite=%d keys=%d entries=%d", 
+                         !hasPendingInvite, !hasPendingKeys, !hasPendingEntries);
                 }
-                m_pendingInvites.erase(peerId); m_pendingKeys.erase(peerId); m_pendingEntries.erase(peerId);
+                
+                m_pendingInvites.erase(peerId); 
+                m_pendingKeys.erase(peerId); 
+                m_pendingEntries.erase(peerId);
             }
             else if (type == "invite-reject") {
                 std::lock_guard<std::mutex> lock(m_mutex);
@@ -312,7 +329,21 @@ void WebRTCService::flushEarlyCandidatesFor(const std::string& peerId) {
 void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const std::string& groupName, 
                                          const std::vector<unsigned char>& groupKey, 
                                          const std::vector<CipherMesh::Core::VaultEntry>& entries) {
-    if (m_channels.count(recipientId) == 0 || !m_channels[recipientId] || !m_channels[recipientId]->isOpen()) return;
+    LOGI("sendGroupData_unsafe called for %s, group: %s", recipientId.c_str(), groupName.c_str());
+    
+    bool hasChannel = m_channels.count(recipientId) > 0;
+    bool channelExists = hasChannel && m_channels[recipientId] != nullptr;
+    bool channelOpen = channelExists && m_channels[recipientId]->isOpen();
+    
+    LOGI("Channel status for %s: exists=%d, valid=%d, open=%d", 
+         recipientId.c_str(), hasChannel, channelExists, channelOpen);
+    
+    if (!channelOpen) {
+        LOGE("Cannot send group data to %s - channel not open!", recipientId.c_str());
+        return;
+    }
+    
+    LOGI("Sending group-data header and %zu entries to %s", entries.size(), recipientId.c_str());
     
     // Header
     std::ostringstream jsonHeader;
@@ -523,11 +554,21 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
                 auto k = m_pendingKeys[remoteId];
                 auto e = m_pendingEntries[remoteId];
                 locker.unlock();
-                sendGroupData(remoteId.toStdString(), groupName.toStdString(), k, e);
+                
+                // [FIX] Add small delay to ensure data channel is fully ready on both sides
+                QTimer::singleShot(200, this, [this, remoteId, groupName, k, e]() {
+                    qDebug() << "WebRTC: Sending group data after invite-accept from" << remoteId;
+                    sendGroupData(remoteId.toStdString(), groupName.toStdString(), k, e);
+                });
+                
                 locker.relock();
+            } else {
+                qWarning() << "WebRTC: No pending keys/entries for" << remoteId << "- cannot send group data";
             }
             m_pendingInvites.remove(remoteId);
             if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), true);
+        } else {
+            qWarning() << "WebRTC: Received invite-accept from" << remoteId << "but no pending invite found";
         }
     }
     else if (type == "invite-reject") {
