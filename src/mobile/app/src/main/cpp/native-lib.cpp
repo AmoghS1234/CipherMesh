@@ -26,6 +26,7 @@ std::vector<CipherMesh::Core::PendingInvite> g_pendingInvites;
 // Thread-safe tracking of outgoing invites
 std::map<std::string, std::string> g_outgoingInvites;
 std::mutex g_outgoingMutex;
+std::mutex g_p2pNameMapperMutex;  // [FIX] Mutex for g_p2pNameMapper
 
 // Global session map to handle name mapping during transfer
 std::map<std::string, std::string> g_p2pNameMapper;
@@ -335,7 +336,10 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
             }
 
             std::string sessionKey = senderId + ":" + originalGroupName;
-            g_p2pNameMapper[sessionKey] = finalName;
+            {
+                std::lock_guard<std::mutex> mapLock(g_p2pNameMapperMutex);
+                g_p2pNameMapper[sessionKey] = finalName;
+            }
             
             try {
                 g_vault->addGroup(finalName, groupKey, senderId);
@@ -356,7 +360,11 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
             LOGI("Processing entry-data from %s", senderId.c_str());
             std::string originalGroup = extractJsonValueJNI(json, "group");
             std::string sessionKey = senderId + ":" + originalGroup;
-            std::string targetGroup = g_p2pNameMapper.count(sessionKey) ? g_p2pNameMapper[sessionKey] : originalGroup;
+            std::string targetGroup;
+            {
+                std::lock_guard<std::mutex> mapLock(g_p2pNameMapperMutex);
+                targetGroup = g_p2pNameMapper.count(sessionKey) ? g_p2pNameMapper[sessionKey] : originalGroup;
+            }
             
             LOGI("Entry for group: %s -> %s", originalGroup.c_str(), targetGroup.c_str());
 
@@ -402,7 +410,11 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         else if (type == "member-list") {
             std::string originalGroup = extractJsonValueJNI(json, "group");
             std::string sessionKey = senderId + ":" + originalGroup;
-            std::string targetGroup = g_p2pNameMapper.count(sessionKey) ? g_p2pNameMapper[sessionKey] : originalGroup;
+            std::string targetGroup;
+            {
+                std::lock_guard<std::mutex> mapLock(g_p2pNameMapperMutex);
+                targetGroup = g_p2pNameMapper.count(sessionKey) ? g_p2pNameMapper[sessionKey] : originalGroup;
+            }
 
             size_t memStart = json.find("\"members\":[");
             if (memStart != std::string::npos) {
@@ -431,7 +443,11 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         else if (type == "member-leave") {
             std::string originalGroup = extractJsonValueJNI(json, "group");
             std::string sessionKey = senderId + ":" + originalGroup;
-            std::string targetGroup = g_p2pNameMapper.count(sessionKey) ? g_p2pNameMapper[sessionKey] : originalGroup;
+            std::string targetGroup;
+            {
+                std::lock_guard<std::mutex> mapLock(g_p2pNameMapperMutex);
+                targetGroup = g_p2pNameMapper.count(sessionKey) ? g_p2pNameMapper[sessionKey] : originalGroup;
+            }
             g_vault->removeUser(targetGroup, senderId);
             triggerJavaRefresh();
         }
