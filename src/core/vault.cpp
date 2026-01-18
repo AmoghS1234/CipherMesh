@@ -148,6 +148,29 @@ bool Vault::loadVault(const std::string& path, const std::string& masterPassword
             std::vector<unsigned char> uidData = m_db->getMetadata("user_id");
             m_userId = std::string(uidData.begin(), uidData.end());
         } catch(...) { m_userId = ""; }
+        
+        // [FIX] Ensure userId exists (for old vaults or migration)
+        if (m_userId.empty()) {
+            generateAndSetUniqueId("user");
+        }
+        
+        // [FIX] Migration: Update any group members with empty user_id to current userId
+        try {
+            auto groups = getGroupNames();
+            for (const auto& groupName : groups) {
+                int groupId = getGroupId(groupName);
+                auto members = m_db->getGroupMembers(groupId);
+                for (const auto& member : members) {
+                    if (member.userId.empty()) {
+                        // Remove the empty entry and add the current user
+                        m_db->removeGroupMember(groupId, "");
+                        m_db->addGroupMember(groupId, m_userId, member.role, member.status);
+                    }
+                }
+            }
+        } catch (...) {
+            // Migration failed, but don't block login
+        }
 
         return true;
     } catch (...) { lock(); return false; }
@@ -703,8 +726,22 @@ std::string Vault::getUserId() {
     try { 
         std::vector<unsigned char> data = m_db->getMetadata("user_id"); 
         m_userId = std::string(data.begin(), data.end()); 
+        
+        // [FIX] If userId is still empty (old vaults), generate one
+        if (m_userId.empty()) {
+            generateAndSetUniqueId("user");
+        }
+        
         return m_userId; 
-    } catch (...) { return ""; }
+    } catch (...) {
+        // [FIX] If no userId exists, generate one
+        try {
+            generateAndSetUniqueId("user");
+            return m_userId;
+        } catch (...) {
+            return "";
+        }
+    }
 }
 
 void Vault::generateAndSetUniqueId(const std::string& username) {
