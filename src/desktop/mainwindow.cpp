@@ -146,6 +146,26 @@ MainWindow::MainWindow(CipherMesh::Core::Vault* vault, QWidget *parent)
         }, Qt::QueuedConnection);
     };
 
+    p2pWorker->onSyncMessage = [this](const std::string& message) {
+        // [FIX] Handle sync messages over data channel
+        if (!m_vault) return;
+        QMetaObject::invokeMethod(this, [this, message]() {
+            try {
+                // Parse message to extract sender
+                QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(message).toUtf8());
+                if (!doc.isNull() && doc.isObject()) {
+                    QJsonObject obj = doc.object();
+                    QString sender = obj["sender"].toString();
+                    if (!sender.isEmpty()) {
+                        m_vault->handleIncomingSync(sender.toStdString(), message);
+                    }
+                }
+            } catch (const std::exception& e) {
+                qWarning() << "Error handling sync message:" << e.what();
+            }
+        }, Qt::QueuedConnection);
+    };
+
     p2pWorker->onDataRequested = [this](const std::string& requesterId, const std::string& groupName, const std::string& requesterPubKey) {
         QMetaObject::invokeMethod(this, [this, requesterId, groupName, requesterPubKey]() {
             handleDataRequested(QString::fromStdString(requesterId), QString::fromStdString(groupName), QString::fromStdString(requesterPubKey));

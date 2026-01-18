@@ -549,10 +549,9 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
             onSyncMessage(enrichedStr.toStdString());
         }
     }
-    else if (type == "member-list" || type == "member-leave") {
-        // [FIX] Handle member list messages (already handled by Desktop's callback)
-        if (onGroupDataReceived) onGroupDataReceived(remoteId.toStdString(), message.toStdString());
-    }
+    // Note: member-list and member-leave not handled on desktop yet
+    // Desktop only sends these messages, doesn't receive them
+}
 }
 
 void WebRTCService::inviteUser(const std::string& groupName, const std::string& userEmail, const std::vector<unsigned char>& groupKey, const std::vector<CipherMesh::Core::VaultEntry>& entries) {

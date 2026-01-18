@@ -38,6 +38,7 @@ public:
     std::function<void(std::string, std::string, bool)> onInviteResponse; 
     std::function<void(std::string, std::string, std::vector<unsigned char>, std::vector<CipherMesh::Core::VaultEntry>)> onGroupDataReceived;
     std::function<void(std::string)> onPeerOnline;
+    std::function<void(std::string)> onSyncMessage;  // [FIX] Added for sync over data channel
     
     std::function<void(std::string, std::string, std::string)> onDataRequested;
     
