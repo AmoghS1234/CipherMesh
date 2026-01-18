@@ -385,13 +385,19 @@ void MainWindow::handleGroupData(const QString& senderId,
         }
     }
 
+    // [FIX] Use mobile's naming convention: "groupname (from userid)"
     std::string finalName = groupName.toStdString();
+    if (m_vault->groupExists(finalName)) {
+        finalName = groupName.toStdString() + " (from " + senderId.toStdString() + ")";
+    }
     int counter = 1;
+    std::string baseCollisionName = finalName;
     while (m_vault->groupExists(finalName)) {
-        finalName = groupName.toStdString() + " (Shared " + std::to_string(counter++) + ")";
+        finalName = baseCollisionName + " " + std::to_string(counter++);
     }
 
-    if (m_vault->addGroup(finalName, finalKey)) {
+    // [FIX] Pass senderId as ownerId to match mobile implementation
+    if (m_vault->addGroup(finalName, finalKey, senderId.toStdString())) {
         m_vault->importGroupEntries(finalName, entries);
         
         if (inviteIdToDelete != -1) {

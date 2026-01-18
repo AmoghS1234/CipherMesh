@@ -162,32 +162,34 @@ void ShareGroupDialog::updateMemberList(const QList<UIGroupMember>& members) {
     QString myId = QString::fromStdString(m_vault->getUserId());
 
     for (const auto& member : members) {
-        QString suffix = "";
-        QString idToDisplay = member.id;
+        QString displayText = member.id;
         
-        // Add "(You)" for clarity, but keep the ID
+        // [FIX] Add "(You)" after the userId if it's the current user - matching mobile
         if (member.id == myId) {
-            idToDisplay += " (You)";
+            displayText += " (You)";
         }
-
-        // Determine Role/Status Text
+        
+        // [FIX] Determine color and prefix based on role/status - matching mobile format
         QColor textColor = QColor("#FFFFFF"); // Default White
+        QString prefix = "";
         
         if (member.status == "pending") {
-            suffix = " (Invite Sent)";
-            textColor = QColor("#FFA000"); // Orange
+            textColor = QColor("#FFA000"); // Orange for pending
+            displayText += " (Invite Sent)";
         } 
         else if (member.role == "owner") {
-            suffix = " ★ Owner";
-            textColor = QColor("#4CAF50"); // Green
+            prefix = "★ ";  // Star BEFORE userId - matching mobile
+            textColor = QColor("#4CAF50"); // Green for owner
         }
         else if (member.role == "admin") {
-            suffix = " 🛡️ Admin";
-            textColor = QColor("#2196F3"); // Blue
+            prefix = "🛡️ ";  // Shield BEFORE userId - matching mobile
+            textColor = QColor("#2196F3"); // Blue for admin
         }
-        // No text for "member" status="accepted"
-
-        QString displayText = idToDisplay + suffix;
+        // Regular members stay white with no prefix
+        
+        // Construct final display text with prefix
+        displayText = prefix + displayText;
+        
         QListWidgetItem* item = new QListWidgetItem(displayText, m_memberListWidget);
         
         // Store metadata
