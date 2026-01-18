@@ -574,7 +574,15 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
         incoming.groupKey = groupKey;
         incoming.entries.clear();
         incoming.hasHeader = true;
-        incoming.completionTimer = nullptr;
+        
+        // Start timeout for empty groups or in case no member-list arrives
+        incoming.completionTimer = new QTimer(this);
+        incoming.completionTimer->setSingleShot(true);
+        connect(incoming.completionTimer, &QTimer::timeout, this, [this, remoteId]() {
+            qDebug() << "WebRTC: Auto-finalizing group data (no entries/timeout) for" << remoteId;
+            finalizeIncomingGroupData(remoteId);
+        });
+        incoming.completionTimer->start(2000); // 2 seconds for first entry or member-list
     }
     else if (type == "entry-data") {
         // [FIX] Handle incoming entry data from mobile
@@ -716,6 +724,17 @@ void WebRTCService::setupPeerConnection(const QString& remoteId, bool isOfferer)
             if (state == rtc::PeerConnection::State::Failed) {
                 QMutexLocker l(&g_peerMutex);
                 if (m_dataChannels.contains(remoteId)) m_dataChannels.remove(remoteId);
+                
+                // Clean up incomplete group data transfers
+                if (m_incomingGroups.contains(remoteId)) {
+                    if (m_incomingGroups[remoteId].completionTimer) {
+                        m_incomingGroups[remoteId].completionTimer->stop();
+                        m_incomingGroups[remoteId].completionTimer->deleteLater();
+                    }
+                    m_incomingGroups.remove(remoteId);
+                    qDebug() << "WebRTC: Cleaned up incomplete group data transfer for" << remoteId;
+                }
+                
                 if (m_pendingInvites.contains(remoteId)) {
                      qDebug() << "[DEBUG_STEP 7a] PC Failed, retrying...";
                     QTimer::singleShot(2000, this, [this, remoteId]() { retryPendingInviteFor(remoteId); });
@@ -723,6 +742,16 @@ void WebRTCService::setupPeerConnection(const QString& remoteId, bool isOfferer)
             } else if (state == rtc::PeerConnection::State::Closed) {
                 QMutexLocker l(&g_peerMutex);
                 if (m_dataChannels.contains(remoteId)) m_dataChannels.remove(remoteId);
+                
+                // Clean up incomplete group data transfers
+                if (m_incomingGroups.contains(remoteId)) {
+                    if (m_incomingGroups[remoteId].completionTimer) {
+                        m_incomingGroups[remoteId].completionTimer->stop();
+                        m_incomingGroups[remoteId].completionTimer->deleteLater();
+                    }
+                    m_incomingGroups.remove(remoteId);
+                    qDebug() << "WebRTC: Cleaned up incomplete group data transfer for" << remoteId;
+                }
             }
         }, Qt::QueuedConnection);
     });

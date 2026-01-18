@@ -93,19 +93,15 @@ If you send an invite while the other person is offline:
 
 ## Known Limitation
 
-**Desktop can't receive group data when invited by mobile**
+**All features implemented!**
 
-This is NOT a bug - it's an unimplemented feature. The flow works like this:
+Previously, desktop couldn't receive group data when invited by mobile. This has been fully implemented in the latest commit.
 
-- ✓ Desktop invites mobile → Works perfectly
-- ⚠️ Mobile invites desktop → Desktop can accept but can't receive the group data
-
-Why? The desktop's WebRTCService doesn't have code to accumulate and parse the streaming group-data/entry-data messages. It would need to:
-1. Buffer incoming group-data and entry-data messages  
-2. Accumulate all entries
-3. Call the onGroupDataReceived callback with the complete dataset
-
-The desktop HAS the `handleGroupData()` method to process received groups, but the WebRTCService never calls the callback. This is a feature request, not a bug in your current system.
+Both directions now work:
+- ✅ Desktop → Mobile invites
+- ✅ Mobile → Desktop invites
+- ✅ Sync over data channel (bidirectional)
+- ✅ Offline invite queueing
 
 ## Testing Recommendations
 

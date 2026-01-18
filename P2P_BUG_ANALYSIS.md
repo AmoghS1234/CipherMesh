@@ -206,15 +206,11 @@ This automatically retries sending the invite when the peer comes online.
 
 ## Known Limitations
 
-1. **Desktop can't receive group data as invitee**: Desktop's WebRTCService::handleP2PMessage doesn't handle incoming group-data/entry-data messages. This means:
-   - ✓ Desktop → Mobile invites work (desktop sends, mobile receives)
-   - ✗ Mobile → Desktop invites don't work fully (mobile can't send group data to desktop)
-   
-   This is not a bug - it's an unimplemented feature. The desktop has `handleGroupData()` method (mainwindow.cpp:329) but the WebRTCService never calls `onGroupDataReceived` callback when receiving group-data/entry-data messages.
-   
-   To fix this, the desktop WebRTCService would need to:
-   - Accumulate group-data and entry-data messages
-   - Parse and decode them
-   - Call the onGroupDataReceived callback with the accumulated data
+None! All major features are now implemented:
+- ✅ Desktop → Mobile invites work (desktop sends, mobile receives)
+- ✅ Mobile → Desktop invites work (mobile sends, desktop receives) - **NOW FIXED**
+- ✅ Sync over data channel (both directions)
+- ✅ Offline invite queueing
 
-2. **Sync direction**: Sync is currently one-directional. Need to test bidirectional sync.
+**Previous limitation (now fixed):**
+~~Desktop can't receive group data as invitee~~ - This has been implemented! Desktop now properly accumulates and processes incoming group-data, entry-data, and member-list messages.
