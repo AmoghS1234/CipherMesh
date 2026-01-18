@@ -251,7 +251,11 @@ void WebRTCService::receiveSignalingMessage(const std::string& message) {
         std::string mid = extractJsonValue(message, "mid");
         if(m_peers.count(sender)) {
             if (m_peers[sender]->remoteDescription().has_value()) {
-                try { m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, mid)); } catch(...) {}
+                try { 
+                    m_peers[sender]->addRemoteCandidate(rtc::Candidate(cand, mid)); 
+                } catch(const std::exception& e) {
+                    std::cerr << "Error adding ICE candidate from " << sender << ": " << e.what() << std::endl;
+                }
             } else { m_earlyCandidates[sender].push_back(message); }
         }
     }
@@ -270,7 +274,13 @@ void WebRTCService::flushEarlyCandidatesFor(const std::string& peerId) {
     for (const auto& msg : m_earlyCandidates[peerId]) {
         std::string cand = extractJsonValue(msg, "candidate");
         std::string mid = extractJsonValue(msg, "mid");
-        if (m_peers.count(peerId)) { try { m_peers[peerId]->addRemoteCandidate(rtc::Candidate(cand, mid)); } catch(...) {} }
+        if (m_peers.count(peerId)) { 
+            try { 
+                m_peers[peerId]->addRemoteCandidate(rtc::Candidate(cand, mid)); 
+            } catch(const std::exception& e) {
+                std::cerr << "Error adding early ICE candidate for " << peerId << ": " << e.what() << std::endl;
+            }
+        }
     }
     m_earlyCandidates.erase(peerId);
 }

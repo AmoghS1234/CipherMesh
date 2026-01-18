@@ -202,9 +202,13 @@ Java_com_ciphermesh_mobile_core_Vault_init(JNIEnv* env, jobject thiz, jstring jP
     env->ReleaseStringUTFChars(jPath, path);
 
     // [CRITICAL] Hook up the P2P Sender for Syncing
-    g_vault->setP2PSendCallback([](const std::string& target, const std::string& message) {
-        sendSignalingToKotlin(target, "sync-packet", message);
-    });
+    // Set P2P callback with proper synchronization
+    {
+        std::lock_guard<std::mutex> lock(g_p2pMutex);
+        g_vault->setP2PSendCallback([](const std::string& target, const std::string& message) {
+            sendSignalingToKotlin(target, "sync-packet", message);
+        });
+    }
     
     LOGI("Vault Initialized with P2P Callback");
 }

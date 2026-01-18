@@ -324,7 +324,11 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
              m_p2pSender(senderId, ack.str());
         }
 
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        std::cerr << "Error handling incoming sync from " << senderId << ": " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "Unknown error handling incoming sync from " << senderId << std::endl;
+    }
 }
 
 // =========================================================
