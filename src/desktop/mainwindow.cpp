@@ -935,7 +935,18 @@ void MainWindow::loadGroups()
 
         std::vector<std::string> groups = m_vault->getGroupNames();
         for (const std::string& groupName : groups) {
-            QString displayName = QString::fromStdString(groupName);
+            // Get group owner to determine if user is owner or member
+            std::string ownerId = m_vault->getGroupOwner(groupName);
+            QString roleLabel;
+            
+            if (ownerId.empty() || ownerId == m_currentUserId.toStdString()) {
+                roleLabel = " (Owner)";
+            } else {
+                roleLabel = " (Member)";
+            }
+            
+            // Display group name with role label
+            QString displayName = QString::fromStdString(groupName) + roleLabel;
             QListWidgetItem* item = new QListWidgetItem(groupIcon, displayName);
             m_groupListWidget->addItem(item);
         }
@@ -978,8 +989,15 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
     }
 
     QString groupNameQStr = current->text();
+    // Strip suffixes: (Invite), (Owner), (Member)
     if (groupNameQStr.endsWith(INVITE_SUFFIX)) {
         groupNameQStr = groupNameQStr.left(groupNameQStr.length() - INVITE_SUFFIX.length());
+    }
+    if (groupNameQStr.endsWith(" (Owner)")) {
+        groupNameQStr = groupNameQStr.left(groupNameQStr.length() - QString(" (Owner)").length());
+    }
+    if (groupNameQStr.endsWith(" (Member)")) {
+        groupNameQStr = groupNameQStr.left(groupNameQStr.length() - QString(" (Member)").length());
     }
     std::string groupName = groupNameQStr.toStdString();
 
@@ -1026,7 +1044,7 @@ void MainWindow::onGroupContextMenuRequested(const QPoint &pos)
     connect(shareAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
     connect(deleteAction, &QAction::triggered, this, &MainWindow::onDeleteGroupClicked);
 
-    if (m_groupListWidget->count() <= 1 || item->text() == "Personal") {
+    if (m_groupListWidget->count() <= 1 || item->text().startsWith("Personal")) {
         deleteAction->setEnabled(false);
     }
 
