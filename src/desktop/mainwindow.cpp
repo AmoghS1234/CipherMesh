@@ -911,13 +911,41 @@ void MainWindow::loadGroups()
 
         std::vector<std::string> groups = m_vault->getGroupNames();
         for (const std::string& groupName : groups) {
-            std::string ownerId = m_vault->getGroupOwner(groupName);
             QString roleLabel;
             
-            if (ownerId.empty() || ownerId == m_currentUserId.toStdString()) {
-                roleLabel = " (Owner)";
-            } else {
-                roleLabel = " (Member)";
+            // [FIX] Get current user's actual role in the group from members table
+            try {
+                int groupId = m_vault->getGroupId(groupName);
+                std::string myId = m_vault->getUserId();
+                auto members = m_vault->getGroupMembers(groupName);
+                
+                bool found = false;
+                for (const auto& member : members) {
+                    if (member.userId == myId) {
+                        if (member.role == "owner") {
+                            roleLabel = " (Owner)";
+                        } else if (member.role == "admin") {
+                            roleLabel = " (Admin)";
+                        } else {
+                            roleLabel = " (Member)";
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    // Fallback if not found in members table
+                    std::string ownerId = m_vault->getGroupOwner(groupName);
+                    if (ownerId.empty() || ownerId == myId) {
+                        roleLabel = " (Owner)";
+                    } else {
+                        roleLabel = " (Member)";
+                    }
+                }
+            } catch (...) {
+                // Fallback on error
+                roleLabel = "";
             }
             
             QString displayName = QString::fromStdString(groupName) + roleLabel;
@@ -1021,13 +1049,19 @@ void MainWindow::onGroupContextMenuRequested(const QPoint &pos)
     // [FIX] Use stored data
     QString groupName = item->data(Qt::UserRole).toString();
     
-    // Check if user is owner to determine available actions
+    // [FIX] Check current user's role in the group (not just if they're the owner)
     bool isOwner = false;
     try {
         int groupId = m_vault->getGroupId(groupName.toStdString());
         std::string myId = m_vault->getUserId();
-        std::string ownerId = m_vault->getGroupOwner(groupId);
-        isOwner = (myId == ownerId);
+        auto members = m_vault->getGroupMembers(groupName.toStdString());
+        
+        for (const auto& member : members) {
+            if (member.userId == myId) {
+                isOwner = (member.role == "owner");
+                break;
+            }
+        }
     } catch (...) {
         isOwner = false;
     }
@@ -1421,13 +1455,19 @@ void MainWindow::onDeleteGroupClicked()
         return;
     }
     
-    // [NEW] Check if user is owner before allowing deletion
+    // [FIX] Check if user is owner before allowing deletion - check role in members table
     bool isOwner = false;
     try {
         int groupId = m_vault->getGroupId(groupName.toStdString());
         std::string myId = m_vault->getUserId();
-        std::string ownerId = m_vault->getGroupOwner(groupId);
-        isOwner = (myId == ownerId);
+        auto members = m_vault->getGroupMembers(groupName.toStdString());
+        
+        for (const auto& member : members) {
+            if (member.userId == myId) {
+                isOwner = (member.role == "owner");
+                break;
+            }
+        }
     } catch (...) {
         isOwner = false;
     }
