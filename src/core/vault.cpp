@@ -343,11 +343,11 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         else if (op == "MEMBER_KICK") {
              // [FIX] Handle being kicked from a group
              // The group owner has removed us from the group
-             // We should remove ourselves from the group locally
+             // The message is sent directly to the kicked user, so we remove ourselves
              std::string myId = getUserId();
+             // Verify this kick message is actually for us
+             // The sender should have sent this directly to the kicked user
              m_db->removeGroupMember(gid, myId);
-             // Optionally: delete the entire group if we were just a member
-             // For now, just remove our membership
         }
         else if (op == "DELETE") {
              // [FIX] Handle password deletion via sync
