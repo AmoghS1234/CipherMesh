@@ -141,11 +141,13 @@ class AutofillAuthActivity : AppCompatActivity() {
     }
     
     private fun fillCredentials(entry: MatchedEntry) {
-        val vault = Vault.getInstance(this)
+        val vault = Vault()
         
         try {
             // Get decrypted password
-            val password = vault.getDecryptedPassword(entry.id)
+            val fullDetails = vault.getEntryFullDetails(entry.id)
+            val parts = fullDetails.split("|")
+            val password = if (parts.size >= 3) parts[2] else ""
             
             // Build dataset
             val dataset = Dataset.Builder()

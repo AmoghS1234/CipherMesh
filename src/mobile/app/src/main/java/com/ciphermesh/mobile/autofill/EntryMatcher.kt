@@ -21,7 +21,7 @@ data class LocationData(
 
 class EntryMatcher(private val context: Context) {
     
-    private val vault = Vault.getInstance(context)
+    private val vault = Vault()
     
     fun findMatches(packageName: String, webDomain: String?): List<MatchedEntry> {
         if (vault.isLocked()) {

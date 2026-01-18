@@ -22,13 +22,13 @@ class AutoSaveActivity : AppCompatActivity() {
         const val EXTRA_ENTRY_ID = "entry_id"
     }
     
-    private lateinit val vault: Vault
+    private lateinit var vault: Vault
     private lateinit var executor: Executor
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        vault = Vault.getInstance(this)
+        vault = Vault()
         executor = ContextCompat.getMainExecutor(this)
         
         val isUpdate = intent.getBooleanExtra(EXTRA_IS_UPDATE, false)
@@ -183,11 +183,11 @@ class AutoSaveActivity : AppCompatActivity() {
             vault.addEntry(
                 title = appName,
                 username = username,
-                password = password,
+                pass = password,
                 type = "Login",
-                locations = locationsJson,
+                url = locationsJson,
                 notes = "Auto-saved via AutoFill",
-                totpSecret = ""
+                totp = ""
             )
             
             Toast.makeText(this, "Saved to $groupName", Toast.LENGTH_SHORT).show()
