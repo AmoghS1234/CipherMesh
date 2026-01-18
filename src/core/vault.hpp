@@ -91,6 +91,8 @@ public:
     void setSyncCallback(SyncCallback cb);
     void notifySync(const std::string& type, const std::string& payload);
     void processSyncEvent(const std::string& payload);
+    void queueSyncForGroup(const std::string& groupName, const std::string& operation, const std::string& payload);
+    void queueSyncForMember(const std::string& groupName, const std::string& memberId, const std::string& operation, const std::string& payload); // [NEW] For targeted sync
     
     // [FIX] Add this declaration
     void addEncryptedEntry(const VaultEntry& entry, const std::string& base64Ciphertext);
@@ -125,8 +127,6 @@ private:
     void lockActiveGroup();
 
     // Sync Helpers
-    void queueSyncForGroup(const std::string& groupName, const std::string& operation, const std::string& payload);
-    void queueSyncForMember(const std::string& groupName, const std::string& memberId, const std::string& operation, const std::string& payload); // [NEW] For targeted sync
     std::string serializeEntry(const VaultEntry& e, const std::string& password);
 
     std::unique_ptr<Database> m_db;
