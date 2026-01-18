@@ -409,6 +409,13 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     
+    // [FIX] Send member-list message to signal end of transmission
+    // This allows the receiver to finalize the group data immediately
+    std::ostringstream memberListJson;
+    memberListJson << "{\"type\":\"member-list\",\"group\":\"" << escapeJsonString(groupName) << "\",\"members\":[]}";
+    m_channels[recipientId]->send(memberListJson.str());
+    LOGI("Sent member-list completion signal for group: %s to %s", groupName.c_str(), recipientId.c_str());
+    
     m_pendingKeys.erase(recipientId);
     m_pendingEntries.erase(recipientId);
 }
@@ -1054,6 +1061,15 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
         sendP2PMessage(recipient, entryObj);
         QThread::msleep(20); 
     }
+    
+    // [FIX] Send member-list message to signal end of transmission
+    // This allows the receiver to finalize the group data immediately
+    QJsonObject memberListMsg;
+    memberListMsg["type"] = "member-list";
+    memberListMsg["group"] = QString::fromStdString(groupName);
+    memberListMsg["members"] = QJsonArray(); // Empty array - receiver will query group members themselves
+    sendP2PMessage(recipient, memberListMsg);
+    qDebug() << "WebRTC: Sent member-list completion signal for group:" << QString::fromStdString(groupName);
     
     locker.relock();
     m_pendingInvites.remove(recipient);

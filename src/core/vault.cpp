@@ -332,6 +332,28 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
              std::string uid = getJsonString(dataJson, "userId");
              m_db->removeGroupMember(gid, uid);
         }
+        else if (op == "MEMBER_ADD") {
+             // [FIX] Handle new member being added to group
+             std::string uid = getJsonString(dataJson, "userId");
+             std::string status = getJsonString(dataJson, "status");
+             if (!uid.empty()) {
+                 m_db->addGroupMember(gid, uid, "member", status.empty() ? "accepted" : status);
+             }
+        }
+        else if (op == "DELETE") {
+             // [FIX] Handle password deletion via sync
+             std::string uuid = getJsonString(dataJson, "uuid");
+             if (!uuid.empty()) {
+                 // Find and delete entry by UUID
+                 auto entries = m_db->getEntriesForGroup(gid);
+                 for (const auto& entry : entries) {
+                     if (entry.uuid == uuid) {
+                         m_db->deleteEntry(entry.id);
+                         break;
+                     }
+                 }
+             }
+        }
 
         m_crypto->secureWipe(groupKey);
 
@@ -571,7 +593,14 @@ GroupPermissions Vault::getGroupPermissions(int groupId) { return m_db->getGroup
 void Vault::updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole) { m_db->updateGroupMemberRole(groupId, userId, newRole); }
 void Vault::updateGroupMemberStatus(const std::string& groupName, const std::string& userId, const std::string& newStatus) { 
     int gid = m_db->getGroupId(groupName); 
-    m_db->updateGroupMemberStatus(gid, userId, newStatus); 
+    m_db->updateGroupMemberStatus(gid, userId, newStatus);
+    
+    // [FIX] When a member's status changes to "accepted", broadcast updated member list to all members
+    if (newStatus == "accepted") {
+        std::ostringstream memberData;
+        memberData << "{\"userId\":\"" << escapeJson(userId) << "\",\"status\":\"accepted\"}";
+        queueSyncForGroup(groupName, "MEMBER_ADD", memberData.str());
+    }
 }
 
 // --- Identity & Invites ---
