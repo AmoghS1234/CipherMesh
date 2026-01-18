@@ -1655,7 +1655,7 @@ void MainWindow::handleDataRequested(const QString& requesterId, const QString& 
         // Send via P2P data channel
         auto* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
         if (webrtcService) {
-            webrtcService->sendP2PMessage(QString::fromStdString(requesterId.toStdString()), memberListMsg);
+            webrtcService->sendP2PMessage(requesterId, memberListMsg);
             qDebug() << "Sent member list with" << members.size() << "members to" << requesterId;
         }
         

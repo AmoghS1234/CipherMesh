@@ -121,6 +121,7 @@ void sendRefreshBroadcast() {
         jclass intentClass = env->FindClass("android/content/Intent");
         if (!intentClass) {
             LOGE("Failed to find Intent class");
+            env->DeleteLocalRef(contextClass);
             if (attached) g_jvm->DetachCurrentThread();
             return;
         }
@@ -128,6 +129,8 @@ void sendRefreshBroadcast() {
         jmethodID intentConstructor = env->GetMethodID(intentClass, "<init>", "(Ljava/lang/String;)V");
         if (!intentConstructor) {
             LOGE("Failed to find Intent constructor");
+            env->DeleteLocalRef(contextClass);
+            env->DeleteLocalRef(intentClass);
             if (attached) g_jvm->DetachCurrentThread();
             return;
         }
@@ -146,6 +149,8 @@ void sendRefreshBroadcast() {
         
         env->DeleteLocalRef(action);
         env->DeleteLocalRef(intent);
+        env->DeleteLocalRef(intentClass);
+        env->DeleteLocalRef(contextClass);
     }
     
     if (attached) g_jvm->DetachCurrentThread();
