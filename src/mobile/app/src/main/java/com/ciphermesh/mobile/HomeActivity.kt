@@ -34,6 +34,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.ciphermesh.mobile.core.Vault
 import com.ciphermesh.mobile.p2p.P2PManager
+import com.ciphermesh.util.PasswordGenerator
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
@@ -565,8 +566,57 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         
         val locationsContainer = dialogView.findViewById<LinearLayout>(R.id.locationsContainer)
         val btnAdd = dialogView.findViewById<Button>(R.id.btnAddLoc)
+        
+        // Password generator and strength meter
+        val btnGeneratePassword = dialogView.findViewById<Button>(R.id.btnGeneratePassword)
+        val strengthContainer = dialogView.findViewById<LinearLayout>(R.id.passwordStrengthContainer)
+        val strengthText = dialogView.findViewById<TextView>(R.id.textPasswordStrength)
+        val strengthScore = dialogView.findViewById<TextView>(R.id.textPasswordScore)
+        val strengthProgress = dialogView.findViewById<android.widget.ProgressBar>(R.id.progressPasswordStrength)
 
         val locationsList = ArrayList<LocationData>()
+        
+        // Password strength update function
+        fun updatePasswordStrength() {
+            val password = passEdit.text.toString()
+            if (password.isEmpty()) {
+                strengthContainer.visibility = View.GONE
+                return
+            }
+            
+            strengthContainer.visibility = View.VISIBLE
+            val score = PasswordGenerator.calculateStrength(password)
+            val strengthLabel = PasswordGenerator.getStrengthText(score)
+            val color = PasswordGenerator.getStrengthColor(score)
+            
+            strengthText.text = strengthLabel
+            strengthText.setTextColor(color)
+            strengthScore.text = "$score%"
+            strengthProgress.progress = score
+            strengthProgress.progressTintList = android.content.res.ColorStateList.valueOf(color)
+        }
+        
+        // Generate password button
+        btnGeneratePassword.setOnClickListener {
+            val generatedPassword = PasswordGenerator.generate(
+                length = 16,
+                useUppercase = true,
+                useLowercase = true,
+                useNumbers = true,
+                useSymbols = true
+            )
+            passEdit.setText(generatedPassword)
+            updatePasswordStrength()
+        }
+        
+        // Monitor password field changes for strength meter
+        passEdit.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                updatePasswordStrength()
+            }
+        })
 
         fun refreshLocationsList() {
             locationsContainer.removeAllViews()

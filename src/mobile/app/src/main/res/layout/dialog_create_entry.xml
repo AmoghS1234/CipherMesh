@@ -53,7 +53,7 @@
             android:layout_height="wrap_content"
             android:hint="Password"
             app:endIconMode="password_toggle"
-            android:layout_marginBottom="16dp">
+            android:layout_marginBottom="8dp">
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/inputPassword"
                 android:layout_width="match_parent"
@@ -61,6 +61,66 @@
                 android:inputType="textPassword"
                 android:singleLine="true"/>
         </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Password Generator Button -->
+        <Button
+            android:id="@+id/btnGeneratePassword"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🎲 Generate Password"
+            android:layout_marginBottom="8dp"
+            android:textAllCaps="false"/>
+
+        <!-- Password Strength Meter -->
+        <LinearLayout
+            android:id="@+id/passwordStrengthContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="16dp"
+            android:visibility="gone">
+            
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Strength: "
+                    android:textSize="12sp"
+                    android:textColor="?android:attr/textColorSecondary"/>
+                
+                <TextView
+                    android:id="@+id/textPasswordStrength"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Unknown"
+                    android:textSize="12sp"
+                    android:textStyle="bold"/>
+                
+                <TextView
+                    android:id="@+id/textPasswordScore"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0%"
+                    android:textSize="12sp"
+                    android:textColor="?android:attr/textColorSecondary"/>
+            </LinearLayout>
+            
+            <ProgressBar
+                android:id="@+id/progressPasswordStrength"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="4dp"
+                android:max="100"
+                android:progress="0"/>
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
