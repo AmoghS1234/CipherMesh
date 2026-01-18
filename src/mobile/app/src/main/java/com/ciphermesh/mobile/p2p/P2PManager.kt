@@ -126,7 +126,8 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
                     if (userId.isNotEmpty()) {
                         val json = JSONObject()
                         json.put("type", "register")
-                        json.put("user", userId)
+                        json.put("id", userId)
+                        json.put("userId", userId) // Backwards compatibility
                         webSocket?.send(json.toString())
                         Log.d("P2P", "🔄 Sending Register Request for: $userId")
                         
@@ -165,10 +166,10 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
                 json.put("sender", userId)
                 json.put("target", targetId)
                 
-                if (type == "offer" || type == "answer") {
-                    json.put("sdp", payload)
-                } else {
-                    json.put("payload", payload)
+                when (type) {
+                    "offer", "answer" -> json.put("sdp", payload)
+                    "ice-candidate" -> json.put("candidate", payload)
+                    else -> json.put("payload", payload)
                 }
 
                 ws.send(json.toString())
