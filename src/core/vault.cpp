@@ -640,7 +640,45 @@ void Vault::deletePendingInvite(int id) { checkLocked(); m_db->deletePendingInvi
 void Vault::updatePendingInviteStatus(int id, const std::string& s) { checkLocked(); m_db->updatePendingInviteStatus(id, s); }
 void Vault::respondToInvite(const std::string&, const std::string&, bool) {}
 void Vault::sendP2PInvite(const std::string&, const std::string&) {}
-std::vector<VaultEntry> Vault::exportGroupEntries(const std::string&) { return {}; }
+std::vector<VaultEntry> Vault::exportGroupEntries(const std::string& groupName) {
+    checkLocked();
+    
+    // Get group ID
+    int groupId = m_db->getGroupId(groupName);
+    if (groupId == -1) {
+        return {}; // Group not found
+    }
+    
+    // Get encrypted group key
+    std::vector<unsigned char> encryptedGroupKey = m_db->getEncryptedGroupKeyById(groupId);
+    if (encryptedGroupKey.empty()) {
+        return {}; // No group key
+    }
+    
+    // Decrypt group key
+    std::vector<unsigned char> groupKey = m_crypto->decrypt(encryptedGroupKey, m_masterKey_RAM);
+    
+    // Get all entries for the group
+    std::vector<VaultEntry> entries = m_db->getEntriesForGroup(groupId);
+    
+    // Decrypt passwords for each entry
+    for (auto& entry : entries) {
+        try {
+            std::vector<unsigned char> encryptedPassword = m_db->getEncryptedPassword(entry.id);
+            if (!encryptedPassword.empty()) {
+                entry.password = m_crypto->decryptToString(encryptedPassword, groupKey);
+            }
+        } catch (const std::exception& e) {
+            // If decryption fails, leave password empty but continue with other entries
+            entry.password = "";
+        }
+    }
+    
+    // Securely wipe the group key from memory
+    m_crypto->secureWipe(groupKey);
+    
+    return entries;
+}
 std::string Vault::getIdentityPublicKey() { if(m_identityPublicKey.empty()) ensureIdentityKeys(); return m_crypto->base64Encode(m_identityPublicKey); }
 void Vault::setUsername(const std::string& name) { checkLocked(); std::vector<unsigned char> d(name.begin(), name.end()); m_db->storeMetadata("user_display_name", d); }
 std::string Vault::getDisplayUsername() { try { std::vector<unsigned char> d = m_db->getMetadata("user_display_name"); return std::string(d.begin(), d.end()); } catch(...) { return "User"; } }
