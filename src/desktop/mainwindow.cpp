@@ -840,6 +840,18 @@ void MainWindow::postUnlockInit()
             std::string myPubKey = m_vault->getIdentityPublicKey();
             webrtcService->setIdentityPublicKey(myPubKey);
             QMetaObject::invokeMethod(webrtcService, "setAuthenticated", Qt::QueuedConnection, Q_ARG(bool, true));
+            
+            // [FIX] Set up P2P send callback for sync over data channel
+            m_vault->setP2PSendCallback([this, webrtcService](const std::string& targetUser, const std::string& message) {
+                // Send sync messages via data channel instead of WebSocket
+                QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(message).toUtf8());
+                if (!doc.isNull() && doc.isObject()) {
+                    QJsonObject obj = doc.object();
+                    QMetaObject::invokeMethod(webrtcService, [webrtcService, targetUser, obj]() {
+                        webrtcService->sendP2PMessage(QString::fromStdString(targetUser), obj);
+                    }, Qt::QueuedConnection);
+                }
+            });
         }
     }
     

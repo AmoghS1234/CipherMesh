@@ -549,7 +549,97 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
             onSyncMessage(enrichedStr.toStdString());
         }
     }
-    // Note: member-list and member-leave not handled on desktop yet
+    else if (type == "group-data") {
+        // [FIX] Handle incoming group data header from mobile
+        QString groupName = obj["group"].toString();
+        QString keyBase64 = obj["key"].toString();
+        
+        qDebug() << "WebRTC: Receiving group-data header for:" << groupName << "from" << remoteId;
+        
+        // Decode the base64 key
+        QByteArray keyBytes = QByteArray::fromBase64(keyBase64.toUtf8());
+        std::vector<unsigned char> groupKey(keyBytes.begin(), keyBytes.end());
+        
+        // Clean up any existing incomplete transfer
+        if (m_incomingGroups.contains(remoteId)) {
+            if (m_incomingGroups[remoteId].completionTimer) {
+                m_incomingGroups[remoteId].completionTimer->stop();
+                m_incomingGroups[remoteId].completionTimer->deleteLater();
+            }
+        }
+        
+        // Initialize accumulation structure
+        IncomingGroupData& incoming = m_incomingGroups[remoteId];
+        incoming.groupName = groupName;
+        incoming.groupKey = groupKey;
+        incoming.entries.clear();
+        incoming.hasHeader = true;
+        incoming.completionTimer = nullptr;
+    }
+    else if (type == "entry-data") {
+        // [FIX] Handle incoming entry data from mobile
+        QString groupName = obj["group"].toString();
+        
+        if (!m_incomingGroups.contains(remoteId) || !m_incomingGroups[remoteId].hasHeader) {
+            qWarning() << "WebRTC: Received entry-data before group-data header from" << remoteId;
+            return;
+        }
+        
+        IncomingGroupData& incoming = m_incomingGroups[remoteId];
+        
+        qDebug() << "WebRTC: Receiving entry-data for group:" << groupName << "from" << remoteId;
+        
+        // Parse the entry
+        CipherMesh::Core::VaultEntry entry;
+        entry.id = -1;
+        entry.title = obj["title"].toString().toStdString();
+        entry.username = obj["username"].toString().toStdString();
+        entry.password = obj["password"].toString().toStdString();
+        entry.notes = obj["notes"].toString().toStdString();
+        entry.totpSecret = obj["totpSecret"].toString().toStdString();
+        entry.url = ""; // Not sent in P2P messages
+        
+        // Parse locations
+        QJsonArray locArray = obj["locations"].toArray();
+        for (const auto& locVal : locArray) {
+            QJsonObject locObj = locVal.toObject();
+            std::string locType = locObj["type"].toString().toStdString();
+            std::string locValue = locObj["value"].toString().toStdString();
+            entry.locations.push_back(CipherMesh::Core::Location(-1, locType, locValue));
+        }
+        
+        incoming.entries.push_back(entry);
+        
+        // Reset/create completion timer - auto-finalize if no more messages arrive
+        // This handles the case where member-list might not be sent
+        if (incoming.completionTimer) {
+            incoming.completionTimer->stop();
+            incoming.completionTimer->deleteLater();
+        }
+        
+        incoming.completionTimer = new QTimer(this);
+        incoming.completionTimer->setSingleShot(true);
+        connect(incoming.completionTimer, &QTimer::timeout, this, [this, remoteId]() {
+            qDebug() << "WebRTC: Auto-finalizing group data (timeout) for" << remoteId;
+            finalizeIncomingGroupData(remoteId);
+        });
+        incoming.completionTimer->start(1000); // 1 second timeout after last entry
+    }
+    else if (type == "member-list") {
+        // [FIX] Handle member list - finalize group data reception
+        QString groupName = obj["group"].toString();
+        
+        if (!m_incomingGroups.contains(remoteId) || !m_incomingGroups[remoteId].hasHeader) {
+            qWarning() << "WebRTC: Received member-list before group-data header from" << remoteId;
+            return;
+        }
+        
+        qDebug() << "WebRTC: Receiving member-list for group:" << groupName << "from" << remoteId;
+        
+        // Member list signals end of transmission - finalize immediately
+        finalizeIncomingGroupData(remoteId);
+    }
+    // Note: member-leave not handled on desktop yet
     // Desktop only sends these messages, doesn't receive them
 }
 }
@@ -792,6 +882,33 @@ void WebRTCService::checkAndSendPendingInvites() {
 
 void WebRTCService::queueInvite(const std::string& groupName, const std::string& userEmail, const std::vector<unsigned char>& groupKey, const std::vector<CipherMesh::Core::VaultEntry>& entries) {
     inviteUser(groupName, userEmail, groupKey, entries);
+}
+
+void WebRTCService::finalizeIncomingGroupData(const QString& remoteId) {
+    if (!m_incomingGroups.contains(remoteId) || !m_incomingGroups[remoteId].hasHeader) {
+        return;
+    }
+    
+    IncomingGroupData& incoming = m_incomingGroups[remoteId];
+    
+    // Clean up timer if it exists
+    if (incoming.completionTimer) {
+        incoming.completionTimer->stop();
+        incoming.completionTimer->deleteLater();
+        incoming.completionTimer = nullptr;
+    }
+    
+    if (onGroupDataReceived) {
+        qDebug() << "WebRTC: Finalizing group data reception -" << incoming.entries.size() 
+                 << "entries for group" << incoming.groupName << "from" << remoteId;
+        onGroupDataReceived(remoteId.toStdString(), 
+                           incoming.groupName.toStdString(), 
+                           incoming.groupKey, 
+                           incoming.entries);
+    }
+    
+    // Clean up
+    m_incomingGroups.remove(remoteId);
 }
 
 void WebRTCService::setAuthenticated(bool authenticated) {

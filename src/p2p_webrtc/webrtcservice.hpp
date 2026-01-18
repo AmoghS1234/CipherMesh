@@ -173,6 +173,16 @@ private:
     std::map<QString, std::vector<CipherMesh::Core::VaultEntry>> m_pendingEntries;
     
     QMap<QString, std::vector<QJsonObject>> m_earlyCandidates;
+    
+    // [FIX] Desktop receiving group data - accumulation structures
+    struct IncomingGroupData {
+        QString groupName;
+        std::vector<unsigned char> groupKey;
+        std::vector<CipherMesh::Core::VaultEntry> entries;
+        bool hasHeader = false;
+        QTimer* completionTimer = nullptr;
+    };
+    QMap<QString, IncomingGroupData> m_incomingGroups;
 
     rtc::Configuration getIceConfiguration() const;
     void setupPeerConnection(const QString& remoteId, bool isOfferer);
@@ -184,6 +194,7 @@ private:
     void handleP2PMessage(const QString& remoteId, const QString& message);
     void flushEarlyCandidatesFor(const QString& peerId);
     void retryPendingInviteFor(const QString& remoteId);
+    void finalizeIncomingGroupData(const QString& remoteId);
 };
 
 #endif // DESKTOP check
