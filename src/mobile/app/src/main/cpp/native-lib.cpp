@@ -245,6 +245,14 @@ void handleInviteAccept(const std::string& senderId, const std::string& json) {
             // Use public API to send data
             g_p2p->sendGroupData(senderId, groupName, key, entries);
             
+            // [FIX] Update member status to "accepted" and broadcast member list
+            try {
+                g_vault->updateGroupMemberStatus(groupName, senderId, "accepted");
+                LOGI("Updated %s status to accepted in group %s", senderId.c_str(), groupName.c_str());
+            } catch (...) {
+                LOGE("Failed to update member status");
+            }
+            
             showToastFromNative("Transferring data to " + senderId);
             
             // Cleanup
@@ -834,7 +842,25 @@ Java_com_ciphermesh_mobile_core_Vault_sendP2PInvite(JNIEnv* env, jobject thiz, j
     std::string sGroup(grp);
     std::string sTarget(tgt);
 
-    // 2. Map the target user to the group BEFORE sending the invite
+    // 2. Add invitee to member list with "pending" status (if not already exists)
+    try {
+        auto members = g_vault->getGroupMembers(sGroup);
+        bool exists = false;
+        for (const auto& m : members) {
+            if (m.userId == sTarget) {
+                exists = true;
+                break;
+            }
+        }
+        if (!exists) {
+            g_vault->addGroupMember(sGroup, sTarget, "member", "pending");
+            LOGI("Added %s to group %s with pending status", sTarget.c_str(), sGroup.c_str());
+        }
+    } catch (...) {
+        LOGE("Failed to add member to group");
+    }
+
+    // 3. Map the target user to the group BEFORE sending the invite
     // This allows handleInviteAccept to find the group even if the peer's JSON is stripped
     {
         std::lock_guard<std::mutex> lock(g_outgoingMutex);
@@ -842,7 +868,7 @@ Java_com_ciphermesh_mobile_core_Vault_sendP2PInvite(JNIEnv* env, jobject thiz, j
         LOGI("Tracking outgoing invite: Peer %s -> Group %s", sTarget.c_str(), sGroup.c_str());
     }
     
-    // 3. Prepare the payload for the WebRTC engine
+    // 4. Prepare the payload for the WebRTC engine
     std::vector<unsigned char> key = g_vault->getGroupKey(sGroup);
     
     // [FIX] Validate group key before sending
@@ -855,7 +881,7 @@ Java_com_ciphermesh_mobile_core_Vault_sendP2PInvite(JNIEnv* env, jobject thiz, j
     
     auto entries = g_vault->exportGroupEntries(sGroup);
     
-    // 4. Trigger the actual WebRTC handshake/invite process
+    // 5. Trigger the actual WebRTC handshake/invite process
     g_p2p->queueInvite(sGroup, sTarget, key, entries);
     
     env->ReleaseStringUTFChars(groupName, grp); 
