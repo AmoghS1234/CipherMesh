@@ -126,6 +126,7 @@ private:
 
     // Sync Helpers
     void queueSyncForGroup(const std::string& groupName, const std::string& operation, const std::string& payload);
+    void queueSyncForMember(const std::string& groupName, const std::string& memberId, const std::string& operation, const std::string& payload); // [NEW] For targeted sync
     std::string serializeEntry(const VaultEntry& e, const std::string& password);
 
     std::unique_ptr<Database> m_db;

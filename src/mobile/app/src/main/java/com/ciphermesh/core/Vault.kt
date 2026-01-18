@@ -73,6 +73,7 @@ class Vault {
     external fun receiveSignalingMessage(json: String)
     external fun sendP2PInvite(groupName: String, targetUser: String)
     external fun broadcastSync(groupName: String)
+    external fun queueGroupSplitSync(groupName: String, targetUser: String) // [NEW] For group split on deletion
     external fun registerSignalingCallback(callback: SignalingCallback)
     
     // Removed methods not implemented in C++ to prevent crashes:

@@ -890,6 +890,33 @@ Java_com_ciphermesh_mobile_core_Vault_sendP2PInvite(JNIEnv* env, jobject thiz, j
     env->ReleaseStringUTFChars(targetUser, tgt);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_queueGroupSplitSync(JNIEnv* env, jobject thiz, jstring groupName, jstring targetUser) {
+    // [NEW] Queue a GROUP_SPLIT sync message to notify member that group was deleted
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    const char* tgt = env->GetStringUTFChars(targetUser, 0);
+    
+    std::string sGroup(grp);
+    std::string sTarget(tgt);
+    
+    try {
+        // Create GROUP_SPLIT sync message
+        std::ostringstream payload;
+        payload << "{}"; // Empty payload, operation is in the "op" field
+        
+        g_vault->queueSyncForMember(sGroup, sTarget, "GROUP_SPLIT", payload.str());
+        LOGI("Queued GROUP_SPLIT sync for %s in group %s", sTarget.c_str(), sGroup.c_str());
+    } catch (...) {
+        LOGE("Failed to queue GROUP_SPLIT sync");
+    }
+    
+    env->ReleaseStringUTFChars(groupName, grp);
+    env->ReleaseStringUTFChars(targetUser, tgt);
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_ciphermesh_mobile_core_Vault_isGroupOwner(JNIEnv* env, jobject thiz, jstring groupName) {
     std::lock_guard<std::recursive_mutex> lock(g_vaultMutex); // [FIX] Added lock

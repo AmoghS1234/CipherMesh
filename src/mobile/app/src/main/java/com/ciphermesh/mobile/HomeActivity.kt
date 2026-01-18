@@ -595,13 +595,46 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_confirm_password, null)
         val inputPass = dialogView.findViewById<TextInputEditText>(R.id.inputConfirmPass)
         val action = if (isGroupOwner) "Delete" else "Leave"
-        MaterialAlertDialogBuilder(this).setTitle("$action '$groupName'?")
+        val message = if (isGroupOwner) {
+            "$action '$groupName'?\n\nEach member will receive their own copy of the group data."
+        } else {
+            "$action '$groupName'?"
+        }
+        MaterialAlertDialogBuilder(this).setTitle(message)
             .setView(dialogView).setPositiveButton(action) { _, _ ->
                 val pass = inputPass.text.toString()
                 if (pass.isNotEmpty() && vault.verifyMasterPassword(pass)) {
+                    // [NEW] If owner is deleting, send split notification to all members
+                    if (isGroupOwner) {
+                        try {
+                            val members = vault.getGroupMembers(groupName)
+                            val myId = vault.getUserId()
+                            
+                            for (memberStr in members) {
+                                val parts = memberStr.split("|")
+                                if (parts.isNotEmpty()) {
+                                    val memberId = parts[0]
+                                    val status = if (parts.size > 2) parts[2] else "accepted"
+                                    
+                                    if (memberId != myId && status == "accepted") {
+                                        // Send GROUP_SPLIT sync message
+                                        vault.queueGroupSplitSync(groupName, memberId)
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error sending split notifications", e)
+                        }
+                    }
+                    
                     if (vault.deleteGroup(groupName)) {
                         getSharedPreferences("memberships", Context.MODE_PRIVATE).edit().remove(groupName).apply()
-                        Toast.makeText(this, "Group $action" + "d", Toast.LENGTH_SHORT).show()
+                        val successMsg = if (isGroupOwner) {
+                            "Group deleted. Members have been notified."
+                        } else {
+                            "Group left"
+                        }
+                        Toast.makeText(this, successMsg, Toast.LENGTH_SHORT).show()
                         loadGroups()
                     } else Toast.makeText(this, "Failed", Toast.LENGTH_SHORT).show()
                 } else Toast.makeText(this, "Incorrect Password", Toast.LENGTH_SHORT).show()

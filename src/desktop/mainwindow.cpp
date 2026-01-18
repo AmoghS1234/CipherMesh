@@ -1414,13 +1414,64 @@ void MainWindow::onDeleteGroupClicked()
         QMessageBox::warning(this, "Error", "Cannot delete the 'Personal' group or the last remaining group.");
         return;
     }
+    
+    // [NEW] Check if user is owner before allowing deletion
+    bool isOwner = false;
+    try {
+        int groupId = m_vault->getGroupId(groupName.toStdString());
+        std::string myId = m_vault->getUserId();
+        std::string ownerId = m_vault->getGroupOwner(groupId);
+        isOwner = (myId == ownerId);
+    } catch (...) {
+        isOwner = false;
+    }
+    
+    if (!isOwner) {
+        QMessageBox::warning(this, "Error", "Only the group owner can delete the group.");
+        return;
+    }
+    
     QMessageBox::StandardButton reply = QMessageBox::question(this, "Delete Group",
-                                                              QString("Are you sure you want to permanently delete the group '%1' and all its entries?").arg(groupName),
+                                                              QString("Are you sure you want to permanently delete the group '%1'?\n\nEach member will receive their own copy of the group data.").arg(groupName),
                                                               QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         try {
+            // [NEW] Before deleting, send individual copies to each member
+            auto members = m_vault->getGroupMembers(groupName.toStdString());
+            std::vector<unsigned char> groupKey = m_vault->getGroupKey(groupName.toStdString());
+            std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(groupName.toStdString());
+            std::string myId = m_vault->getUserId();
+            
+            for (const auto& member : members) {
+                if (member.userId != myId && member.status == "accepted") {
+                    // Send GROUP_SPLIT message to each member
+                    if (m_p2pService) {
+                        try {
+                            // Queue the split group data for this member
+                            auto* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
+                            if (webrtcService) {
+                                // Create a sync message to notify member about group deletion/split
+                                std::ostringstream splitMsg;
+                                splitMsg << "{\"type\":\"sync-payload\",\"sender\":\"" << myId << "\","
+                                        << "\"group\":\"" << groupName.toStdString() << "\","
+                                        << "\"op\":\"GROUP_SPLIT\",\"jobId\":0,"
+                                        << "\"data\":{}}";
+                                webrtcService->sendP2PMessage(QString::fromStdString(member.userId), 
+                                    QJsonDocument::fromJson(QString::fromStdString(splitMsg.str()).toUtf8()).object());
+                                
+                                qDebug() << "Sent GROUP_SPLIT notification to" << QString::fromStdString(member.userId);
+                            }
+                        } catch (...) {
+                            qWarning() << "Failed to send split notification to" << QString::fromStdString(member.userId);
+                        }
+                    }
+                }
+            }
+            
             if (m_vault->deleteGroup(groupName.toStdString())) {
-                loadGroups(); 
+                loadGroups();
+                QMessageBox::information(this, "Group Deleted", 
+                    "Group deleted successfully. Each member has been notified and will receive their own copy.");
             } else {
                 QMessageBox::warning(this, "Error", "Could not delete the group.");
             }

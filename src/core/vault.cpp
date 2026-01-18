@@ -265,6 +265,12 @@ void Vault::queueSyncForGroup(const std::string& groupName, const std::string& o
     }
 }
 
+// [NEW] Queue sync for a specific member (used for GROUP_SPLIT)
+void Vault::queueSyncForMember(const std::string& groupName, const std::string& memberId, const std::string& operation, const std::string& payload) {
+    m_db->storeSyncJob(memberId, groupName, operation, payload);
+    processOutboxForUser(memberId);
+}
+
 void Vault::processOutboxForUser(const std::string& userId) {
     if (!m_p2pSender) return;
     try {
@@ -395,6 +401,24 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
              // Verify this kick message is actually for us
              // The sender should have sent this directly to the kicked user
              m_db->removeGroupMember(gid, myId);
+        }
+        else if (op == "GROUP_SPLIT") {
+             // [NEW] Handle group split (owner deleted group, each member becomes solo owner)
+             // Remove all other members, making this user the sole owner
+             std::string myId = getUserId();
+             auto members = m_db->getGroupMembers(gid);
+             
+             // Remove all members except self
+             for (const auto& member : members) {
+                 if (member.userId != myId) {
+                     m_db->removeGroupMember(gid, member.userId);
+                 }
+             }
+             
+             // Update self to owner status
+             m_db->updateGroupMemberRole(gid, myId, "owner");
+             
+             std::cerr << "Group split: " << group << " - now solo owner" << std::endl;
         }
         else if (op == "DELETE") {
              // [FIX] Handle password deletion via sync
