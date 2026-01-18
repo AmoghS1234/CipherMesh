@@ -150,6 +150,7 @@ MainWindow::MainWindow(CipherMesh::Core::Vault* vault, QWidget *parent)
         // [FIX] Handle sync messages over data channel
         if (!m_vault) return;
         QMetaObject::invokeMethod(this, [this, message]() {
+            if (!m_vault) return; // Re-check after queued execution
             try {
                 // Parse message to extract sender
                 QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(message).toUtf8());
@@ -843,11 +844,13 @@ void MainWindow::postUnlockInit()
             
             // [FIX] Set up P2P send callback for sync over data channel
             m_vault->setP2PSendCallback([this, webrtcService](const std::string& targetUser, const std::string& message) {
+                if (!webrtcService) return; // Safety check
                 // Send sync messages via data channel instead of WebSocket
                 QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(message).toUtf8());
                 if (!doc.isNull() && doc.isObject()) {
                     QJsonObject obj = doc.object();
                     QMetaObject::invokeMethod(webrtcService, [webrtcService, targetUser, obj]() {
+                        if (!webrtcService) return; // Double check after queued execution
                         webrtcService->sendP2PMessage(QString::fromStdString(targetUser), obj);
                     }, Qt::QueuedConnection);
                 }
