@@ -1015,11 +1015,31 @@ void MainWindow::onGroupContextMenuRequested(const QPoint &pos)
     // [FIX] Use stored data
     QString groupName = item->data(Qt::UserRole).toString();
     
+    // Check if user is owner to determine available actions
+    bool isOwner = false;
+    try {
+        int groupId = m_vault->getGroupId(groupName.toStdString());
+        std::string myId = m_vault->getUserId();
+        std::string ownerId = m_vault->getGroupOwner(groupId);
+        isOwner = (myId == ownerId);
+    } catch (...) {
+        isOwner = false;
+    }
+    
     QMenu contextMenu(this);
-    QAction* shareAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "Share Group...");
+    
+    // "Share Group" (Manage) only available to owner - matching mobile behavior
+    if (isOwner) {
+        QAction* shareAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "Manage Group...");
+        connect(shareAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
+    } else {
+        // Members can view members list
+        QAction* viewMembersAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "View Members...");
+        connect(viewMembersAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
+    }
+    
     QAction* deleteAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Delete Group...");
 
-    connect(shareAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
     connect(deleteAction, &QAction::triggered, this, &MainWindow::onDeleteGroupClicked);
 
     if (m_groupListWidget->count() <= 1 || groupName == "Personal") {

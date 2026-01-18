@@ -23,7 +23,25 @@ ShareGroupDialog::ShareGroupDialog(const QString& groupName,
     : QDialog(parent), m_groupName(groupName), m_p2pService(p2pService), m_vault(vault)
 {
     setupUi();
-    setWindowTitle("Manage Group: " + m_groupName);
+    
+    // Check if user is owner to set appropriate title
+    bool isOwner = false;
+    try {
+        int groupId = m_vault->getGroupId(m_groupName.toStdString());
+        std::string myId = m_vault->getUserId();
+        std::string ownerId = m_vault->getGroupOwner(groupId);
+        isOwner = (myId == ownerId);
+    } catch (...) {
+        isOwner = false;
+    }
+    
+    setWindowTitle(isOwner ? "Manage Group: " + m_groupName : "Members: " + m_groupName);
+    
+    // Hide invite/remove buttons for non-owners - matching mobile behavior
+    if (!isOwner) {
+        m_inviteButton->setVisible(false);
+        m_removeButton->setVisible(false);
+    }
     
     connect(this, &ShareGroupDialog::internalGroupMembersUpdated, this, &ShareGroupDialog::updateMemberList);
     connect(this, &ShareGroupDialog::internalInviteStatus, this, &ShareGroupDialog::showStatusMessage);
@@ -62,30 +80,8 @@ void ShareGroupDialog::loadMembers() {
 }
 
 void ShareGroupDialog::loadPermissions() {
-    if (!m_vault) return;
-    try {
-        int groupId = m_vault->getGroupId(m_groupName.toStdString());
-        CipherMesh::Core::GroupPermissions perms = m_vault->getGroupPermissions(groupId);
-        
-        // Block signals to prevent triggering onToggleAdminOnly while loading
-        m_adminOnlyCheckbox->blockSignals(true);
-        m_adminOnlyCheckbox->setChecked(perms.adminsOnlyWrite);
-        m_adminOnlyCheckbox->blockSignals(false);
-        
-        // Only Owner can change this setting
-        std::string myId = m_vault->getUserId();
-        std::string ownerId = m_vault->getGroupOwner(groupId);
-        
-        if (myId != ownerId) {
-            m_adminOnlyCheckbox->setEnabled(false);
-            m_adminOnlyCheckbox->setToolTip("Only the Owner can change permissions.");
-        } else {
-            m_adminOnlyCheckbox->setEnabled(true);
-            m_adminOnlyCheckbox->setToolTip("When enabled, only Admins and Owner can edit entries in this group.");
-        }
-    } catch (const std::exception& e) {
-        qWarning() << "Failed to load group permissions:" << e.what();
-    }
+    // [REMOVED] Admin-only restriction feature to match mobile implementation
+    // Mobile doesn't have this feature, so desktop shouldn't either
 }
 
 void ShareGroupDialog::setupServiceCallbacks() {
@@ -116,10 +112,7 @@ void ShareGroupDialog::setupUi() {
     idLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     mainLayout->addWidget(idLabel);
     
-    // --- Permission Checkbox ---
-    m_adminOnlyCheckbox = new QCheckBox("Restrict editing to Admins only", this);
-    connect(m_adminOnlyCheckbox, &QCheckBox::toggled, this, &ShareGroupDialog::onToggleAdminOnly);
-    mainLayout->addWidget(m_adminOnlyCheckbox);
+    // [REMOVED] Admin-only permission checkbox - not in mobile, so removed for parity
 
     QLabel* listLabel = new QLabel("Members:", this);
     listLabel->setStyleSheet("font-weight: bold; margin-top: 8px;");
@@ -260,8 +253,8 @@ void ShareGroupDialog::demoteUser() {
 }
 
 void ShareGroupDialog::onToggleAdminOnly(bool checked) {
-    int groupId = m_vault->getGroupId(m_groupName.toStdString());
-    m_vault->setGroupPermissions(groupId, checked);
+    // [REMOVED] Admin-only feature to match mobile implementation
+    (void)checked; // Suppress unused parameter warning
 }
 
 void ShareGroupDialog::onInviteClicked() {
