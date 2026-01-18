@@ -95,6 +95,62 @@ void showToastFromNative(const std::string& message) {
     if (attached) g_jvm->DetachCurrentThread();
 }
 
+// --- Helper: Send Broadcast to Refresh UI ---
+void sendRefreshBroadcast() {
+    if (!g_jvm || !g_context) return;
+    
+    JNIEnv* env;
+    bool attached = false;
+    int status = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != 0) return;
+        attached = true;
+    }
+    
+    std::lock_guard<std::mutex> lock(g_jniMutex);
+    if (g_context && env) {
+        // Get Context class and sendBroadcast method
+        jclass contextClass = env->FindClass("android/content/Context");
+        if (!contextClass) {
+            LOGE("Failed to find Context class");
+            if (attached) g_jvm->DetachCurrentThread();
+            return;
+        }
+        
+        // Create Intent for broadcast
+        jclass intentClass = env->FindClass("android/content/Intent");
+        if (!intentClass) {
+            LOGE("Failed to find Intent class");
+            if (attached) g_jvm->DetachCurrentThread();
+            return;
+        }
+        
+        jmethodID intentConstructor = env->GetMethodID(intentClass, "<init>", "(Ljava/lang/String;)V");
+        if (!intentConstructor) {
+            LOGE("Failed to find Intent constructor");
+            if (attached) g_jvm->DetachCurrentThread();
+            return;
+        }
+        
+        jstring action = env->NewStringUTF("com.ciphermesh.REFRESH_GROUPS");
+        jobject intent = env->NewObject(intentClass, intentConstructor, action);
+        
+        // Call sendBroadcast
+        jmethodID sendBroadcastMethod = env->GetMethodID(env->GetObjectClass(g_context), "sendBroadcast", "(Landroid/content/Intent;)V");
+        if (sendBroadcastMethod) {
+            env->CallVoidMethod(g_context, sendBroadcastMethod, intent);
+            LOGI("Sent REFRESH_GROUPS broadcast");
+        } else {
+            LOGE("Failed to find sendBroadcast method");
+        }
+        
+        env->DeleteLocalRef(action);
+        env->DeleteLocalRef(intent);
+    }
+    
+    if (attached) g_jvm->DetachCurrentThread();
+}
+
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_jvm = vm;
     return JNI_VERSION_1_6;
@@ -326,6 +382,9 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         
         g_pendingInvites.push_back(inv);
         showToastFromNative("Invite received from: " + sender);
+        
+        // Send broadcast to refresh UI so invite appears immediately
+        sendRefreshBroadcast();
     };
 
     // 3. Incoming Data Handler (Group Data, Entries, Member Updates)
@@ -360,6 +419,9 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
                 // Add group and set sender as owner if not specified
                 g_vault->addGroup(finalName, groupKey, senderId);
                 showToastFromNative("Joined Group: " + finalName);
+                
+                // Send broadcast to refresh UI so new group appears
+                sendRefreshBroadcast();
             } catch (...) { LOGE("Failed to add group from P2P"); }
 
             // Clear pending invite
@@ -402,6 +464,12 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
                     }
                 }
                 g_vault->addEntry(e, e.password);
+                LOGI("Added entry '%s' to group '%s'", e.title.c_str(), targetGroup.c_str());
+                
+                // Send broadcast to refresh entries list
+                sendRefreshBroadcast();
+            } else {
+                LOGE("Failed to set active group '%s' for entry transfer", targetGroup.c_str());
             }
         }
         // --- Case C: Receiving Member List ---
