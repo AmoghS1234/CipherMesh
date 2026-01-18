@@ -303,19 +303,53 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         long long remoteJobId = getJsonLong(payload, "jobId");
         
         int gid = m_db->getGroupId(group);
-        if (gid == -1) return; // Unknown group
+        if (gid == -1) {
+            std::cerr << "Sync error: Unknown group " << group << std::endl;
+            return; // Unknown group
+        }
 
         std::vector<unsigned char> encGroupKey = m_db->getEncryptedGroupKeyById(gid);
         std::vector<unsigned char> groupKey = m_crypto->decrypt(encGroupKey, m_masterKey_RAM);
 
+        // [FIX] Improved JSON parsing - find matching closing brace, not just last }
         size_t dataPos = payload.find("\"data\":{");
-        if (dataPos == std::string::npos) return;
-        size_t endPos = payload.rfind("}");
-        std::string dataJson = payload.substr(dataPos + 8, endPos - (dataPos + 8)); 
+        if (dataPos == std::string::npos) {
+            std::cerr << "Sync error: No data field in payload" << std::endl;
+            return;
+        }
+        
+        // Find the matching closing brace for the data object
+        size_t braceStart = dataPos + 7; // Position of opening {
+        int depth = 1;
+        size_t endPos = braceStart + 1;
+        while (endPos < payload.length() && depth > 0) {
+            if (payload[endPos] == '{') depth++;
+            else if (payload[endPos] == '}') depth--;
+            endPos++;
+        }
+        if (depth != 0) {
+            std::cerr << "Sync error: Malformed JSON - unmatched braces" << std::endl;
+            return;
+        }
+        std::string dataJson = payload.substr(braceStart + 1, endPos - braceStart - 2); 
 
         if (op == "UPSERT") {
              VaultEntry e;
              e.uuid = getJsonString(dataJson, "uuid");
+             
+             // [FIX] Validate UUID exists before proceeding
+             if (e.uuid.empty()) {
+                 std::cerr << "Sync error: UPSERT without UUID - skipping" << std::endl;
+                 // Still send ACK to avoid infinite retry
+                 if (m_p2pSender && remoteJobId > 0) {
+                     std::ostringstream ack;
+                     ack << "{\"type\":\"sync-ack\",\"jobId\":" << remoteJobId << "}";
+                     m_p2pSender(senderId, ack.str());
+                 }
+                 m_crypto->secureWipe(groupKey);
+                 return;
+             }
+             
              e.title = getJsonString(dataJson, "title");
              e.username = getJsonString(dataJson, "username");
              std::string pass = getJsonString(dataJson, "password");
@@ -330,14 +364,27 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         } 
         else if (op == "MEMBER_REMOVE") {
              std::string uid = getJsonString(dataJson, "userId");
-             m_db->removeGroupMember(gid, uid);
+             if (!uid.empty()) {
+                 m_db->removeGroupMember(gid, uid);
+             }
         }
         else if (op == "MEMBER_ADD") {
              // [FIX] Handle new member being added to group
              std::string uid = getJsonString(dataJson, "userId");
              std::string status = getJsonString(dataJson, "status");
              if (!uid.empty()) {
-                 m_db->addGroupMember(gid, uid, "member", status.empty() ? "accepted" : status);
+                 // Check if member already exists to avoid duplicate
+                 auto members = m_db->getGroupMembers(gid);
+                 bool exists = false;
+                 for (const auto& m : members) {
+                     if (m.userId == uid) {
+                         exists = true;
+                         break;
+                     }
+                 }
+                 if (!exists) {
+                     m_db->addGroupMember(gid, uid, "member", status.empty() ? "accepted" : status);
+                 }
              }
         }
         else if (op == "MEMBER_KICK") {
@@ -355,11 +402,16 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
              if (!uuid.empty()) {
                  // Find and delete entry by UUID
                  auto entries = m_db->getEntriesForGroup(gid);
+                 bool found = false;
                  for (const auto& entry : entries) {
                      if (entry.uuid == uuid) {
                          m_db->deleteEntry(entry.id);
+                         found = true;
                          break;
                      }
+                 }
+                 if (!found) {
+                     std::cerr << "Sync warning: DELETE for non-existent UUID " << uuid << std::endl;
                  }
              }
         }

@@ -325,6 +325,12 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
             std::vector<unsigned char> groupKey = decodeBase64(keyBase64);
             LOGI("Decoded key size: %zu bytes", groupKey.size());
             
+            // [FIX] Validate group key size before proceeding
+            if (groupKey.empty() || groupKey.size() != 32) {
+                LOGE("Invalid group key size: %zu bytes (expected 32) - rejecting group", groupKey.size());
+                return;
+            }
+            
             std::string finalName = originalGroupName;
             if (g_vault->groupExists(finalName)) {
                 finalName = originalGroupName + " (from " + senderId + ")";
@@ -838,6 +844,15 @@ Java_com_ciphermesh_mobile_core_Vault_sendP2PInvite(JNIEnv* env, jobject thiz, j
     
     // 3. Prepare the payload for the WebRTC engine
     std::vector<unsigned char> key = g_vault->getGroupKey(sGroup);
+    
+    // [FIX] Validate group key before sending
+    if (key.empty() || key.size() != 32) {
+        LOGE("Invalid group key size: %zu bytes (expected 32) for group %s", key.size(), sGroup.c_str());
+        env->ReleaseStringUTFChars(groupName, grp); 
+        env->ReleaseStringUTFChars(targetUser, tgt);
+        return;
+    }
+    
     auto entries = g_vault->exportGroupEntries(sGroup);
     
     // 4. Trigger the actual WebRTC handshake/invite process

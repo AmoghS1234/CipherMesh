@@ -354,7 +354,16 @@ void WebRTCService::flushEarlyCandidatesFor(const std::string& peerId) {
 void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const std::string& groupName, 
                                          const std::vector<unsigned char>& groupKey, 
                                          const std::vector<CipherMesh::Core::VaultEntry>& entries) {
-    if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) return;
+    if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
+        LOGE("Cannot send group data to %s - channel not open", recipientId.c_str());
+        return;
+    }
+    
+    // [FIX] Validate group key size (should be 32 bytes for AES-256)
+    if (groupKey.empty() || groupKey.size() != 32) {
+        LOGE("Invalid group key size: %zu bytes (expected 32)", groupKey.size());
+        return;
+    }
     
     std::ostringstream jsonHeader;
     jsonHeader << "{\"type\":\"group-data\",\"group\":\"" << escapeJsonString(groupName) << "\",";
@@ -384,9 +393,21 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
         while(i++ < 3) keyBase64 += '=';
     }
     jsonHeader << "\"key\":\"" << keyBase64 << "\"}";
+    
+    // [FIX] Check channel before each send
+    if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
+        LOGE("Channel closed before sending header to %s", recipientId.c_str());
+        return;
+    }
     m_channels[recipientId]->send(jsonHeader.str());
     
     for (const auto& e : entries) {
+        // [FIX] Check channel status before each entry
+        if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
+            LOGE("Channel closed mid-transfer to %s - sent %zu entries", recipientId.c_str(), &e - &entries[0]);
+            return;
+        }
+        
         std::ostringstream entryJson;
         entryJson << "{\"type\":\"entry-data\","
                   << "\"group\":\"" << escapeJsonString(groupName) << "\","
@@ -407,6 +428,12 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
         
         m_channels[recipientId]->send(entryJson.str());
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    
+    // [FIX] Check channel before sending completion signal
+    if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
+        LOGE("Channel closed before sending member-list to %s", recipientId.c_str());
+        return;
     }
     
     // [FIX] Send member-list message to signal end of transmission
@@ -1019,6 +1046,12 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
                                    const std::vector<CipherMesh::Core::VaultEntry>& entries) {
     QString recipient = QString::fromStdString(recipientId);
     
+    // [FIX] Validate group key size (should be 32 bytes for AES-256)
+    if (groupKey.empty() || groupKey.size() != 32) {
+        qCritical() << "WebRTC: Invalid group key size:" << groupKey.size() << "bytes (expected 32)";
+        return;
+    }
+    
     QMutexLocker locker(&g_peerMutex);
     bool active = (m_dataChannels.contains(recipient) && m_dataChannels[recipient]->isOpen());
     locker.unlock();
@@ -1040,6 +1073,14 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
     
     // 2. Stream Entries
     for (const auto& entry : entries) {
+        // [FIX] Check channel status before each entry
+        QMutexLocker entryLocker(&g_peerMutex);
+        if (!m_dataChannels.contains(recipient) || !m_dataChannels[recipient]->isOpen()) {
+            qCritical() << "WebRTC: Channel closed mid-transfer to" << recipient;
+            return;
+        }
+        entryLocker.unlock();
+        
         QJsonObject entryObj;
         entryObj["type"] = "entry-data";
         entryObj["group"] = QString::fromStdString(groupName);
@@ -1061,6 +1102,14 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
         sendP2PMessage(recipient, entryObj);
         QThread::msleep(20); 
     }
+    
+    // [FIX] Check channel before sending completion signal
+    QMutexLocker finalLocker(&g_peerMutex);
+    if (!m_dataChannels.contains(recipient) || !m_dataChannels[recipient]->isOpen()) {
+        qCritical() << "WebRTC: Channel closed before sending member-list to" << recipient;
+        return;
+    }
+    finalLocker.unlock();
     
     // [FIX] Send member-list message to signal end of transmission
     // This allows the receiver to finalize the group data immediately
