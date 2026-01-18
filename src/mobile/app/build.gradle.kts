@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     id("kotlin-kapt") // <--- THIS WAS MISSING. Required for Room.
+    id("kotlin-parcelize") // Required for @Parcelize annotation
 }
 
 android {
