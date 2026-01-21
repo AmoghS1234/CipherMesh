@@ -317,11 +317,16 @@ Java_com_ciphermesh_mobile_core_Vault_respondToInvite(JNIEnv* env, jobject, jstr
     {
         std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
         if (g_p2p) {
-            g_p2p->respondToInvite(sender, accepted);
+            // [FIX] Only send one invite-accept message with the group name included
+            // Don't call respondToInvite since we're manually constructing the message with group name
+            std::string msg;
             if (accepted) {
-                std::string msg = "{\"type\":\"invite-accept\",\"group\":\"" + group + "\"}";
-                g_p2p->sendP2PMessage(sender, msg);
+                msg = "{\"type\":\"invite-accept\",\"group\":\"" + group + "\"}";
+            } else {
+                msg = "{\"type\":\"invite-reject\",\"group\":\"" + group + "\"}";
             }
+            g_p2p->sendP2PMessage(sender, msg);
+            LOGI("Sent %s to %s for group %s", accepted ? "invite-accept" : "invite-reject", sender.c_str(), group.c_str());
         }
     }
     triggerJavaRefresh();

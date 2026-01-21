@@ -207,9 +207,15 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             if (m_isShuttingDown.load()) return;
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
             if (m_pendingInvites.count(peerId)) {
-                std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
+                // [FIX] Escape group name to prevent JSON parsing issues
+                std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + escapeJsonString(m_pendingInvites[peerId]) + "\"}";
                 if (m_channels.count(peerId) && m_channels[peerId]) {
-                    try { m_channels[peerId]->send(msg); } catch(...) {}
+                    try { 
+                        m_channels[peerId]->send(msg); 
+                        LOGI("Sent invite-request to %s for group %s", peerId.c_str(), m_pendingInvites[peerId].c_str());
+                    } catch(...) {
+                        LOGE("Failed to send invite-request to %s", peerId.c_str());
+                    }
                 }
             }
         }).detach();
@@ -829,7 +835,6 @@ void WebRTCService::finalizeIncomingGroupData(const QString& remoteId) {
 }
 
 void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& message) {
-    if (onGroupDataReceived) onGroupDataReceived(remoteId.toStdString(), message.toStdString());
     QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8());
     if (doc.isNull()) return;
     QJsonObject obj = doc.object();
@@ -890,10 +895,13 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
             if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), false);
         }
     }
+    else if (type == "group-data" || type == "entry-data" || type == "member-list" || type == "member-leave" || type == "member-kick") {
+        // [FIX] Only route group-related messages to onGroupDataReceived, not all messages
+        if (onGroupDataReceived) onGroupDataReceived(remoteId.toStdString(), message.toStdString());
+    }
     else if (type == "sync-payload" || type == "sync-ack") {
         if (onSyncMessage) onSyncMessage(remoteId.toStdString(), message.toStdString());
     }
-    // ... Desktop Buffering Logic if needed ...
 }
 
 void WebRTCService::setAuthenticated(bool authenticated) {
