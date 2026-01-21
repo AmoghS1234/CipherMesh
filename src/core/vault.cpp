@@ -214,9 +214,10 @@ void Vault::addEncryptedEntry(const VaultEntry& entry, const std::string& base64
         
         m_db->storeEntry(m_activeGroupId, temp, encryptedBlob);
     } catch (const std::exception& ex) {
-        LOG_DEBUG("Error adding encrypted entry: " + std::string(ex.what()));
+        // [FIX] Include entry title and uuid in error message for easier debugging
+        LOG_DEBUG("Error adding encrypted entry (title: " + entry.title + ", uuid: " + entry.uuid + "): " + std::string(ex.what()));
     } catch (...) {
-        LOG_DEBUG("Unknown error adding encrypted entry");
+        LOG_DEBUG("Unknown error adding encrypted entry (title: " + entry.title + ", uuid: " + entry.uuid + ")");
     }
 }
 

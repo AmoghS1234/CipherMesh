@@ -756,8 +756,8 @@ void WebRTCService::flushEarlyCandidatesFor(const QString& peerId) {
     if (!m_peerConnections.contains(peerId)) return;
     
     auto pc = m_peerConnections[peerId];
-    // Copy candidates locally before releasing lock to avoid iterator invalidation
-    auto candidates = m_earlyCandidates[peerId];
+    // [FIX] Move candidates to avoid unnecessary copy of potentially large data
+    auto candidates = std::move(m_earlyCandidates[peerId]);
     m_earlyCandidates.remove(peerId);
     locker.unlock();
     
