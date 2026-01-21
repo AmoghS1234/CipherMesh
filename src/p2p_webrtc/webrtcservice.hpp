@@ -7,6 +7,7 @@
 #include <mutex>
 #include <map>
 #include "vault_entry.hpp" 
+#include "ip2pservice.hpp" // Ensure this is included for both platforms
 
 // Platform detection
 #if defined(__ANDROID__) || defined(ANDROID)
@@ -17,7 +18,6 @@
     #include <QTimer>
     #include <QJsonObject>
     #include "rtc/rtc.hpp"
-    #include "ip2pservice.hpp"
 #endif
 
 // Shared Callback Types
@@ -26,53 +26,55 @@ using DataCallback = std::function<void(const std::string& sender, const std::st
 using ConnectionStatusCallback = std::function<void(bool connected)>;
 using IncomingInviteCallback = std::function<void(const std::string& sender, const std::string& groupName)>;
 using InviteResponseCallback = std::function<void(const std::string& sender, const std::string& groupName, bool accepted)>;
-static std::string escapeJsonString(const std::string& input);
 
 #if defined(__ANDROID__) || defined(ANDROID)
 
-// ... (Android Implementation remains unchanged) ...
-class WebRTCService {
+// =========================================================
+//  ANDROID HEADER (std::string ONLY)
+// =========================================================
+class WebRTCService : public CipherMesh::P2P::IP2PService {
 public:
     WebRTCService(const std::string& signalingUrl, const std::string& localUserId, void* parent = nullptr);
-    ~WebRTCService();
+    ~WebRTCService() override;
 
     void connect();
     void disconnect();
     void sendP2PMessage(const std::string& targetId, const std::string& jsonPayload);
     void receiveSignalingMessage(const std::string& message);
     
+    // Public Callbacks
     SignalingCallback onSignalingMessage;
     DataCallback onGroupDataReceived;
     DataCallback onSyncMessage; 
     ConnectionStatusCallback onConnectionStatusChanged;
     IncomingInviteCallback onIncomingInvite;
     InviteResponseCallback onInviteResponse;
-    
     std::function<void(const std::string& userId)> onPeerOnline;
 
+    // IP2PService Interface Implementation
     void inviteUser(const std::string& groupName, const std::string& userEmail, 
                     const std::vector<unsigned char>& groupKey, 
                     const std::vector<CipherMesh::Core::VaultEntry>& entries,
-                    const std::string& memberListJson);
+                    const std::string& memberListJson) override;
 
-    void queueInvite(const std::string& groupName, const std::string& userEmail, 
-                     const std::vector<unsigned char>& groupKey, 
-                     const std::vector<CipherMesh::Core::VaultEntry>& entries);
-
-    void respondToInvite(const std::string& senderId, bool accept);
-    void setAuthenticated(bool auth);
-    void sendInvite(const std::string& recipientId, const std::string& groupName);
-    void cancelInvite(const std::string& userId);
-    void removeUser(const std::string& groupName, const std::string& userId);
-    void fetchGroupMembers(const std::string& groupName);
-    void requestData(const std::string& senderId, const std::string& groupName);
-    void broadcastSync(const std::string& groupName);
-    void onRetryTimer();
-
+    void sendInvite(const std::string& recipientId, const std::string& groupName) override;
+    void cancelInvite(const std::string& userId) override;
+    void respondToInvite(const std::string& senderId, bool accept) override;
+    void removeUser(const std::string& groupName, const std::string& userId) override;
+    void fetchGroupMembers(const std::string& groupName) override;
+    void requestData(const std::string& senderId, const std::string& groupName) override;
     void sendGroupData(const std::string& recipientId, const std::string& groupName, 
                        const std::vector<unsigned char>& groupKey, 
                        const std::vector<CipherMesh::Core::VaultEntry>& entries,
-                       const std::string& memberListJson);
+                       const std::string& memberListJson) override;
+
+    // Helper Actions
+    void queueInvite(const std::string& groupName, const std::string& userEmail, 
+                     const std::vector<unsigned char>& groupKey, 
+                     const std::vector<CipherMesh::Core::VaultEntry>& entries);
+    void setAuthenticated(bool auth);
+    void broadcastSync(const std::string& payload);
+    void onRetryTimer();
 
 private:
     std::string m_signalingUrl;
@@ -90,7 +92,9 @@ private:
     std::map<std::string, std::vector<CipherMesh::Core::VaultEntry>> m_pendingEntries;
     std::map<std::string, std::string> m_pendingMembers;
 
-    void setupPeerConnection(const QString& peerId, bool isCaller);
+    // [FIX] Correct type: std::string
+    void setupPeerConnection(const std::string& peerId, bool isCaller);
+    
     void setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const std::string& peerId);
     void sendSignalingMessage(const std::string& targetId, const std::string& type, const std::string& payload);
     void retryPendingInviteFor(const std::string& remoteId);
@@ -103,12 +107,14 @@ private:
 
 #else
 
-// Desktop (Qt)
+// =========================================================
+//  DESKTOP HEADER (Qt / QString)
+// =========================================================
 class WebRTCService : public QObject, public CipherMesh::P2P::IP2PService {
     Q_OBJECT
 public:
     explicit WebRTCService(const QString& signalingUrl, const std::string& localUserId, QObject *parent = nullptr);
-    ~WebRTCService();
+    ~WebRTCService() override;
 
     // Callbacks
     SignalingCallback onSignalingMessage;
@@ -124,26 +130,29 @@ public:
 
     void receiveSignalingMessage(const std::string& message); 
 
-    // Actions
+    // IP2PService Interface
+    void inviteUser(const std::string& groupName, const std::string& userEmail, 
+                    const std::vector<unsigned char>& groupKey, 
+                    const std::vector<CipherMesh::Core::VaultEntry>& entries,
+                    const std::string& memberListJson) override;
+
     void sendInvite(const std::string& recipientId, const std::string& groupName) override;
     void cancelInvite(const std::string& userId) override;
     void respondToInvite(const std::string& senderId, bool accept) override;
     void removeUser(const std::string& groupName, const std::string& userId) override;
     void fetchGroupMembers(const std::string& groupName) override;
     void requestData(const std::string& senderId, const std::string& groupName) override;
-    
-    void broadcastSync(const std::string& groupName);
-    void onRetryTimer();
-
     void sendGroupData(const std::string& recipientId, const std::string& groupName, 
                        const std::vector<unsigned char>& groupKey, 
                        const std::vector<CipherMesh::Core::VaultEntry>& entries,
                        const std::string& memberListJson) override;
-                       
+
+    // Helper Actions
+    void broadcastSync(const std::string& groupName);
+    void onRetryTimer();
     void queueInvite(const std::string& groupName, const std::string& userEmail, 
                      const std::vector<unsigned char>& groupKey, 
                      const std::vector<CipherMesh::Core::VaultEntry>& entries);
-
     void sendP2PMessage(const QString& remoteId, const QJsonObject& payload);
 
 public slots:
@@ -197,13 +206,8 @@ private:
     void finalizeIncomingGroupData(const QString& remoteId);
     void createAndSendOffer(const QString& remoteId);
     
-    // [FIX] Added missing declaration for setupPeerConnection
+    // [FIX] Correct type: QString for Desktop
     void setupPeerConnection(const QString& remoteId, bool isOfferer);
-    
-    void inviteUser(const std::string& groupName, const std::string& userEmail, 
-                    const std::vector<unsigned char>& groupKey, 
-                    const std::vector<CipherMesh::Core::VaultEntry>& entries,
-                    const std::string& memberListJson);
 };
 #endif
 
