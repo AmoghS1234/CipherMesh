@@ -6,6 +6,7 @@
 #include <functional>
 #include <mutex>
 #include <map>
+#include <atomic>
 #include "vault_entry.hpp" 
 #include "ip2pservice.hpp" // Ensure this is included for both platforms
 
@@ -81,6 +82,9 @@ private:
     std::string m_localUserId;
     bool m_isConnected;
     bool m_isAuthenticated;
+    
+    // [FIX] Atomic flag to track if service is being destroyed to prevent detached thread crashes
+    std::atomic<bool> m_isShuttingDown{false};
     
     std::recursive_mutex m_mutex;
     std::map<std::string, std::shared_ptr<rtc::PeerConnection>> m_peers;

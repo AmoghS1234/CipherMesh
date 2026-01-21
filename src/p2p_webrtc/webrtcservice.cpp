@@ -95,7 +95,11 @@ static std::string extractJsonValue(const std::string& json, const std::string& 
 WebRTCService::WebRTCService(const std::string& signalingUrl, const std::string& localUserId, void* parent)
     : m_signalingUrl(signalingUrl), m_localUserId(localUserId), m_isConnected(false), m_isAuthenticated(false) {}
 
-WebRTCService::~WebRTCService() { disconnect(); }
+WebRTCService::~WebRTCService() { 
+    // [FIX] Set shutdown flag before destroying to prevent detached thread crashes
+    m_isShuttingDown.store(true);
+    disconnect(); 
+}
 
 void WebRTCService::connect() { m_isConnected = true; LOGI("WebRTCService Logical Connection Active"); }
 
@@ -119,6 +123,8 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
     }
 
     pc->onStateChange([this, peerId](rtc::PeerConnection::State state) {
+        // [FIX] Check shutdown flag before accessing members
+        if (m_isShuttingDown.load()) return;
         if (state == rtc::PeerConnection::State::Failed) {
             bool shouldRetry = false;
             {
@@ -129,23 +135,31 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
             }
             if (shouldRetry) {
                 std::this_thread::sleep_for(std::chrono::seconds(2));
-                retryPendingInviteFor(peerId);
+                if (!m_isShuttingDown.load()) {
+                    retryPendingInviteFor(peerId);
+                }
             }
         }
     });
 
     pc->onLocalCandidate([this, peerId](auto candidate) {
+        // [FIX] Check shutdown flag before accessing members
+        if (m_isShuttingDown.load()) return;
         std::string json = "{\"candidate\":\"" + escapeJsonString(candidate.candidate()) + 
                            "\", \"mid\":\"" + escapeJsonString(candidate.mid()) + "\"}";
         sendSignalingMessage(peerId, "ice-candidate", json);
     });
 
     pc->onDataChannel([this, peerId](auto dc) { 
+        // [FIX] Check shutdown flag before accessing members
+        if (m_isShuttingDown.load()) return;
         LOGI("Data Channel received from %s", peerId.c_str());
         setupDataChannel(dc, peerId); 
     });
 
     pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
+        // [FIX] Check shutdown flag before accessing members
+        if (m_isShuttingDown.load()) return;
         if (state == rtc::PeerConnection::GatheringState::Complete) {
             auto desc = pc->localDescription();
             if (desc.has_value()) {
@@ -174,24 +188,36 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
     m_channels[peerId] = dc;
 
     dc->onClosed([this, peerId]() {
+        // [FIX] Check shutdown flag before accessing members
+        if (m_isShuttingDown.load()) return;
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         m_channels.erase(peerId);
         if (m_peers.count(peerId)) { m_peers[peerId]->close(); m_peers.erase(peerId); }
     });
 
     dc->onOpen([this, peerId]() {
+        // [FIX] Check shutdown flag before accessing members
+        if (m_isShuttingDown.load()) return;
         if (onPeerOnline) onPeerOnline(peerId);
+        
+        // [FIX] Use shared pointer to prevent accessing destroyed object
         std::thread([this, peerId]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            // [FIX] Check shutdown flag before accessing members
+            if (m_isShuttingDown.load()) return;
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
             if (m_pendingInvites.count(peerId)) {
                 std::string msg = "{\"type\":\"invite-request\", \"group\":\"" + m_pendingInvites[peerId] + "\"}";
-                if (m_channels.count(peerId)) m_channels[peerId]->send(msg);
+                if (m_channels.count(peerId) && m_channels[peerId]) {
+                    try { m_channels[peerId]->send(msg); } catch(...) {}
+                }
             }
         }).detach();
     });
 
     dc->onMessage([this, peerId](auto data) {
+        // [FIX] Check shutdown flag before accessing members
+        if (m_isShuttingDown.load()) return;
         std::string msg;
         if (std::holds_alternative<std::string>(data)) {
             msg = std::get<std::string>(data);
@@ -214,9 +240,19 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             bool hasPendingKeys = m_pendingKeys.count(peerId) > 0;
             bool hasPendingEntries = m_pendingEntries.count(peerId) > 0;
             
-            if (hasPendingInvite && hasPendingKeys && hasPendingEntries) {
+            LOGI("Received invite-accept from %s - invite:%d key:%d entries:%d", 
+                 peerId.c_str(), hasPendingInvite, hasPendingKeys, hasPendingEntries);
+            
+            // [FIX] Only require key, entries can be empty for new/empty groups
+            if (hasPendingInvite && hasPendingKeys) {
                 std::string mList = m_pendingMembers.count(peerId) ? m_pendingMembers[peerId] : "[]";
-                sendGroupData_unsafe(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], m_pendingEntries[peerId], mList);
+                auto entries = hasPendingEntries ? m_pendingEntries[peerId] : std::vector<CipherMesh::Core::VaultEntry>{};
+                
+                LOGI("Sending group data - key size:%zu entries:%zu", m_pendingKeys[peerId].size(), entries.size());
+                
+                sendGroupData_unsafe(peerId, m_pendingInvites[peerId], m_pendingKeys[peerId], entries, mList);
+            } else {
+                LOGW("Missing pending data for %s - cannot send group data", peerId.c_str());
             }
             
             m_pendingInvites.erase(peerId); 
@@ -697,20 +733,44 @@ void WebRTCService::handleCandidate(const QJsonObject& obj) {
         return;
     }
     auto pc = m_peerConnections[senderId];
+    
+    // [FIX] Check remote description with lock still held, add to early candidates if not ready
+    if (!pc->remoteDescription().has_value()) {
+        m_earlyCandidates[senderId].push_back(obj);
+        return;
+    }
     locker.unlock();
-    if (pc->remoteDescription().has_value()) {
-        try { pc->addRemoteCandidate(rtc::Candidate(obj["candidate"].toString().toStdString(), "0")); } catch(...) {}
-    } else { m_earlyCandidates[senderId].push_back(obj); }
+    
+    // Safe to add candidate now since pc is a shared_ptr and remote description exists
+    try { 
+        QString mid = obj["mid"].toString();
+        if (mid.isEmpty()) mid = "0";
+        pc->addRemoteCandidate(rtc::Candidate(obj["candidate"].toString().toStdString(), mid.toStdString())); 
+    } catch(...) {}
 }
 
 void WebRTCService::flushEarlyCandidatesFor(const QString& peerId) {
-    if (!m_earlyCandidates.contains(peerId)) return;
+    // [FIX] Hold mutex while accessing m_earlyCandidates to prevent race conditions
     QMutexLocker locker(&g_peerMutex);
+    if (!m_earlyCandidates.contains(peerId)) return;
     if (!m_peerConnections.contains(peerId)) return;
+    
     auto pc = m_peerConnections[peerId];
-    locker.unlock();
-    for (const auto& obj : m_earlyCandidates[peerId]) handleCandidate(obj);
+    // Copy candidates locally before releasing lock to avoid iterator invalidation
+    auto candidates = m_earlyCandidates[peerId];
     m_earlyCandidates.remove(peerId);
+    locker.unlock();
+    
+    // Process candidates with lock released to avoid deadlock
+    for (const auto& obj : candidates) {
+        // [FIX] Add candidate directly instead of calling handleCandidate to avoid re-locking
+        QString cand = obj["candidate"].toString();
+        QString mid = obj["mid"].toString();
+        if (mid.isEmpty()) mid = "0";
+        if (pc->remoteDescription().has_value()) {
+            try { pc->addRemoteCandidate(rtc::Candidate(cand.toStdString(), mid.toStdString())); } catch(...) {}
+        }
+    }
 }
 
 void WebRTCService::sendP2PMessage(const QString& remoteId, const QJsonObject& payload) {
@@ -718,7 +778,15 @@ void WebRTCService::sendP2PMessage(const QString& remoteId, const QJsonObject& p
     if (m_dataChannels.contains(remoteId) && m_dataChannels[remoteId] && m_dataChannels[remoteId]->isOpen()) {
         auto dc = m_dataChannels[remoteId];
         locker.unlock();
-        dc->send(QJsonDocument(payload).toJson(QJsonDocument::Compact).toStdString());
+        try {
+            dc->send(QJsonDocument(payload).toJson(QJsonDocument::Compact).toStdString());
+        } catch (const std::exception& e) {
+            qWarning() << "[P2P] Failed to send message to" << remoteId << ":" << e.what();
+        }
+    } else {
+        // [FIX] Log when message cannot be sent - helps debug sync issues
+        QString msgType = payload["type"].toString();
+        qWarning() << "[P2P] Cannot send message to" << remoteId << "- channel not open. Type:" << msgType;
     }
 }
 
@@ -774,22 +842,40 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
     else if (type == "invite-accept") {
         QString groupName = obj["group"].toString(); 
         if (groupName.isEmpty() && m_pendingInvites.contains(remoteId)) groupName = m_pendingInvites[remoteId];
+        
+        qDebug() << "[P2P] Received invite-accept from" << remoteId << "for group" << groupName;
+        
         if (!groupName.isEmpty()) {
             QMutexLocker locker(&g_peerMutex);
-            if(m_pendingKeys.count(remoteId) && m_pendingEntries.count(remoteId)) {
+            
+            // [FIX] Check if we have pending invite first, then check for data
+            bool hasPendingInvite = m_pendingInvites.contains(remoteId);
+            bool hasPendingKey = m_pendingKeys.count(remoteId) > 0;
+            bool hasPendingEntries = m_pendingEntries.count(remoteId) > 0;
+            
+            qDebug() << "[P2P] Pending state - invite:" << hasPendingInvite 
+                     << "key:" << hasPendingKey << "entries:" << hasPendingEntries;
+            
+            if (hasPendingInvite && hasPendingKey) {
                 auto k = m_pendingKeys[remoteId];
-                auto e = m_pendingEntries[remoteId];
+                auto e = hasPendingEntries ? m_pendingEntries[remoteId] : std::vector<CipherMesh::Core::VaultEntry>{};
                 std::string mList = m_pendingMembers.value(remoteId, "[]").toStdString();
+                
+                qDebug() << "[P2P] Sending group data - key size:" << k.size() << "entries:" << e.size();
+                
                 locker.unlock();
-                QTimer::singleShot(200, this, [this, remoteId, groupName, k, e, mList]() {
-                    sendGroupData(remoteId.toStdString(), groupName.toStdString(), k, e, mList);
-                });
+                // [FIX] Send immediately instead of using timer delay which can cause issues
+                sendGroupData(remoteId.toStdString(), groupName.toStdString(), k, e, mList);
                 locker.relock();
+                
                 // [FIX] IDEMPOTENCY: Clear pending data so we don't send again if we receive duplicate accept
                 m_pendingKeys.erase(remoteId); 
                 m_pendingEntries.erase(remoteId);
                 m_pendingMembers.remove(remoteId);
+            } else {
+                qWarning() << "[P2P] Missing pending data for" << remoteId << "- cannot send group data";
             }
+            
             if (m_pendingInvites.remove(remoteId) > 0) {
                  if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), true);
             }

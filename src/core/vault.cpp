@@ -11,12 +11,15 @@
 #include <algorithm>
 #include <iomanip>
 #include <ctime>
+#include <chrono>
 
 #ifdef __ANDROID__
     #include <android/log.h>
     #define LOG_DEBUG(msg) __android_log_print(ANDROID_LOG_DEBUG, "CipherMesh_Core", "%s", std::string(msg).c_str())
+    #define LOGW(msg) __android_log_print(ANDROID_LOG_WARN, "CipherMesh_Core", "%s", std::string(msg).c_str())
 #else
     #define LOG_DEBUG(msg) std::cout << "[CORE_DEBUG] " << msg << std::endl
+    #define LOGW(msg) std::cerr << "[CORE_WARN] " << msg << std::endl
 #endif
 
 #ifdef __ANDROID__
@@ -197,6 +200,7 @@ void Vault::addEncryptedEntry(const VaultEntry& entry, const std::string& base64
         auto existing = m_db->getEntriesForGroup(m_activeGroupId);
         for (const auto& e : existing) {
             if (e.uuid == temp.uuid) {
+                LOG_DEBUG("Entry with UUID " + temp.uuid + " already exists, skipping");
                 return; // Entry already exists, skip to prevent duplicates
             }
         }
@@ -205,8 +209,15 @@ void Vault::addEncryptedEntry(const VaultEntry& entry, const std::string& base64
         if(!base64Ciphertext.empty()) {
             encryptedBlob = base64DecodeInternal(base64Ciphertext);
         }
+        
+        LOG_DEBUG("Adding encrypted entry: " + temp.title + " uuid: " + temp.uuid + " password blob size: " + std::to_string(encryptedBlob.size()));
+        
         m_db->storeEntry(m_activeGroupId, temp, encryptedBlob);
-    } catch (...) {}
+    } catch (const std::exception& ex) {
+        LOG_DEBUG("Error adding encrypted entry: " + std::string(ex.what()));
+    } catch (...) {
+        LOG_DEBUG("Unknown error adding encrypted entry");
+    }
 }
 
 bool Vault::loadVault(const std::string& path, const std::string& masterPassword) {
@@ -371,20 +382,35 @@ void Vault::handleSyncAck(int jobId) {
 }
 
 int Vault::findGroupIdForSync(const std::string& remoteGroupName, const std::string& senderId) {
+    LOG_DEBUG("findGroupIdForSync: looking for group '" + remoteGroupName + "' from sender '" + senderId + "'");
+    
     int gid = m_db->getGroupId(remoteGroupName);
     if (gid != -1) {
         auto members = m_db->getGroupMembers(gid);
-        for (const auto& m : members) { if (m.userId == senderId) return gid; }
+        for (const auto& m : members) { 
+            if (m.userId == senderId) {
+                LOG_DEBUG("findGroupIdForSync: found exact match group id " + std::to_string(gid));
+                return gid; 
+            }
+        }
     }
     std::vector<std::string> allGroups = m_db->getAllGroupNames();
     for (const auto& localName : allGroups) {
         if (localName.find(remoteGroupName) == 0) {
             int candidateId = m_db->getGroupId(localName);
             auto members = m_db->getGroupMembers(candidateId);
-            for (const auto& m : members) { if (m.userId == senderId) return candidateId; }
+            for (const auto& m : members) { 
+                if (m.userId == senderId) {
+                    LOG_DEBUG("findGroupIdForSync: found prefixed match '" + localName + "' id " + std::to_string(candidateId));
+                    return candidateId; 
+                }
+            }
         }
     }
-    return m_db->getGroupId(remoteGroupName);
+    
+    int fallbackId = m_db->getGroupId(remoteGroupName);
+    LOG_DEBUG("findGroupIdForSync: fallback to exact name match, id " + std::to_string(fallbackId));
+    return fallbackId;
 }
 
 void Vault::handleIncomingSync(const std::string& senderId, const std::string& payload) {
@@ -398,20 +424,24 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         // Check message type first for initial group transfer
         std::string msgType = getJsonString(payload, "type");
         
-        // Handle initial group transfer types (from P2P sharing)
+        LOG_DEBUG("handleIncomingSync: type='" + msgType + "' from sender='" + senderId + "'");
+        
         // Handle initial group transfer types (from P2P sharing)
         if (msgType == "group-data") {
             std::string groupName = getJsonString(payload, "group");
             std::string keyBase64 = getJsonString(payload, "key");
             
+            LOG_DEBUG("group-data: groupName='" + groupName + "' keyLength=" + std::to_string(keyBase64.length()));
+            
             // [FIX] Handle collisions (e.g. "Personal") by renaming
             std::string localGroup = groupName;
             if (groupExists(localGroup)) {
+                 LOG_DEBUG("Group '" + localGroup + "' already exists, checking for sender membership");
                  // Check if we already have this specific group from this sender
                  int existingId = findGroupIdForSync(groupName, senderId);
                  if (existingId != -1 && existingId != getGroupId(localGroup)) {
                      // We already have a mapped group, ignore creation or update key?
-                     // For now, ignore creation if exists.
+                     LOG_DEBUG("Found existing mapped group id " + std::to_string(existingId) + ", skipping creation");
                      return;
                  }
                  
@@ -423,22 +453,29 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                      uniqueName = baseName + " " + std::to_string(counter++);
                  }
                  localGroup = uniqueName;
+                 LOG_DEBUG("Creating group with unique name: '" + localGroup + "'");
             }
 
             if (!groupExists(localGroup) && !keyBase64.empty()) {
                 std::vector<unsigned char> key = base64DecodeInternal(keyBase64);
+                LOG_DEBUG("Adding group '" + localGroup + "' with key size " + std::to_string(key.size()));
                 addGroup(localGroup, key, senderId); // Set sender as owner
                 
                 // [FIX] Add sender as MEMBER so findGroupIdForSync can find this group later for entries
                 addGroupMember(localGroup, senderId, "owner", "accepted");
                 addGroupMember(localGroup, getUserId(), "member", "accepted");
                 
+                LOG_DEBUG("Group created successfully with members added");
                 notifySync("groups-updated", localGroup);
+            } else {
+                LOG_DEBUG("Skipping group creation - exists:" + std::to_string(groupExists(localGroup)) + " keyEmpty:" + std::to_string(keyBase64.empty()));
             }
             return;
         }
         else if (msgType == "entry-data") {
             std::string remoteGroupName = getJsonString(payload, "group");
+            
+            LOG_DEBUG("Received entry-data for group '" + remoteGroupName + "' from sender '" + senderId + "'");
             
             // [FIX] Resolve local group name using sender ID
             std::string groupName = remoteGroupName;
@@ -449,11 +486,19 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                 for(const auto& n : names) {
                     if (m_db->getGroupId(n) == gid) { groupName = n; break; }
                 }
+                LOG_DEBUG("Resolved to local group '" + groupName + "' with id " + std::to_string(gid));
             } else {
-                if (!groupExists(groupName)) return;
+                LOG_DEBUG("Could not find group via sender lookup, checking exact name");
+                if (!groupExists(groupName)) {
+                    LOG_DEBUG("Group '" + groupName + "' does not exist, skipping entry");
+                    return;
+                }
             }
             
-            if (!groupExists(groupName)) return;
+            if (!groupExists(groupName)) {
+                LOG_DEBUG("Group '" + groupName + "' still does not exist after lookup, skipping entry");
+                return;
+            }
             
             VaultEntry e;
             e.uuid = getJsonString(payload, "uuid");
@@ -464,6 +509,8 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
             e.totpSecret = getJsonString(payload, "totpSecret");
             
             std::string encPass = getJsonString(payload, "password");
+            
+            LOG_DEBUG("Entry details - uuid:" + e.uuid + " title:" + e.title + " password length:" + std::to_string(encPass.length()));
             
             // Parse locations array from JSON
             size_t locPos = payload.find("\"locations\"");
@@ -490,9 +537,21 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                 e.locations.push_back(Location(-1, "url", e.url));
             }
             
+            // [FIX] Save and restore the current active group context to avoid side effects
+            int savedGroupId = m_activeGroupId;
+            std::string savedGroupName = m_activeGroupName;
+            std::vector<unsigned char> savedGroupKey = m_activeGroupKey_RAM;
+            
             if (setActiveGroup(groupName)) {
                 addEncryptedEntry(e, encPass);
                 notifySync("entry-updated", groupName);
+            }
+            
+            // [FIX] Restore previous active group if one was active
+            if (savedGroupId != -1 && !savedGroupName.empty()) {
+                m_activeGroupId = savedGroupId;
+                m_activeGroupName = savedGroupName;
+                m_activeGroupKey_RAM = savedGroupKey;
             }
             return;
         }
