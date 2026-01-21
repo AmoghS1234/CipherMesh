@@ -447,88 +447,24 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         triggerJavaRefresh();
     };
 
-    // [FIX] Updated lambda signature to match DataCallback (sender, message)
+    // [FIX] Route all group data through the core handleIncomingSync function
+    // This ensures consistent behavior between Android and Desktop, and proper
+    // active group context management
     g_p2p->onGroupDataReceived = [&](std::string senderId, std::string json) {
         std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
         if (!g_vault) return;
 
-        std::string type = extractJsonValueJNI(json, "type");
-        std::string remoteGroup = extractJsonValueJNI(json, "group");
-
-        // [FIX] IDEMPOTENCY CHECK
-        std::string mappingKey = senderId + "|" + remoteGroup;
-        std::string localGroup = remoteGroup;
+        LOGI("onGroupDataReceived from %s", senderId.c_str());
         
-        if (g_groupMappings.count(mappingKey)) {
-             localGroup = g_groupMappings[mappingKey];
-        } else {
-             if (type == "group-data" && g_vault->groupExists(remoteGroup)) {
-                 std::string uniqueName = remoteGroup + " (from " + senderId + ")";
-                 int counter = 1;
-                 std::string baseName = uniqueName;
-                 while (g_vault->groupExists(uniqueName)) {
-                     uniqueName = baseName + " " + std::to_string(counter++);
-                 }
-                 localGroup = uniqueName;
-                 g_groupMappings[mappingKey] = localGroup;
-             }
+        // Use the core vault's handleIncomingSync for consistent behavior
+        try {
+            g_vault->handleIncomingSync(senderId, json);
+        } catch (const std::exception& ex) {
+            LOGE("Error handling group data: %s", ex.what());
+        } catch (...) {
+            LOGE("Unknown error handling group data");
         }
-
-        if (type == "group-data") {
-            std::string keyBase64 = extractJsonValueJNI(json, "key");
-            std::vector<unsigned char> key = decodeBase64(keyBase64);
-            
-            if (!g_vault->groupExists(localGroup)) {
-                g_vault->addGroup(localGroup, key, senderId);
-                g_vault->addGroupMember(localGroup, g_vault->getUserId(), "member", "accepted");
-                LOGI("Imported Group: %s (Mapped from %s)", localGroup.c_str(), remoteGroup.c_str());
-            } else {
-                LOGI("Group %s already exists, skipping creation.", localGroup.c_str());
-            }
-        }
-        else if (type == "entry-data") {
-            CipherMesh::Core::VaultEntry e;
-            e.uuid = extractJsonValueJNI(json, "uuid");  // Extract UUID for deduplication
-            e.title = extractJsonValueJNI(json, "title");
-            e.username = extractJsonValueJNI(json, "username");
-            e.notes = extractJsonValueJNI(json, "notes");
-            e.url = extractJsonValueJNI(json, "url");
-            e.totpSecret = extractJsonValueJNI(json, "totpSecret");
-            
-            std::string encPass = extractJsonValueJNI(json, "password");
-            if (!e.url.empty()) {
-                e.locations.push_back(CipherMesh::Core::Location(-1, "url", e.url));
-            }
-
-            if (g_vault->setActiveGroup(localGroup)) {
-                g_vault->addEncryptedEntry(e, encPass);
-                LOGI("Imported Entry: %s into %s", e.title.c_str(), localGroup.c_str());
-            } else {
-                LOGE("Failed to set active group %s", localGroup.c_str());
-            }
-        }
-        else if (type == "member-list") {
-            LOGI("Importing Member List for: %s", localGroup.c_str());
-            size_t pos = json.find("\"members\":");
-            if (pos != std::string::npos) {
-                size_t arrayStart = json.find('[', pos);
-                if (arrayStart != std::string::npos) {
-                    size_t objStart = arrayStart;
-                    while ((objStart = json.find('{', objStart)) != std::string::npos) {
-                        size_t objEnd = json.find('}', objStart);
-                        if (objEnd == std::string::npos) break;
-                        
-                        std::string obj = json.substr(objStart, objEnd - objStart + 1);
-                        std::string uid = extractJsonValueJNI(obj, "userId");
-                        std::string role = extractJsonValueJNI(obj, "role");
-                        std::string status = extractJsonValueJNI(obj, "status");
-                        
-                        if (!uid.empty()) g_vault->addGroupMember(localGroup, uid, role, status);
-                        objStart = objEnd + 1;
-                    }
-                }
-            }
-        }
+        
         triggerJavaRefresh();
     };
 }

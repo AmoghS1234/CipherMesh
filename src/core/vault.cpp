@@ -562,7 +562,7 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         }
         
         // 1. Always handle ACKs immediately
-        if (payload.find("\"type\":\"sync-ack\"") != std::string::npos) {
+        if (msgType == "sync-ack") {
             if (jobId > 0) handleSyncAck((int)jobId);
             return;
         }
