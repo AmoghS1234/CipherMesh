@@ -14,6 +14,7 @@
 
 #define TAG "CipherMesh-Native"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 #define JNI_CATCH_RETURN(retval) \
@@ -452,7 +453,10 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
     // active group context management
     g_p2p->onGroupDataReceived = [&](std::string senderId, std::string json) {
         std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
-        if (!g_vault) return;
+        if (!g_vault || g_vault->isLocked()) {
+            LOGW("Vault is null or locked, cannot process group data");
+            return;
+        }
 
         LOGI("onGroupDataReceived from %s", senderId.c_str());
         

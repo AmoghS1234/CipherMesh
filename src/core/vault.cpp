@@ -436,28 +436,29 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
             
             // [FIX] Handle collisions (e.g. "Personal") by renaming
             std::string localGroup = groupName;
+            
+            // First, check if we already have this group from this sender
+            int existingId = findGroupIdForSync(groupName, senderId);
+            if (existingId != -1) {
+                // We already have a group from this sender - skip creating a new one
+                LOG_DEBUG("Already have group from sender " + senderId + " (id=" + std::to_string(existingId) + "), skipping creation");
+                return;
+            }
+            
+            // If a group with the same name exists but isn't from this sender, create a unique name
             if (groupExists(localGroup)) {
-                 LOG_DEBUG("Group '" + localGroup + "' already exists, checking for sender membership");
-                 // Check if we already have this specific group from this sender
-                 int existingId = findGroupIdForSync(groupName, senderId);
-                 if (existingId != -1 && existingId != getGroupId(localGroup)) {
-                     // We already have a mapped group, ignore creation or update key?
-                     LOG_DEBUG("Found existing mapped group id " + std::to_string(existingId) + ", skipping creation");
-                     return;
-                 }
-                 
-                 // Create new unique name
-                 std::string uniqueName = localGroup + " (from " + senderId + ")";
-                 int counter = 1;
-                 std::string baseName = uniqueName;
-                 while (groupExists(uniqueName)) {
-                     uniqueName = baseName + " " + std::to_string(counter++);
-                 }
-                 localGroup = uniqueName;
-                 LOG_DEBUG("Creating group with unique name: '" + localGroup + "'");
+                LOG_DEBUG("Group '" + localGroup + "' already exists, creating unique name");
+                std::string uniqueName = localGroup + " (from " + senderId + ")";
+                int counter = 1;
+                std::string baseName = uniqueName;
+                while (groupExists(uniqueName)) {
+                    uniqueName = baseName + " " + std::to_string(counter++);
+                }
+                localGroup = uniqueName;
+                LOG_DEBUG("Will create group with unique name: '" + localGroup + "'");
             }
 
-            if (!groupExists(localGroup) && !keyBase64.empty()) {
+            if (!keyBase64.empty()) {
                 std::vector<unsigned char> key = base64DecodeInternal(keyBase64);
                 LOG_DEBUG("Adding group '" + localGroup + "' with key size " + std::to_string(key.size()));
                 addGroup(localGroup, key, senderId); // Set sender as owner
@@ -469,7 +470,7 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                 LOG_DEBUG("Group created successfully with members added");
                 notifySync("groups-updated", localGroup);
             } else {
-                LOG_DEBUG("Skipping group creation - exists:" + std::to_string(groupExists(localGroup)) + " keyEmpty:" + std::to_string(keyBase64.empty()));
+                LOG_DEBUG("Skipping group creation - keyEmpty:" + std::to_string(keyBase64.empty()));
             }
             return;
         }
