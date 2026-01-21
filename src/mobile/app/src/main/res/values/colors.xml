@@ -55,4 +55,8 @@
     <color name="vibrant_text_primary">#4A148C</color>
     <color name="vibrant_text_secondary">#7B1FA2</color>
     <color name="vibrant_divider">#E1BEE7</color>
+
+    <color name="status_connected">#4CAF50</color>
+    <color name="status_connecting">#FFC107</color>
+    <color name="status_disconnected">#F44336</color>
 </resources>

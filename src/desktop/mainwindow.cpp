@@ -130,13 +130,17 @@ MainWindow::MainWindow(CipherMesh::Core::Vault* vault, QWidget *parent)
         }, Qt::QueuedConnection);
     };
     
-    p2pWorker->onGroupDataReceived = [this](const std::string& senderId,
-                                            const std::string& groupName, 
-                                            const std::vector<unsigned char>& key, 
-                                            const std::vector<CipherMesh::Core::VaultEntry>& entries) 
-    {
-        QMetaObject::invokeMethod(this, [this, senderId, groupName, key, entries]() {
-            handleGroupData(QString::fromStdString(senderId), QString::fromStdString(groupName), key, entries);
+    p2pWorker->onGroupDataReceived = [this](const std::string& senderId, const std::string& json) {
+        // [FIX] Forward to Vault directly via handleIncomingSync
+        QMetaObject::invokeMethod(this, [this, senderId, json]() {
+             if(m_vault) {
+                 m_vault->handleIncomingSync(senderId, json);
+                 // Refresh UI incase of updates
+                 loadGroups();
+                 if (m_groupListWidget->currentItem()) {
+                     onGroupSelected(m_groupListWidget->currentItem());
+                 }
+             }
         }, Qt::QueuedConnection);
     };
     
@@ -146,20 +150,14 @@ MainWindow::MainWindow(CipherMesh::Core::Vault* vault, QWidget *parent)
         }, Qt::QueuedConnection);
     };
 
-    p2pWorker->onSyncMessage = [this](const std::string& message) {
-        // [FIX] Handle sync messages over data channel
-        if (!m_vault) return;
-        QMetaObject::invokeMethod(this, [this, message]() {
-            if (!m_vault) return; // Re-check after queued execution
+    p2pWorker->onSyncMessage = [this](const std::string& sender, const std::string& message) {
+        QMetaObject::invokeMethod(this, [this, sender, message]() {
+            if (!m_vault) return;
             try {
-                // Parse message to extract sender
-                QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(message).toUtf8());
-                if (!doc.isNull() && doc.isObject()) {
-                    QJsonObject obj = doc.object();
-                    QString sender = obj["sender"].toString();
-                    if (!sender.isEmpty()) {
-                        m_vault->handleIncomingSync(sender.toStdString(), message);
-                    }
+                m_vault->handleIncomingSync(sender, message);
+                // We could selectively refresh, but for now reload active view
+                if (m_groupListWidget->currentItem()) {
+                    onGroupSelected(m_groupListWidget->currentItem());
                 }
             } catch (const std::exception& e) {
                 qWarning() << "Error handling sync message:" << e.what();
@@ -191,7 +189,7 @@ MainWindow::MainWindow(CipherMesh::Core::Vault* vault, QWidget *parent)
     qDebug() << "[MAIN] Starting P2P";
     m_p2pThread->start();
     
-    m_p2pService = p2pWorker;
+    m_p2pService = p2pWorker; // Works due to inheritance
 
     connect(m_p2pThread, &QThread::finished, p2pWorker, &QObject::deleteLater);
     connect(this, &QObject::destroyed, m_p2pThread, &QThread::quit);
@@ -351,81 +349,14 @@ void MainWindow::handlePeerOnline(const QString& userId) {
     }
 }
 
+// NOTE: This logic is now mostly handled by Vault::handleIncomingSync
+// but kept for legacy invite flow if needed.
 void MainWindow::handleGroupData(const QString& senderId,
                                  const QString& groupName, 
                                  const std::vector<unsigned char>& encryptedKeyData, 
                                  const std::vector<CipherMesh::Core::VaultEntry>& entries)
 {
-    if (!m_vault) return;
-
-    std::vector<unsigned char> finalKey;
-    if (encryptedKeyData.size() == 32) {
-        finalKey = encryptedKeyData;
-    } 
-    else {
-        try {
-            std::string base64Ciphertext(encryptedKeyData.begin(), encryptedKeyData.end());
-            std::string decryptedKeyStr = m_vault->decryptIncomingKey(base64Ciphertext);
-            finalKey.assign(decryptedKeyStr.begin(), decryptedKeyStr.end());
-            qDebug() << "Successfully decrypted group key. Size:" << finalKey.size();
-        } 
-        catch (const std::exception& e) {
-            QMessageBox::critical(this, "Import Failed", 
-                "Could not decrypt the group key from " + senderId + ".\nError: " + e.what());
-            return;
-        }
-    }
-
-    int inviteIdToDelete = -1;
-    auto invites = m_vault->getPendingInvites();
-    for(const auto& inv : invites) {
-        if (inv.senderId == senderId.toStdString() && inv.groupName == groupName.toStdString()) {
-            inviteIdToDelete = inv.id;
-            break;
-        }
-    }
-
-    // [FIX] Use mobile's naming convention: "groupname (from userid)"
-    std::string finalName = groupName.toStdString();
-    if (m_vault->groupExists(finalName)) {
-        finalName = groupName.toStdString() + " (from " + senderId.toStdString() + ")";
-    }
-    int counter = 1;
-    std::string baseCollisionName = finalName;
-    while (m_vault->groupExists(finalName)) {
-        finalName = baseCollisionName + " " + std::to_string(counter++);
-    }
-
-    // [FIX] Pass senderId as ownerId to match mobile implementation
-    if (m_vault->addGroup(finalName, finalKey, senderId.toStdString())) {
-        m_vault->importGroupEntries(finalName, entries);
-        
-        if (inviteIdToDelete != -1) {
-            m_vault->deletePendingInvite(inviteIdToDelete);
-            if (m_currentSelectedInviteId == inviteIdToDelete) {
-                m_currentSelectedInviteId = -1;
-                m_detailsStack->setCurrentIndex(0); 
-            }
-        }
-        
-        loadGroups();
-        
-        for (int i=0; i<m_groupListWidget->count(); i++) {
-            // [FIX] Check real data, not display text
-            QString realName = m_groupListWidget->item(i)->data(Qt::UserRole).toString();
-            if (realName == QString::fromStdString(finalName)) {
-                m_groupListWidget->setCurrentRow(i);
-                break;
-            }
-        }
-
-        QMessageBox::information(this, "Transfer Complete", 
-            QString("Group <b>%1</b> has been imported successfully with %2 entries.")
-            .arg(QString::fromStdString(finalName))
-            .arg(entries.size()));
-    } else {
-        QMessageBox::critical(this, "Import Failed", "Could not create group. Data transfer failed.");
-    }
+   // Stub - handled by Core in new architecture
 }
 
 void MainWindow::onAcceptInviteClicked() {
@@ -840,11 +771,40 @@ void MainWindow::updateWindowTitle()
     setWindowTitle(QString("CipherMesh - %1 - %2").arg(lockStatus, m_currentUserId));
 }
 
+void MainWindow::onVaultSyncEvent(const QString& type, const QString& payload) {
+    qDebug() << "[UI] Sync Event Received:" << type;
+
+    if (type == "invites-updated") {
+        loadGroups();
+    } 
+    else if (type == "groups-updated" || type == "group-split" || type == "group-deleted" || type == "members-updated") {
+        QString current = getSelectedGroupName();
+        loadGroups();
+        
+        for(int i=0; i<m_groupListWidget->count(); ++i) {
+            if(m_groupListWidget->item(i)->data(Qt::UserRole).toString() == current) {
+                m_groupListWidget->setCurrentRow(i);
+                break;
+            }
+        }
+    }
+    else if (type == "entry-updated" || type == "entry-deleted") {
+        QString currentGroup = getSelectedGroupName();
+        if (payload.isEmpty() || payload == currentGroup) {
+            onGroupSelected(m_groupListWidget->currentItem());
+        }
+    }
+    else if (type == "invite-sent") {
+        loadGroups();
+    }
+}
+
 void MainWindow::postUnlockInit()
 {
     qDebug() << "[MAIN] postUnlockInit started";
     updateWindowTitle();
     
+    // 1. Setup P2P
     if (m_p2pService) {
         WebRTCService* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
         if (webrtcService && m_vault) {
@@ -852,20 +812,26 @@ void MainWindow::postUnlockInit()
             webrtcService->setIdentityPublicKey(myPubKey);
             QMetaObject::invokeMethod(webrtcService, "setAuthenticated", Qt::QueuedConnection, Q_ARG(bool, true));
             
-            // [FIX] Set up P2P send callback for sync over data channel
             m_vault->setP2PSendCallback([this, webrtcService](const std::string& targetUser, const std::string& message) {
-                if (!webrtcService) return; // Safety check
-                // Send sync messages via data channel instead of WebSocket
+                if (!webrtcService) return;
                 QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(message).toUtf8());
                 if (!doc.isNull() && doc.isObject()) {
                     QJsonObject obj = doc.object();
                     QMetaObject::invokeMethod(webrtcService, [webrtcService, targetUser, obj]() {
-                        if (!webrtcService) return; // Double check after queued execution
                         webrtcService->sendP2PMessage(QString::fromStdString(targetUser), obj);
                     }, Qt::QueuedConnection);
                 }
             });
         }
+    }
+
+    // 2. Wire up the Sync Callback
+    if (m_vault) {
+        m_vault->setSyncCallback([this](const std::string& type, const std::string& payload) {
+            QMetaObject::invokeMethod(this, "onVaultSyncEvent", Qt::QueuedConnection,
+                                      Q_ARG(QString, QString::fromStdString(type)),
+                                      Q_ARG(QString, QString::fromStdString(payload)));
+        });
     }
     
     qDebug() << "[MAIN] loading Groups";
@@ -880,7 +846,6 @@ void MainWindow::postUnlockInit()
     qDebug() << "[MAIN] postUnlockInit finished";
 }
 
-// [FIX] Store RAW name in Qt::UserRole, Display Fancy Name
 void MainWindow::loadGroups()
 {
     m_groupListWidget->clear();
@@ -901,10 +866,7 @@ void MainWindow::loadGroups()
             QString text = QString("%1 (Invite)").arg(rawName);
             QListWidgetItem* item = new QListWidgetItem(inviteIcon, text);
             item->setForeground(QColor("#ff5555")); 
-            
-            // [FIX] Store RAW name for logic
             item->setData(Qt::UserRole, rawName);
-            
             m_groupListWidget->addItem(item);
             m_pendingInviteMap[item] = invite.id; 
         }
@@ -913,7 +875,6 @@ void MainWindow::loadGroups()
         for (const std::string& groupName : groups) {
             QString roleLabel;
             
-            // [FIX] Get current user's actual role in the group from members table
             try {
                 int groupId = m_vault->getGroupId(groupName);
                 std::string myId = m_vault->getUserId();
@@ -922,38 +883,26 @@ void MainWindow::loadGroups()
                 bool found = false;
                 for (const auto& member : members) {
                     if (member.userId == myId) {
-                        if (member.role == "owner") {
-                            roleLabel = " (Owner)";
-                        } else if (member.role == "admin") {
-                            roleLabel = " (Admin)";
-                        } else {
-                            roleLabel = " (Member)";
-                        }
+                        if (member.role == "owner") roleLabel = " (Owner)";
+                        else if (member.role == "admin") roleLabel = " (Admin)";
+                        else roleLabel = " (Member)";
                         found = true;
                         break;
                     }
                 }
                 
                 if (!found) {
-                    // Fallback if not found in members table
                     std::string ownerId = m_vault->getGroupOwner(groupName);
-                    if (ownerId.empty() || ownerId == myId) {
-                        roleLabel = " (Owner)";
-                    } else {
-                        roleLabel = " (Member)";
-                    }
+                    if (ownerId.empty() || ownerId == myId) roleLabel = " (Owner)";
+                    else roleLabel = " (Member)";
                 }
             } catch (...) {
-                // Fallback on error
                 roleLabel = "";
             }
             
             QString displayName = QString::fromStdString(groupName) + roleLabel;
             QListWidgetItem* item = new QListWidgetItem(groupIcon, displayName);
-            
-            // [FIX] Store RAW name for logic
             item->setData(Qt::UserRole, QString::fromStdString(groupName));
-            
             m_groupListWidget->addItem(item);
         }
     } catch (const std::exception& e) {
@@ -961,7 +910,6 @@ void MainWindow::loadGroups()
     }
 }
 
-// [FIX] Retrieve RAW name from Qt::UserRole
 void MainWindow::onGroupSelected(QListWidgetItem* current)
 {
     m_entryListWidget->clear();
@@ -994,10 +942,8 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
         return;
     }
 
-    // [FIX] Use stored data instead of parsing text
     QString groupNameQStr = current->data(Qt::UserRole).toString();
     if (groupNameQStr.isEmpty()) {
-        // Fallback for safety, though unlikely if loadGroups is correct
         groupNameQStr = current->text(); 
     }
     
@@ -1036,54 +982,92 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
     }
 }
 
-// [FIX] Retrieve RAW name from Qt::UserRole
 void MainWindow::onGroupContextMenuRequested(const QPoint &pos)
 {
     QListWidgetItem* item = m_groupListWidget->itemAt(pos);
     if (!item) return; 
     
+    // Ignore pending invites
     if (m_pendingInviteMap.contains(item)) return;
 
     m_groupListWidget->setCurrentItem(item);
-    
-    // [FIX] Use stored data
     QString groupName = item->data(Qt::UserRole).toString();
     
-    // [FIX] Check current user's role in the group (not just if they're the owner)
     bool isOwner = false;
-    try {
-        int groupId = m_vault->getGroupId(groupName.toStdString());
-        std::string myId = m_vault->getUserId();
-        auto members = m_vault->getGroupMembers(groupName.toStdString());
-        
-        for (const auto& member : members) {
-            if (member.userId == myId) {
-                isOwner = (member.role == "owner");
-                break;
+    
+    if (groupName == "Personal") {
+        isOwner = true;
+    } else {
+        try {
+            std::string myId = m_vault->getUserId();
+            auto members = m_vault->getGroupMembers(groupName.toStdString());
+            for (const auto& member : members) {
+                if (member.userId == myId) {
+                    isOwner = (member.role == "owner");
+                    break;
+                }
             }
+        } catch (...) {
+            isOwner = false;
         }
-    } catch (...) {
-        isOwner = false;
     }
     
     QMenu contextMenu(this);
     
-    // "Share Group" (Manage) only available to owner - matching mobile behavior
     if (isOwner) {
-        QAction* shareAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "Manage Group...");
+        QAction* renameAction = contextMenu.addAction(loadSvgIcon(g_pencilIconSvg, m_uiIconColor), "Rename Group...");
+        connect(renameAction, &QAction::triggered, this, [this, groupName]() {
+            bool ok;
+            QString newName = QInputDialog::getText(this, "Rename Group",
+                                                  "New Name for '" + groupName + "':", QLineEdit::Normal,
+                                                  groupName, &ok);
+            if (ok && !newName.isEmpty() && newName != groupName) {
+                if (m_vault->groupExists(newName.toStdString())) {
+                    QMessageBox::warning(this, "Error", "A group with this name already exists.");
+                    return;
+                }
+                
+                if (m_vault->renameGroup(groupName.toStdString(), newName.toStdString())) {
+                    loadGroups(); 
+                    for(int i=0; i<m_groupListWidget->count(); ++i) {
+                        if(m_groupListWidget->item(i)->data(Qt::UserRole).toString() == newName) {
+                            m_groupListWidget->setCurrentRow(i);
+                            break;
+                        }
+                    }
+                } else {
+                    QMessageBox::warning(this, "Error", "Failed to rename group.");
+                }
+            }
+        });
+
+        QAction* shareAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "Manage Group (Invite/Remove)...");
         connect(shareAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
+        
+        QAction* deleteAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Delete Group...");
+        connect(deleteAction, &QAction::triggered, this, &MainWindow::onDeleteGroupClicked);
+        
+        if (m_groupListWidget->count() <= 1 || groupName == "Personal") {
+            deleteAction->setEnabled(false);
+        }
+        
     } else {
-        // Members can view members list
         QAction* viewMembersAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "View Members...");
         connect(viewMembersAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
-    }
-    
-    QAction* deleteAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Delete Group...");
-
-    connect(deleteAction, &QAction::triggered, this, &MainWindow::onDeleteGroupClicked);
-
-    if (m_groupListWidget->count() <= 1 || groupName == "Personal") {
-        deleteAction->setEnabled(false);
+        
+        if (groupName != "Personal") {
+            contextMenu.addSeparator();
+            QAction* leaveAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Leave Group");
+            connect(leaveAction, &QAction::triggered, this, [this, groupName]() {
+                QMessageBox::StandardButton reply = QMessageBox::question(this, "Leave Group", 
+                    "Are you sure you want to leave '" + groupName + "'?\nYou will lose access to these passwords.",
+                    QMessageBox::Yes | QMessageBox::No);
+                
+                if (reply == QMessageBox::Yes) {
+                    m_vault->leaveGroup(groupName.toStdString());
+                }
+            });
+        }
     }
 
     contextMenu.exec(m_groupListWidget->mapToGlobal(pos));
@@ -1258,7 +1242,6 @@ int MainWindow::getSelectedEntryId()
     return it.value().id;
 }
 
-// [FIX] Return stored name for consistency
 QString MainWindow::getSelectedGroupName()
 {
     QListWidgetItem* currentItem = m_groupListWidget->currentItem();
@@ -1403,7 +1386,6 @@ void MainWindow::onNewGroupClicked()
                 if (m_vault->addGroup(groupName.toStdString())) {
                     loadGroups();
                     for (int i = 0; i < m_groupListWidget->count(); ++i) {
-                        // [FIX] Compare against stored name
                         if (m_groupListWidget->item(i)->data(Qt::UserRole).toString() == groupName) {
                             m_groupListWidget->setCurrentRow(i);
                             break;
@@ -1455,7 +1437,6 @@ void MainWindow::onDeleteGroupClicked()
         return;
     }
     
-    // [FIX] Check if user is owner before allowing deletion - check role in members table
     bool isOwner = false;
     try {
         int groupId = m_vault->getGroupId(groupName.toStdString());
@@ -1484,8 +1465,6 @@ void MainWindow::onDeleteGroupClicked()
         try {
             // [NEW] Before deleting, send individual copies to each member
             auto members = m_vault->getGroupMembers(groupName.toStdString());
-            std::vector<unsigned char> groupKey = m_vault->getGroupKey(groupName.toStdString());
-            std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(groupName.toStdString());
             std::string myId = m_vault->getUserId();
             
             for (const auto& member : members) {
@@ -1493,15 +1472,13 @@ void MainWindow::onDeleteGroupClicked()
                     // Send GROUP_SPLIT message to each member
                     if (m_p2pService) {
                         try {
-                            // Queue the split group data for this member
                             auto* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
                             if (webrtcService) {
-                                // Create a sync message to notify member about group deletion/split
                                 std::ostringstream splitMsg;
                                 splitMsg << "{\"type\":\"sync-payload\",\"sender\":\"" << myId << "\","
-                                        << "\"group\":\"" << groupName.toStdString() << "\","
-                                        << "\"op\":\"GROUP_SPLIT\",\"jobId\":0,"
-                                        << "\"data\":{}}";
+                                         << "\"group\":\"" << groupName.toStdString() << "\","
+                                         << "\"op\":\"GROUP_SPLIT\",\"jobId\":0,"
+                                         << "\"data\":{}}";
                                 webrtcService->sendP2PMessage(QString::fromStdString(member.userId), 
                                     QJsonDocument::fromJson(QString::fromStdString(splitMsg.str()).toUtf8()).object());
                                 
@@ -1704,32 +1681,16 @@ void MainWindow::handleDataRequested(const QString& requesterId, const QString& 
 
     try {
         std::vector<unsigned char> rawGroupKey = m_vault->getGroupKey(groupName.toStdString());
-        
         std::vector<unsigned char> encryptedKey = m_vault->encryptForUser(requesterPubKey.toStdString(), rawGroupKey);
-        
         std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(groupName.toStdString());
         
-        m_p2pService->sendGroupData(requesterId.toStdString(), groupName.toStdString(), encryptedKey, entries);
+        // [FIX] Fetch Members from Vault
+        std::string members = m_vault->exportGroupMembers(groupName.toStdString());
         
-        std::vector<CipherMesh::Core::GroupMember> members = m_vault->getGroupMembers(groupName.toStdString());
-        QJsonObject memberListMsg;
-        memberListMsg["type"] = "member-list";
-        memberListMsg["group"] = groupName;
-        QJsonArray membersArray;
-        for (const auto& member : members) {
-            QString memberStr = QString::fromStdString(member.userId + "|" + member.role + "|" + member.status);
-            membersArray.append(memberStr);
-        }
-        memberListMsg["members"] = membersArray;
-        
-        auto* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
-        if (webrtcService) {
-            webrtcService->sendP2PMessage(requesterId, memberListMsg);
-            qDebug() << "Sent member list with" << members.size() << "members to" << requesterId;
-        }
+        // [FIX] Pass 5 arguments (members included)
+        m_p2pService->sendGroupData(requesterId.toStdString(), groupName.toStdString(), encryptedKey, entries, members);
         
         CipherMesh::Core::Crypto::secureWipe(rawGroupKey);
-        
         qDebug() << "Successfully sent ENCRYPTED group data to" << requesterId;
     } catch (const std::exception& e) {
         qWarning() << "Error exporting data:" << e.what();
@@ -1861,7 +1822,8 @@ void MainWindow::updateRecentMenu() {
     }
     
     try {
-        auto recentEntries = m_vault->getRecentlyAccessedEntries(10);
+        int groupId = m_vault->getGroupId(currentGroup.toStdString());
+        auto recentEntries = m_vault->getRecentlyAccessedEntries(groupId, 10);
         
         if (recentEntries.empty()) {
             QAction* emptyAction = m_recentMenu->addAction("No recently accessed entries in this group");

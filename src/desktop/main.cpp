@@ -52,19 +52,6 @@ int main(int argc, char *argv[])
             // Vault is now unlocked. Ensure a User ID exists.
             std::string userId = vault.getUserId();
             
-            // If user ID doesn't exist (e.g., legacy DB or fresh setup glitch), generate one
-            if (userId.empty()) {
-                std::vector<unsigned char> randomBytes = CipherMesh::Core::Crypto::randomBytes(8);
-                std::string hexSuffix;
-                for (unsigned char byte : randomBytes) {
-                    char hex[3];
-                    snprintf(hex, sizeof(hex), "%02x", byte);
-                    hexSuffix += hex;
-                }
-                userId = "user_" + hexSuffix;
-                vault.setUserId(userId);
-            }
-            
             // Create MainWindow only once (or recreate if we want a fresh state)
             if (initialUnlock) {
                 // We pass &vault. The MainWindow can get the userId via vault->getUserId() if needed.

@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.graphics.PorterDuff
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
@@ -17,54 +18,60 @@ import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ListView
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.ActionBarDrawerToggle
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SearchView
 import androidx.appcompat.widget.Toolbar
+import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import com.ciphermesh.mobile.core.Vault
-import com.ciphermesh.mobile.p2p.P2PManager
-import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.ciphermesh.mobile.core.SignalingCallback
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.textfield.TextInputEditText
-import com.google.android.material.textfield.TextInputLayout
+import com.google.android.material.bottomsheet.BottomSheetDialog 
 import java.io.File
-import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import org.json.JSONObject
 
-class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener {
+class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener, SignalingCallback {
 
     companion object {
-        private val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
-        private const val ENTRY_DETAILS_PARTS_COUNT = 8
         private const val TAG = "HomeActivity"
+        private const val SIGNALING_URL = "wss://ciphermesh-signal-server.onrender.com"
     }
 
     private val vault = Vault()
+    
+    // UI Elements
     private lateinit var drawerLayout: DrawerLayout
     private lateinit var listView: ListView
     private lateinit var fabAdd: FloatingActionButton
     private lateinit var adapter: CustomAdapter
-    private lateinit var p2pManager: P2PManager
-    
     private lateinit var toggle: ActionBarDrawerToggle
     
+    // Signaling
+    private lateinit var client: OkHttpClient
+    private var webSocket: WebSocket? = null
+    
+    private var reconnectMenuItem: MenuItem? = null
+    private var currentConnectionState = ConnectionState.DISCONNECTED
+    private enum class ConnectionState { DISCONNECTED, CONNECTING, CONNECTED }
+
     private var isShowingGroups = true 
     private var currentGroup = "" 
     private var isGroupOwner = false 
-    
     private var allEntries = ArrayList<EntryModel>()
     
     private val clipboardHandler = Handler(Looper.getMainLooper())
@@ -73,135 +80,14 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private var isReceiverRegistered = false
     private val processingInvites = mutableSetOf<String>()
 
-    data class LocationData(var type: String, var value: String) {
-        override fun toString(): String = "[$type] $value"
-    }
-
-    // Helper data class for the dialog location list
-    data class TempLocation(val type: String, val value: String)
-
     private val refreshReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            refreshUI()
-        }
+        override fun onReceive(context: Context?, intent: Intent?) { refreshUI() }
     }
 
     fun refreshUI() {
         runOnUiThread {
             Log.d(TAG, "Refreshing UI triggered from Native")
-            if (isShowingGroups) {
-                loadGroups()
-            } else {
-                loadEntries()
-            }
-        }
-    }
-
-    private fun checkOwnership(groupName: String) {
-        if (groupName == "Personal") {
-            isGroupOwner = true
-            return
-        }
-        val ownerId = vault.getGroupOwner(groupName)
-        val myId = vault.getUserId()
-        isGroupOwner = (ownerId == myId)
-        Log.d(TAG, "Ownership Check: Group=$groupName, Owner=$ownerId, Me=$myId, IsOwner=$isGroupOwner")
-    }
-
-    private fun showGroupOptionsDialog(groupName: String) {
-        val options = if (isGroupOwner) {
-            arrayOf("Manage Group", "Delete Group")
-        } else {
-            arrayOf("Members", "Leave Group")
-        }
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle(groupName)
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showManageGroupDialog() 
-                    1 -> showDeleteGroupConfirmation(groupName)
-                }
-            }
-            .show()
-    }
-
-    private fun showEntryOptions(item: EntryModel) {
-        val dialog = BottomSheetDialog(this)
-        val view = layoutInflater.inflate(R.layout.bottom_sheet_entry_options, null)
-        dialog.setContentView(view)
-
-        view.findViewById<TextView>(R.id.sheetEntryTitle).text = item.title
-        view.findViewById<TextView>(R.id.sheetEntrySubtitle).text = item.subtitle
-
-        val fullData = vault.getEntryFullDetails(item.id)
-        val parts = fullData.split("|")
-        
-        val password = if (parts.size > 2) parts[2] else ""
-        val totpSecret = if (parts.size > 4) parts[4] else ""
-
-        view.findViewById<View>(R.id.actionCopyPassword).setOnClickListener {
-            if (password.isNotEmpty()) {
-                copyToClipboardSecure("Password", password, "Password copied to clipboard")
-            } else {
-                showToast("No password found or error decrypting")
-            }
-            dialog.dismiss()
-        }
-
-        val action2FA = view.findViewById<TextView>(R.id.actionCopyTOTP)
-        if (totpSecret.isNotEmpty()) {
-            action2FA.setOnClickListener {
-                val code = vault.generateTOTP(totpSecret)
-                
-                if (code == "000000" || code == "INV-KEY") {
-                    showToast("Error: Invalid 2FA Secret Key")
-                } else {
-                    copyToClipboardSecure("2FA Code", code, "2FA Code copied: $code")
-                }
-                dialog.dismiss()
-            }
-        } else {
-            action2FA.alpha = 0.4f
-            action2FA.setOnClickListener { showToast("No 2FA configured for this entry") }
-        }
-
-        view.findViewById<View>(R.id.actionEdit).setOnClickListener {
-            dialog.dismiss()
-            showCreateEntryDialog(editMode = true, entryId = item.id)
-        }
-
-        view.findViewById<View>(R.id.actionDelete).setOnClickListener {
-            dialog.dismiss()
-            MaterialAlertDialogBuilder(this)
-                .setTitle("Delete Entry")
-                .setMessage("Are you sure you want to permanently delete '${item.title}'?")
-                .setPositiveButton("Delete") { _, _ ->
-                    if (vault.deleteEntry(item.id)) {
-                        showToast("Entry deleted")
-                        loadEntries()
-                    } else {
-                        showToast("Failed to delete entry")
-                    }
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        }
-
-        dialog.show()
-    }
-
-    private fun setupListClick() {
-        listView.setOnItemClickListener { _, _, position, _ ->
-            val item = adapter.getItem(position) ?: return@setOnItemClickListener
-            
-            if (item.id > 0) {
-                showEntryOptions(item)
-            } else if (item.id == 0) {
-                currentGroup = item.title
-                isShowingGroups = false
-                loadEntries()
-            }
+            if (isShowingGroups) loadGroups() else loadEntries()
         }
     }
 
@@ -220,98 +106,19 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         vault.init(dbPath)
         vault.setActivityContext(this)
 
+        vault.registerSignalingCallback(this)
+
         if (vault.isLocked()) {
             Toast.makeText(this, "Session Expired", Toast.LENGTH_SHORT).show()
-            val intent = Intent(this, MainActivity::class.java)
-            startActivity(intent)
+            startActivity(Intent(this, MainActivity::class.java))
             finish()
             return
         }
 
-        vault.initP2P("wss://ciphermesh-signal-server.onrender.com")
+        client = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build()
 
-        val toolbar = findViewById<Toolbar>(R.id.toolbar)
-        setSupportActionBar(toolbar)
+        setupUI()
         
-        drawerLayout = findViewById(R.id.drawer_layout)
-        val navView = findViewById<NavigationView>(R.id.nav_view)
-        
-        toggle = ActionBarDrawerToggle(this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close)
-        drawerLayout.addDrawerListener(toggle)
-        toggle.syncState()
-        
-        navView.setNavigationItemSelectedListener(this)
-
-        val headerView = navView.getHeaderView(0)
-        val userText = headerView.findViewById<TextView>(R.id.nav_user_name)
-        val userId = vault.getUserId()
-        userText.text = userId
-        userText.setOnClickListener {
-            copyToClipboardSecure("User ID", userId, "ID Copied")
-        }
-
-        listView = findViewById(R.id.listViewEntries)
-        fabAdd = findViewById(R.id.fabAdd)
-        listView.divider = ColorDrawable(Color.TRANSPARENT)
-        listView.dividerHeight = 16 
-        
-        p2pManager = P2PManager(this, vault)
-        p2pManager.connect()
-
-        adapter = CustomAdapter(this, arrayListOf())
-        listView.adapter = adapter
-        setupListClick()
-
-        listView.setOnItemClickListener { _, _, position, _ ->
-            val entry = adapter.getItem(position) ?: return@setOnItemClickListener
-            
-            if (isShowingGroups) {
-                if (entry.subtitle == "Pending" && entry.id < -1000) {
-                    val inviteId = -(entry.id + 1000)
-                    val regex = """^(.+) \(Invite from (.+)\)$""".toRegex()
-                    val match = regex.find(entry.title ?: "")
-                    if (match != null) {
-                        showAcceptRejectInviteDialog(inviteId, match.groupValues[2], match.groupValues[1])
-                    }
-                    return@setOnItemClickListener
-                }
-                
-                if (entry.subtitle == "Syncing...") {
-                    Toast.makeText(this, "Syncing...", Toast.LENGTH_SHORT).show()
-                    return@setOnItemClickListener
-                }
-                
-                val groupName = entry.title ?: return@setOnItemClickListener
-                Log.d(TAG, "Opening Group: $groupName")
-                
-                if (vault.setActiveGroup(groupName)) {
-                    currentGroup = groupName
-                    checkOwnership(groupName)
-                    loadEntries()
-                } else {
-                    Log.e(TAG, "Failed to set active group: $groupName")
-                    Toast.makeText(this, "Error opening group", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                val entryId = entry.id
-                if(entryId > 0) showEntryOptions(entry) 
-            }
-        }
-
-        listView.setOnItemLongClickListener { _, _, position, _ ->
-            if (isShowingGroups) {
-                val groupName = adapter.getItem(position)?.title ?: return@setOnItemLongClickListener false
-                currentGroup = groupName
-                checkOwnership(groupName)
-                showGroupOptionsDialog(groupName)
-                true
-            } else false
-        }
-
-        fabAdd.setOnClickListener {
-            if (isShowingGroups) showCreateGroupDialog() else showCreateEntryDialog()
-        }
-
         if (!vault.groupExists("Personal")) vault.addGroup("Personal")
         loadGroups()
 
@@ -324,75 +131,240 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
-                    drawerLayout.closeDrawer(GravityCompat.START)
-                } else if (!isShowingGroups) {
-                    loadGroups()
-                } else {
-                    finish() 
-                }
+                if (drawerLayout.isDrawerOpen(GravityCompat.START)) drawerLayout.closeDrawer(GravityCompat.START)
+                else if (!isShowingGroups) loadGroups()
+                else finish()
             }
         })
+
+        initSignaling()
+    }
+
+    private fun setupUI() {
+        val toolbar = findViewById<Toolbar>(R.id.toolbar)
+        setSupportActionBar(toolbar)
+        
+        drawerLayout = findViewById(R.id.drawer_layout)
+        val navView = findViewById<NavigationView>(R.id.nav_view)
+        
+        toggle = ActionBarDrawerToggle(this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close)
+        drawerLayout.addDrawerListener(toggle)
+        toggle.syncState()
+        navView.setNavigationItemSelectedListener(this)
+
+        val headerView = navView.getHeaderView(0)
+        val userText = headerView.findViewById<TextView>(R.id.nav_user_name)
+        val userId = vault.getUserId()
+        userText.text = userId
+        userText.setOnClickListener { copyToClipboardSecure("User ID", userId, "ID Copied") }
+
+        listView = findViewById(R.id.listViewEntries)
+        fabAdd = findViewById(R.id.fabAdd)
+        listView.divider = ColorDrawable(Color.TRANSPARENT)
+        listView.dividerHeight = 16 
+        
+        adapter = CustomAdapter(this, arrayListOf())
+        listView.adapter = adapter
+        
+        setupListClick()
+        setupListLongClick()
+
+        fabAdd.setOnClickListener {
+            if (isShowingGroups) showCreateGroupDialog() else showCreateEntryDialog()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        p2pManager.disconnect()
+        webSocket?.close(1000, "Activity Destroyed")
         if (isReceiverRegistered) {
-            try {
-                unregisterReceiver(refreshReceiver)
-                isReceiverRegistered = false
-            } catch (e: IllegalArgumentException) {}
+            try { unregisterReceiver(refreshReceiver); isReceiverRegistered = false } catch (e: Exception) {}
         }
         clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
-    }
-    
-    private fun copyToClipboardSecure(label: String, text: String, toastMessage: String = "Copied") {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText(label, text)
-        clipboard.setPrimaryClip(clip)
-        
-        clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
-        
-        clipboardClearRunnable = Runnable {
-            try {
-                val emptyClip = ClipData.newPlainText("", "")
-                clipboard.setPrimaryClip(emptyClip)
-            } catch (e: Exception) {}
-        }
-        clipboardClearRunnable?.let {
-            clipboardHandler.postDelayed(it, 60000) 
-        }
-        Toast.makeText(this, "$toastMessage (clears in 60s)", Toast.LENGTH_SHORT).show()
     }
 
-    private fun loadEntries() {
-        isShowingGroups = false
-        supportActionBar?.title = currentGroup
-        invalidateOptionsMenu() 
-        fabAdd.setImageResource(android.R.drawable.ic_input_add)
+    // =========================================================================
+    // SIGNALING (WebSocket + JNI Bridge)
+    // =========================================================================
+
+// In HomeActivity.kt
+
+    private fun initSignaling() {
+        updateConnectionState(ConnectionState.CONNECTING)
         
-        toggle.isDrawerIndicatorEnabled = false
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        
-        toggle.setToolbarNavigationClickListener {
-            onBackPressedDispatcher.onBackPressed()
+        // [FIX] OkHttpClient needs a ping interval to keep the connection alive on mobile networks
+        client = OkHttpClient.Builder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS) 
+            .pingInterval(20, TimeUnit.SECONDS) // Prevents silent disconnects
+            .build()
+
+        val request = Request.Builder().url(SIGNALING_URL).build()
+
+        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                // [CRITICAL FIX] Must assign the active socket to the class variable
+                this@HomeActivity.webSocket = webSocket
+                
+                Log.d(TAG, "WebSocket Connected")
+                updateConnectionState(ConnectionState.CONNECTED)
+
+                val userId = vault.getUserId()
+                // [FIX] Send both 'id' and 'userId' for server compatibility
+                val registerJson = JSONObject()
+                registerJson.put("type", "register")
+                registerJson.put("id", userId)
+                registerJson.put("userId", userId)
+                webSocket.send(registerJson.toString())
+
+                runOnUiThread { vault.initP2P(SIGNALING_URL) }
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                vault.receiveSignalingMessage(text)
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e(TAG, "WebSocket Failure: ${t.message}")
+                updateConnectionState(ConnectionState.DISCONNECTED)
+                // [FIX] Auto-retry after 5 seconds if it fails (useful for sleeping servers)
+                Handler(Looper.getMainLooper()).postDelayed({ initSignaling() }, 5000)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                updateConnectionState(ConnectionState.DISCONNECTED)
+            }
+        })
+    }
+
+    override fun sendSignalingMessage(targetId: String, type: String, payload: String) {
+        val currentSocket = webSocket
+        if (currentSocket == null || currentConnectionState != ConnectionState.CONNECTED) {
+            Log.e(TAG, "Cannot send $type - Socket is null or disconnected")
+            return
         }
-        
-        val entriesRaw = vault.getEntries()
-        val entryList = ArrayList<EntryModel>()
-        if (entriesRaw != null) {
-            for (raw in entriesRaw) {
-                val parts = raw.split("|")
-                if (parts.size >= 3) {
-                    val id = parts[0].toIntOrNull() ?: 0
-                    entryList.add(EntryModel(id, parts[1], parts[2])) 
+
+        try {
+            val json = JSONObject()
+            json.put("type", type)
+            json.put("target", targetId)
+            json.put("sender", vault.getUserId())
+
+            // [FIX] Logic to prevent double-wrapping SDP and candidates
+            if (payload.trim().startsWith("{")) {
+                val payloadObj = JSONObject(payload)
+                if (type == "offer" || type == "answer") {
+                    // Extract raw SDP from C++ JSON wrapper
+                    json.put("sdp", payloadObj.optString("sdp"))
+                } else if (type == "ice-candidate") {
+                    json.put("candidate", payloadObj.optString("candidate"))
+                    json.put("mid", payloadObj.optString("mid", "0"))
+                }
+            } else {
+                // Raw payload fallback
+                val key = if (type == "offer" || type == "answer") "sdp" else "payload"
+                json.put(key, payload)
+            }
+
+            currentSocket.send(json.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Signaling Error: ${e.message}")
+        }
+    }
+
+    private fun updateConnectionState(state: ConnectionState) {
+        currentConnectionState = state
+        runOnUiThread {
+            reconnectMenuItem?.let { item ->
+                val icon = item.icon?.mutate()
+                if (icon != null) {
+                    val color = when (state) {
+                        ConnectionState.CONNECTED -> Color.parseColor("#4CAF50")
+                        ConnectionState.CONNECTING -> Color.parseColor("#FFC107")
+                        ConnectionState.DISCONNECTED -> Color.parseColor("#F44336")
+                    }
+                    DrawableCompat.setTint(icon, color)
+                    item.icon = icon
+                }
+                item.title = when (state) {
+                    ConnectionState.CONNECTED -> "Connected"
+                    ConnectionState.CONNECTING -> "Connecting..."
+                    ConnectionState.DISCONNECTED -> "Reconnect"
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // MENU & LOGIC
+    // =========================================================================
+
+    override fun onCreateOptionsMenu(menu: Menu?): Boolean { 
+        menuInflater.inflate(R.menu.menu_home, menu)
+        val searchItem = menu?.findItem(R.id.action_search)
+        val searchView = searchItem?.actionView as? SearchView
         
-        allEntries = entryList
-        adapter.updateData(entryList)
+        searchView?.queryHint = getString(R.string.search_hint)
+        searchView?.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(query: String?): Boolean { query?.let { performSearch(it) }; return true }
+            override fun onQueryTextChange(newText: String?): Boolean { newText?.let { performSearch(it) }; return true }
+        })
+        
+        searchItem?.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
+            override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
+            override fun onMenuItemActionCollapse(item: MenuItem): Boolean {
+                if (!isShowingGroups) adapter.updateData(allEntries)
+                return true
+            }
+        })
+        return true
+    }
+    
+    override fun onPrepareOptionsMenu(menu: Menu?): Boolean { 
+        val searchItem = menu?.findItem(R.id.action_search)
+        reconnectMenuItem = menu?.findItem(R.id.action_reconnect)
+        updateConnectionState(currentConnectionState)
+
+        val settingsItem = menu?.findItem(R.id.action_group_settings)
+
+        if (isShowingGroups) {
+            searchItem?.isVisible = false
+            reconnectMenuItem?.isVisible = true
+            settingsItem?.isVisible = false
+        } else {
+            searchItem?.isVisible = true
+            reconnectMenuItem?.isVisible = false
+            settingsItem?.isVisible = true
+        }
+        return true 
+    }
+    
+    override fun onOptionsItemSelected(item: MenuItem): Boolean { 
+        when (item.itemId) {
+            R.id.action_reconnect -> { 
+                updateConnectionState(ConnectionState.CONNECTING)
+                webSocket?.close(1000, "Manual Reconnect")
+                initSignaling()
+                Toast.makeText(this, "Reconnecting...", Toast.LENGTH_SHORT).show()
+                return true
+            }
+            R.id.action_group_settings -> {
+                showManageGroupDialog()
+                return true
+            }
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    private fun checkOwnership(groupName: String) {
+        if (groupName == "Personal") { isGroupOwner = true; return }
+        val ownerId = vault.getGroupOwner(groupName)
+        val myId = vault.getUserId()
+        isGroupOwner = (ownerId == myId)
     }
 
     private fun loadGroups() {
@@ -400,7 +372,6 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         supportActionBar?.title = "Your Groups"
         invalidateOptionsMenu()
         fabAdd.setImageResource(android.R.drawable.ic_input_add)
-
         supportActionBar?.setDisplayHomeAsUpEnabled(false)
         toggle.isDrawerIndicatorEnabled = true
         toggle.syncState()
@@ -430,214 +401,297 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         if (groupsRaw != null) {
             for (g in groupsRaw) {
                 val ownerId = vault.getGroupOwner(g)
-                val roleLabel = if (ownerId == myId || ownerId.isEmpty()) "Owner" else "Member"
+                val roleLabel = if (ownerId == myId || ownerId.isEmpty() || g == "Personal") "Owner" else "Member"
                 groupList.add(EntryModel(0, g, roleLabel)) 
             }
         }
-        
         adapter.updateData(groupList)
     }
 
-    private fun showManageGroupDialog() {
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_manage_group, null)
-
-        val contentLayout = dialogView.findViewById<LinearLayout>(R.id.manageGroupContentLayout)
-        val titleText = dialogView.findViewById<TextView>(R.id.textGroupTitle)
-        val sectionSync = dialogView.findViewById<LinearLayout>(R.id.sectionSyncSettings)
-        val sectionInvite = dialogView.findViewById<LinearLayout>(R.id.sectionInvite)
-        val switchMemberSync = dialogView.findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.switchMemberSync)
-        val btnManualSync = dialogView.findViewById<Button>(R.id.btnManualSync)
-        val inputInvite = dialogView.findViewById<TextInputEditText>(R.id.inputInviteId)
-        val btnSendInvite = dialogView.findViewById<Button>(R.id.btnSendInvite)
-        val membersContainer = dialogView.findViewById<LinearLayout>(R.id.containerMembers)
-
-        titleText.text = "Manage '$currentGroup'"
-
-        if (isGroupOwner) {
-            sectionSync.visibility = View.VISIBLE
-            sectionInvite.visibility = View.VISIBLE
-
-            val prefs = getSharedPreferences("group_settings", Context.MODE_PRIVATE)
-            val isSyncEnabled = prefs.getBoolean("sync_$currentGroup", false)
-            switchMemberSync.isChecked = isSyncEnabled
-
-            switchMemberSync.setOnCheckedChangeListener { _, isChecked ->
-                prefs.edit().putBoolean("sync_$currentGroup", isChecked).apply()
-                Toast.makeText(this, "Sync Policy Updated", Toast.LENGTH_SHORT).show()
-            }
-
-            btnManualSync.setOnClickListener {
-                vault.broadcastSync(currentGroup)
-                Toast.makeText(this, "Broadcasting Update...", Toast.LENGTH_SHORT).show()
-            }
-
-            btnSendInvite.setOnClickListener {
-                val target = inputInvite.text.toString().trim()
-                if(target.isNotEmpty()) {
-                    vault.sendP2PInvite(currentGroup, target)
-                    Toast.makeText(this, "Invite Sent", Toast.LENGTH_SHORT).show()
-                    inputInvite.setText("")
+    private fun loadEntries() {
+        isShowingGroups = false
+        supportActionBar?.title = currentGroup
+        invalidateOptionsMenu() 
+        fabAdd.setImageResource(android.R.drawable.ic_input_add)
+        toggle.isDrawerIndicatorEnabled = false
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        toggle.setToolbarNavigationClickListener { onBackPressedDispatcher.onBackPressed() }
+        
+        val entriesRaw = vault.getEntries()
+        val entryList = ArrayList<EntryModel>()
+        if (entriesRaw != null) {
+            for (raw in entriesRaw) {
+                val parts = raw.split("|")
+                if (parts.size >= 3) {
+                    val id = parts[0].toIntOrNull() ?: 0
+                    entryList.add(EntryModel(id, parts[1], parts[2])) 
                 }
-            }
-        } else {
-            sectionSync.visibility = View.GONE
-            sectionInvite.visibility = View.GONE
-
-            val btnLeave = Button(this)
-            btnLeave.text = "Leave Group"
-            btnLeave.setTextColor(Color.RED)
-            btnLeave.setBackgroundColor(Color.TRANSPARENT)
-            btnLeave.setOnClickListener {
-                showDeleteGroupConfirmation(currentGroup)
-            }
-            contentLayout?.addView(btnLeave)
-        }
-
-        fun loadMembers() {
-            membersContainer.removeAllViews()
-            val members = vault.getGroupMembers(currentGroup)
-            val myId = vault.getUserId()
-
-            if (members.isNullOrEmpty()) {
-                val emptyView = TextView(this)
-                emptyView.text = "No other members"
-                emptyView.setPadding(16, 16, 16, 16)
-                membersContainer.addView(emptyView)
-                return
-            }
-
-            for (m in members) {
-                val parts = m.split("|")
-                if (parts.size < 3) continue
-
-                val uid = parts[0]
-                val role = parts[1]
-                val status = parts[2]
-
-                val row = LayoutInflater.from(this).inflate(R.layout.item_member_row, membersContainer, false)
-                val nameTxt = row.findViewById<TextView>(R.id.memberName)
-                val statusTxt = row.findViewById<TextView>(R.id.memberStatus)
-                val btnRemove = row.findViewById<View>(R.id.btnRemove)
-
-                nameTxt?.apply {
-                    var display = uid
-                    if (uid == myId) display += " (You)"
-                    
-                    // [FIX] Add role indicators matching desktop
-                    when {
-                        role.equals("owner", ignoreCase = true) -> {
-                            display = "★ $display"  // Owner with star
-                            setTextColor(Color.parseColor("#4CAF50")) // Green
-                            setTypeface(null, android.graphics.Typeface.BOLD)
-                        }
-                        role.equals("admin", ignoreCase = true) -> {
-                            display = "🛡️ $display"  // Admin with shield
-                            setTextColor(Color.parseColor("#2196F3")) // Blue
-                            setTypeface(null, android.graphics.Typeface.BOLD)
-                        }
-                        else -> {
-                            setTextColor(Color.WHITE) // Default white for members
-                            setTypeface(null, android.graphics.Typeface.NORMAL)
-                        }
-                    }
-                    text = display
-                }
-
-                statusTxt?.apply {
-                    text = status.uppercase()
-                    // [FIX] Color code status - pending=red, accepted=green
-                    when {
-                        status.equals("pending", ignoreCase = true) -> {
-                            setTextColor(Color.parseColor("#FFA000")) // Orange for pending
-                            text = "(Invite Sent)"
-                        }
-                        status.equals("accepted", ignoreCase = true) -> {
-                            setTextColor(Color.parseColor("#4CAF50")) // Green for accepted
-                            text = "Active"
-                        }
-                        else -> {
-                            setTextColor(Color.LTGRAY)
-                        }
-                    }
-                }
-
-                if (isGroupOwner && uid != myId) {
-                    btnRemove?.visibility = View.VISIBLE
-                    btnRemove?.setOnClickListener {
-                        MaterialAlertDialogBuilder(this)
-                            .setTitle("Remove Member")
-                            .setMessage("Are you sure you want to kick $uid?")
-                            .setPositiveButton("Remove") { _, _ ->
-                                vault.removeUser(currentGroup, uid)
-                                loadMembers() 
-                            }
-                            .setNegativeButton("Cancel", null)
-                            .show()
-                    }
-                } else {
-                    btnRemove?.visibility = View.GONE
-                }
-
-                membersContainer.addView(row)
             }
         }
-
-        loadMembers()
-
-        MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .setPositiveButton("Close", null)
-            .show()
+        allEntries = entryList
+        adapter.updateData(entryList)
     }
 
-    private fun showDeleteGroupConfirmation(groupName: String) {
-        if (groupName == "Personal") { Toast.makeText(this, "Cannot delete 'Personal'", Toast.LENGTH_SHORT).show(); return }
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_confirm_password, null)
-        val inputPass = dialogView.findViewById<TextInputEditText>(R.id.inputConfirmPass)
-        val action = if (isGroupOwner) "Delete" else "Leave"
-        val message = if (isGroupOwner) {
-            "$action '$groupName'?\n\nEach member will receive their own copy of the group data."
-        } else {
-            "$action '$groupName'?"
+    private fun setupListClick() {
+        listView.setOnItemClickListener { _, _, position, _ ->
+            val item = adapter.getItem(position) ?: return@setOnItemClickListener
+            if (isShowingGroups) {
+                if (item.id < -1000) {
+                    val inviteId = -(item.id + 1000)
+                    val regex = """^(.+) \(Invite from (.+)\)$""".toRegex()
+                    val match = regex.find(item.title ?: "")
+                    if (match != null) showAcceptRejectInviteDialog(inviteId, match.groupValues[2], match.groupValues[1])
+                    return@setOnItemClickListener
+                }
+                if (item.id == -1) return@setOnItemClickListener
+                if (item.id == 0) {
+                    val groupName = item.title ?: return@setOnItemClickListener
+                    currentGroup = groupName
+                    checkOwnership(currentGroup)
+                    if (vault.setActiveGroup(currentGroup)) loadEntries()
+                    else Toast.makeText(this, "Error opening group", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                if (item.id > 0) showEntryOptions(item)
+            }
         }
-        MaterialAlertDialogBuilder(this).setTitle(message)
-            .setView(dialogView).setPositiveButton(action) { _, _ ->
-                val pass = inputPass.text.toString()
-                if (pass.isNotEmpty() && vault.verifyMasterPassword(pass)) {
-                    // [NEW] If owner is deleting, send split notification to all members
-                    if (isGroupOwner) {
-                        try {
-                            val members = vault.getGroupMembers(groupName)
-                            val myId = vault.getUserId()
-                            
-                            for (memberStr in members) {
-                                val parts = memberStr.split("|")
-                                if (parts.isNotEmpty()) {
-                                    val memberId = parts[0]
-                                    val status = if (parts.size > 2) parts[2] else "accepted"
-                                    
-                                    if (memberId != myId && status == "accepted") {
-                                        // Send GROUP_SPLIT sync message
-                                        vault.queueGroupSplitSync(groupName, memberId)
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error sending split notifications", e)
-                        }
+    }
+
+    private fun setupListLongClick() {
+        listView.setOnItemLongClickListener { _, _, position, _ ->
+            if (isShowingGroups) {
+                val groupName = adapter.getItem(position)?.title ?: return@setOnItemLongClickListener false
+                val item = adapter.getItem(position)
+                if (item != null && item.id < -1000) return@setOnItemLongClickListener false
+                currentGroup = groupName
+                checkOwnership(groupName)
+                showGroupOptionsDialog(groupName)
+                true
+            } else false
+        }
+    }
+
+    private fun showGroupOptionsDialog(groupName: String) {
+        val options = if (isGroupOwner) {
+            if (groupName == "Personal") arrayOf("Manage Group")
+            else arrayOf("Rename Group", "Manage Group", "Delete Group")
+        } else {
+            arrayOf("View Members", "Leave Group")
+        }
+        MaterialAlertDialogBuilder(this).setTitle(groupName).setItems(options) { _, which ->
+            when (options[which]) {
+                "Rename Group" -> showRenameDialog(groupName)
+                "Manage Group", "View Members" -> showManageGroupDialog()
+                "Delete Group" -> showDeleteGroupConfirmation(groupName)
+                "Leave Group" -> confirmLeaveGroup(groupName)
+            }
+        }.show()
+    }
+
+    private fun showRenameDialog(currentName: String) {
+        val input = EditText(this)
+        input.setText(currentName)
+        val container = LinearLayout(this)
+        container.orientation = LinearLayout.VERTICAL
+        container.setPadding(50, 20, 50, 20)
+        container.addView(input)
+        
+        AlertDialog.Builder(this).setTitle("Rename Group").setView(container).setPositiveButton("Rename") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isNotEmpty() && newName != currentName) {
+                    if (vault.renameGroup(currentName, newName)) {
+                        Toast.makeText(this, "Group renamed", Toast.LENGTH_SHORT).show()
+                        refreshUI()
+                    } else Toast.makeText(this, "Rename failed", Toast.LENGTH_SHORT).show()
+                }
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun confirmLeaveGroup(groupName: String) {
+        AlertDialog.Builder(this).setTitle("Leave Group?").setMessage("Are you sure you want to leave '$groupName'?")
+            .setPositiveButton("Leave") { _, _ ->
+                vault.leaveGroup(groupName)
+                Toast.makeText(this, "Left group: $groupName", Toast.LENGTH_SHORT).show()
+                refreshUI()
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    // [FIX] Replace problematic dialog functions with these clean versions
+private fun showManageGroupDialog() {
+    // Use layoutInflater property directly
+    val dialogView = layoutInflater.inflate(R.layout.dialog_manage_group, null)
+    val titleText = dialogView.findViewById<TextView>(R.id.textGroupTitle)
+    val sectionSync = dialogView.findViewById<LinearLayout>(R.id.sectionSyncSettings)
+    val sectionInvite = dialogView.findViewById<LinearLayout>(R.id.sectionInvite)
+    val btnManualSync = dialogView.findViewById<Button>(R.id.btnManualSync)
+    val inputInvite = dialogView.findViewById<TextInputEditText>(R.id.inputInviteId)
+    val btnSendInvite = dialogView.findViewById<Button>(R.id.btnSendInvite)
+    val membersContainer = dialogView.findViewById<LinearLayout>(R.id.containerMembers)
+
+    titleText.setText("Manage '$currentGroup'")
+
+    if (isGroupOwner) {
+        sectionSync.setVisibility(View.VISIBLE)
+        sectionInvite.setVisibility(View.VISIBLE)
+        btnManualSync.setOnClickListener {
+            vault.broadcastSync(currentGroup)
+            Toast.makeText(this, "Broadcasting Update...", Toast.LENGTH_SHORT).show()
+        }
+        btnSendInvite.setOnClickListener {
+            val target = inputInvite.text.toString().trim()
+            if (target.isNotEmpty()) {
+                vault.sendP2PInvite(currentGroup, target)
+                Toast.makeText(this, "Invite Sent", Toast.LENGTH_SHORT).show()
+                inputInvite.setText("")
+            }
+        }
+    } else {
+        sectionSync.setVisibility(View.GONE)
+        sectionInvite.setVisibility(View.GONE)
+    }
+
+    fun loadMembers() {
+        membersContainer.removeAllViews()
+        val members = vault.getGroupMembers(currentGroup)
+        val myId = vault.getUserId()
+
+        if (members == null || members.isEmpty()) {
+            val emptyView = TextView(this)
+            emptyView.text = "No other members"
+            emptyView.setPadding(16, 16, 16, 16)
+            membersContainer.addView(emptyView)
+            return
+        }
+
+        for (m in members) {
+            val parts = m.split("|")
+            if (parts.size < 3) continue
+            val uid = parts[0]
+            val status = parts[2]
+
+            val row = layoutInflater.inflate(R.layout.item_member_row, membersContainer, false)
+            val nameTxt = row.findViewById<TextView>(R.id.memberName)
+            val statusTxt = row.findViewById<TextView>(R.id.memberStatus)
+            val btnRemove = row.findViewById<View>(R.id.btnRemove)
+
+            nameTxt.setText(if (uid == myId) "$uid (You)" else uid)
+            statusTxt.setText(status.uppercase())
+            
+            if (status.equals("pending", true)) statusTxt.setTextColor(Color.parseColor("#FFA000"))
+            else if (status.equals("accepted", true)) statusTxt.setTextColor(Color.parseColor("#4CAF50"))
+
+            if (isGroupOwner && uid != myId) {
+                btnRemove.setVisibility(View.VISIBLE)
+                btnRemove.setOnClickListener {
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle("Remove Member")
+                        .setMessage("Kick $uid?")
+                        .setPositiveButton("Remove") { _, _ -> vault.removeUser(currentGroup, uid); loadMembers() }
+                        .setNegativeButton("Cancel", null).show()
+                }
+            } else btnRemove.setVisibility(View.GONE)
+            membersContainer.addView(row)
+        }
+    }
+    loadMembers()
+    MaterialAlertDialogBuilder(this).setView(dialogView as View).setPositiveButton("Close", null).show()
+}
+
+    private fun showEntryOptions(item: EntryModel) {
+        val dialog = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.bottom_sheet_entry_options, null)
+        dialog.setContentView(view)
+
+        view.findViewById<TextView>(R.id.sheetEntryTitle).text = item.title
+        view.findViewById<TextView>(R.id.sheetEntrySubtitle).text = item.subtitle
+
+        val fullData = vault.getEntryFullDetails(item.id)
+        val parts = fullData.split("|")
+        val password = if (parts.size > 2) parts[2] else ""
+        val totpSecret = if (parts.size > 4) parts[4] else ""
+
+        view.findViewById<View>(R.id.actionCopyPassword).setOnClickListener {
+            if (password.isNotEmpty()) copyToClipboardSecure("Password", password, "Password copied")
+            dialog.dismiss()
+        }
+
+        view.findViewById<View>(R.id.actionEdit).setOnClickListener {
+            dialog.dismiss()
+            showCreateEntryDialog(editMode = true, entryId = item.id)
+        }
+
+        view.findViewById<View>(R.id.actionDelete).setOnClickListener {
+            dialog.dismiss()
+            MaterialAlertDialogBuilder(this).setTitle("Delete Entry").setMessage("Delete '${item.title}'?")
+                .setPositiveButton("Delete") { _, _ ->
+                    if (vault.deleteEntry(item.id)) { loadEntries(); Toast.makeText(this, "Entry deleted", Toast.LENGTH_SHORT).show() }
+                }.setNegativeButton("Cancel", null).show()
+        }
+        dialog.show()
+    }
+
+    private fun showCreateGroupDialog() {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_group, null)
+        val input = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.dialogInput)
+        MaterialAlertDialogBuilder(this).setTitle("Create New Group").setView(dialogView).setPositiveButton("Create") { _, _ ->
+                val groupName = input.text.toString().trim()
+                if (groupName.isNotEmpty()) {
+                    if (vault.addGroup(groupName)) loadGroups()
+                    else Toast.makeText(this, "Failed (Exists?)", Toast.LENGTH_SHORT).show()
+                }
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun showCreateEntryDialog(editMode: Boolean = false, entryId: Int = -1) {
+        val builder = MaterialAlertDialogBuilder(this)
+        val view = layoutInflater.inflate(R.layout.dialog_create_entry, null)
+        val titleInput = view.findViewById<EditText>(R.id.inputTitle)
+        val userInput = view.findViewById<EditText>(R.id.inputUsername)
+        val passInput = view.findViewById<EditText>(R.id.inputPassword)
+        val notesInput = view.findViewById<EditText>(R.id.inputNotes)
+        val btnGenerate = view.findViewById<Button>(R.id.btnGeneratePassword)
+        
+        btnGenerate.setOnClickListener {
+            val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*"
+            passInput.setText((1..16).map { chars.random() }.joinToString(""))
+        }
+
+        var originalPassword = ""
+        if (editMode && entryId != -1) {
+            val fullData = vault.getEntryFullDetails(entryId)
+            val parts = fullData.split("|")
+            if (parts.size >= 4) {
+                titleInput.setText(parts[0])
+                userInput.setText(parts[1])
+                originalPassword = parts[2]
+                notesInput.setText(parts[3])
+            }
+        }
+
+        builder.setView(view).setTitle(if (editMode) "Edit Entry" else "New Entry")
+            .setPositiveButton("Save") { _, _ ->
+                val title = titleInput.text.toString().trim()
+                val user = userInput.text.toString().trim()
+                var pass = passInput.text.toString()
+                val notes = notesInput.text.toString().trim()
+
+                if (title.isNotEmpty()) {
+                    if (editMode && pass.isEmpty()) pass = originalPassword
+                    
+                    var success = false
+                    if (editMode) {
+                        val result: Any = vault.updateEntry(entryId, title, user, pass, "", notes)
+                        success = (result as? Boolean) ?: false
+                    } else {
+                        vault.addEntryNative(title, user, pass, "", notes)
+                        success = true
                     }
                     
-                    if (vault.deleteGroup(groupName)) {
-                        getSharedPreferences("memberships", Context.MODE_PRIVATE).edit().remove(groupName).apply()
-                        val successMsg = if (isGroupOwner) {
-                            "Group deleted. Members have been notified."
-                        } else {
-                            "Group left"
-                        }
-                        Toast.makeText(this, successMsg, Toast.LENGTH_SHORT).show()
-                        loadGroups()
-                    } else Toast.makeText(this, "Failed", Toast.LENGTH_SHORT).show()
-                } else Toast.makeText(this, "Incorrect Password", Toast.LENGTH_SHORT).show()
+                    if (success) {
+                        loadEntries()
+                        if(!editMode) refreshUI()
+                    } else Toast.makeText(this, "Error saving", Toast.LENGTH_SHORT).show()
+                }
             }.setNegativeButton("Cancel", null).show()
     }
 
@@ -648,11 +702,12 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val btnReject = view.findViewById<Button>(R.id.btnRejectInvite)
         text.text = "$fromUser invites you to '$groupName'"
         val dialog = MaterialAlertDialogBuilder(this).setView(view).setCancelable(false).create()
+        
         btnAccept.setOnClickListener {
-            btnAccept.isEnabled = false; btnAccept.text = "Joining..."; btnReject.isEnabled = false; btnReject.alpha = 0.5f
-            getSharedPreferences("memberships", Context.MODE_PRIVATE).edit().putBoolean(groupName, true).apply()
+            btnAccept.isEnabled = false; btnAccept.text = "Joining..."
             processingInvites.add(groupName)
             vault.respondToInvite(groupName, fromUser, true)
+            getSharedPreferences("memberships", Context.MODE_PRIVATE).edit().putBoolean(groupName, true).apply()
             Toast.makeText(this, "Accepted. Syncing...", Toast.LENGTH_SHORT).show()
             loadGroups(); view.postDelayed({ dialog.dismiss() }, 800)
         }
@@ -660,326 +715,31 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         dialog.show()
     }
 
-    private fun showLocationEditDialog(existing: LocationData?, onResult: (LocationData) -> Unit) {
-        val view = LayoutInflater.from(this).inflate(R.layout.dialog_edit_location, null)
-        
-        val spinner = view.findViewById<android.widget.Spinner>(R.id.spinnerLocationType)
-        val inputVal = view.findViewById<TextInputEditText>(R.id.inputLocationValue)
-        val layoutVal = view.findViewById<TextInputLayout>(R.id.layoutLocationValue)
-        val layoutCustom = view.findViewById<TextInputLayout>(R.id.layoutCustomType)
-        val inputCustom = view.findViewById<TextInputEditText>(R.id.inputCustomType)
-
-        val types = arrayOf("URL", "Android App", "iOS App", "WiFi SSID", "Other")
-        val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, types)
-        spinner.adapter = adapter
-
-        if (existing != null) {
-            inputVal.setText(existing.value)
-            if (types.contains(existing.type)) {
-                spinner.setSelection(types.indexOf(existing.type))
-            } else {
-                spinner.setSelection(types.indexOf("Other"))
-                layoutCustom.visibility = View.VISIBLE
-                inputCustom.setText(existing.type)
-            }
-        }
-
-        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p0: android.widget.AdapterView<*>?, p1: View?, pos: Int, p3: Long) {
-                val selected = types[pos]
-                layoutCustom.visibility = if (selected == "Other") View.VISIBLE else View.GONE
-                
-                layoutVal.placeholderText = when(selected) {
-                    "URL" -> "https://example.com"
-                    "Android App" -> "com.example.app"
-                    "iOS App" -> "com.example.ios"
-                    "WiFi SSID" -> "Network Name"
-                    else -> "Value"
-                }
-            }
-            override fun onNothingSelected(p0: android.widget.AdapterView<*>?) {}
-        }
-
-        MaterialAlertDialogBuilder(this)
-            .setView(view)
-            .setPositiveButton(if (existing == null) "Add" else "Update") { _, _ ->
-                var type = spinner.selectedItem.toString()
-                if (type == "Other") type = inputCustom.text.toString().trim()
-                if (type.isEmpty()) type = "Other"
-                
-                val value = inputVal.text.toString().trim()
-                if (value.isNotEmpty()) {
-                    onResult(LocationData(type, value))
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+    private fun showDeleteGroupConfirmation(groupName: String) {
+        MaterialAlertDialogBuilder(this).setTitle("Delete '$groupName'?")
+            .setPositiveButton("Delete") { _, _ ->
+                if (vault.deleteGroup(groupName)) { loadGroups(); Toast.makeText(this, "Deleted", Toast.LENGTH_SHORT).show() }
+            }.setNegativeButton("Cancel", null).show()
     }
 
-    private fun showCreateEntryDialog(editMode: Boolean = false, entryId: Int = -1) {
-        val builder = MaterialAlertDialogBuilder(this)
-        val view = layoutInflater.inflate(R.layout.dialog_create_entry, null)
-        
-        val titleInput = view.findViewById<EditText>(R.id.inputTitle)
-        val userInput = view.findViewById<EditText>(R.id.inputUsername)
-        val passInput = view.findViewById<EditText>(R.id.inputPassword)
-        val notesInput = view.findViewById<EditText>(R.id.inputNotes)
-        val totpInput = view.findViewById<EditText>(R.id.inputTotp)
-        val btnGenerate = view.findViewById<Button>(R.id.btnGeneratePassword)
-        val btnAddLoc = view.findViewById<Button>(R.id.btnAddLoc)
-        val locationsContainer = view.findViewById<LinearLayout>(R.id.locationsContainer)
-        
-        val tempLocations = ArrayList<TempLocation>()
-
-        fun addLocationView(type: String, value: String) {
-            val row = LayoutInflater.from(this).inflate(R.layout.item_location_row, locationsContainer, false)
-            
-            row.findViewById<TextView>(R.id.textType).text = type
-            row.findViewById<TextView>(R.id.textValue).text = value
-            
-            row.findViewById<View>(R.id.btnRemove).setOnClickListener {
-                locationsContainer.removeView(row)
-                tempLocations.removeIf { it.type == type && it.value == value }
-            }
-            
-            locationsContainer.addView(row)
-            tempLocations.add(TempLocation(type, value))
-        }
-
-        btnAddLoc.setOnClickListener {
-            showLocationEditDialog(null) { locData ->
-                addLocationView(locData.type, locData.value)
-            }
-        }
-        
-        btnGenerate.setOnClickListener {
-            val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*"
-            val pass = (1..16).map { chars.random() }.joinToString("")
-            passInput.setText(pass)
-        }
-
-        if (editMode && entryId != -1) {
-            val fullData = vault.getEntryFullDetails(entryId)
-            val parts = fullData.split("|")
-            
-            if (parts.size >= 5) {
-                titleInput.setText(parts[0])
-                userInput.setText(parts[1])
-                passInput.setText(parts[2])
-                notesInput.setText(parts[3])
-                totpInput.setText(parts[4]) 
-            }
-        }
-
-        builder.setView(view)
-        builder.setTitle(if (editMode) "Edit Entry" else "New Entry")
-        
-        builder.setPositiveButton(if (editMode) "Save" else "Create") { _, _ ->
-            val title = titleInput.text.toString().trim()
-            val user = userInput.text.toString().trim()
-            val pass = passInput.text.toString()
-            val notes = notesInput.text.toString().trim()
-            
-            val primaryUrl = tempLocations.find { it.type == "URL" }?.value ?: ""
-
-            if (title.isNotEmpty()) {
-                if (editMode) {
-                    if (vault.updateEntry(entryId, title, user, pass, notes)) {
-                        showToast("Entry updated")
-                    } else {
-                        showToast("Error updating entry")
-                    }
-                } else {
-                    vault.addEntryNative(title, user, pass, primaryUrl, notes)
-                    showToast("Entry created")
-                }
-                loadEntries()
-            } else {
-                showToast("Title is required")
-            }
-        }
-        
-        builder.setNegativeButton("Cancel", null)
-        builder.show()
-    }
-
-    private fun showCreateGroupDialog() {
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_group, null)
-        val input = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.dialogInput)
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Create New Group")
-            .setIcon(android.R.drawable.ic_menu_add) 
-            .setView(dialogView)
-            .setPositiveButton("Create") { _, _ ->
-                val groupName = input.text.toString().trim()
-                if (groupName.isNotEmpty()) {
-                    if (vault.addGroup(groupName)) {
-                        loadGroups()
-                        Toast.makeText(this, "Group Created", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this, "Failed to create group", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun showEntryDetails(id: Int) {
-        // Fallback detail viewer if BottomSheet fails, mostly unused if setupListClick works
-        val raw = vault.getEntryFullDetails(id)
-        val parts = raw.split("|")
-        if (parts.size < ENTRY_DETAILS_PARTS_COUNT) return
-        
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_entry_details, null)
-        val detailTitle = dialogView.findViewById<EditText>(R.id.detailTitle)
-        
-        // ... (existing detail logic) ...
-        // Keeping this minimal as showEntryOptions handles the main interactions now
-        
-        detailTitle.setText(parts[0])
-        MaterialAlertDialogBuilder(this).setView(dialogView).show()
-    }
-    
-    private fun showPasswordHistoryDialog(entryId: Int) {
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_password_history, null)
-        val recyclerView = dialogView.findViewById<RecyclerView>(R.id.recyclerPasswordHistory)
-        val textNoHistory = dialogView.findViewById<TextView>(R.id.textNoHistory)
-        
-        val historyRaw = vault.getPasswordHistory(entryId)
-        val historyItems = ArrayList<PasswordHistoryItem>()
-        
-        if (historyRaw != null) {
-            for (raw in historyRaw) {
-                val parts = raw.split("|")
-                if (parts.size >= 3) {
-                    try {
-                        historyItems.add(PasswordHistoryItem(parts[1], parts[2].toLong()))
-                    } catch (e: NumberFormatException) { continue }
-                }
-            }
-        }
-        
-        if (historyItems.isEmpty()) {
-            recyclerView.visibility = View.GONE
-            textNoHistory.visibility = View.VISIBLE
-        } else {
-            recyclerView.visibility = View.VISIBLE
-            textNoHistory.visibility = View.GONE
-            
-            recyclerView.layoutManager = LinearLayoutManager(this)
-            recyclerView.adapter = PasswordHistoryAdapter(this, historyItems) { encryptedPassword ->
-                val decryptedPassword = vault.decryptPasswordFromHistory(encryptedPassword)
-                copyToClipboardSecure("Password", decryptedPassword, "Password copied")
-            }
-        }
-        
-        MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .setPositiveButton("Close", null)
-            .show()
-    }
-    
-    private fun duplicateEntry(originalId: Int, title: String, username: String, password: String, notes: String, totpSecret: String) {
-        val newTitle = "$title (Copy)"
-        vault.addEntryNative(newTitle, username, password, "", notes)
-        Toast.makeText(this, getString(R.string.entry_duplicated), Toast.LENGTH_SHORT).show()
-        loadEntries()
-    }
-    
     private fun performSearch(query: String) {
-        if (query.isEmpty()) {
-            adapter.updateData(allEntries)
-            return
-        }
-        
+        if (query.isEmpty()) { adapter.updateData(allEntries); return }
         val searchResults = vault.searchEntries(query)
         val resultList = ArrayList<EntryModel>()
-        
         if (searchResults != null) {
             for (raw in searchResults) {
-                val parts = raw.split("|") 
-                if (parts.size >= 3) {
-                    resultList.add(EntryModel(0, parts[0], parts[1]))
-                }
+                val parts = raw.split("|")
+                if (parts.size >= 3) resultList.add(EntryModel(0, parts[0], parts[1]))
             }
         }
-        
         adapter.updateData(resultList)
     }
 
-    override fun onCreateOptionsMenu(menu: Menu?): Boolean { 
-        menuInflater.inflate(R.menu.menu_home, menu)
-        val searchItem = menu?.findItem(R.id.action_search)
-        val searchView = searchItem?.actionView as? SearchView
-        
-        searchView?.queryHint = getString(R.string.search_hint)
-        searchView?.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
-            override fun onQueryTextSubmit(query: String?): Boolean {
-                query?.let { performSearch(it) }
-                return true
-            }
-            override fun onQueryTextChange(newText: String?): Boolean {
-                newText?.let { performSearch(it) }
-                return true
-            }
-        })
-        
-        searchItem?.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
-            override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
-            override fun onMenuItemActionCollapse(item: MenuItem): Boolean {
-                if (!isShowingGroups) adapter.updateData(allEntries)
-                return true
-            }
-        })
-        return true
-    }
-    
-    override fun onPrepareOptionsMenu(menu: Menu?): Boolean { 
-        val searchItem = menu?.findItem(R.id.action_search)
-        val reconnectItem = menu?.findItem(R.id.action_reconnect)
-        val settingsItem = menu?.findItem(R.id.action_group_settings)
-
-        if (isShowingGroups) {
-            searchItem?.isVisible = false
-            reconnectItem?.isVisible = true
-            settingsItem?.isVisible = false
-        } else {
-            searchItem?.isVisible = true
-            reconnectItem?.isVisible = false
-            settingsItem?.isVisible = true
-        }
-        return true 
-    }
-    
-    override fun onOptionsItemSelected(item: MenuItem): Boolean { 
-        when (item.itemId) {
-            R.id.action_reconnect -> { 
-                p2pManager.connect()
-                Toast.makeText(this, "Reconnecting...", Toast.LENGTH_SHORT).show()
-                return true
-            }
-            R.id.action_group_settings -> {
-                showManageGroupDialog()
-                return true
-            }
-        }
-        return super.onOptionsItemSelected(item)
-    }
-    
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
         when(item.itemId) {
             R.id.nav_groups -> loadGroups()
-            R.id.nav_recent_entries -> startActivity(Intent(this, RecentEntriesActivity::class.java))
-            R.id.nav_add_group -> showCreateGroupDialog()
-            R.id.nav_theme -> { 
-                val prefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                prefs.edit().putInt("theme_index", (prefs.getInt("theme_index", 0) + 1) % 5).apply()
-                finish(); startActivity(intent)
-            }
             R.id.nav_settings -> startActivity(Intent(this, SettingsActivity::class.java))
-            R.id.nav_lock -> { finish(); } 
+            R.id.nav_lock -> finish()
         }
         drawerLayout.closeDrawer(GravityCompat.START)
         return true
@@ -991,12 +751,13 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         if(idx in themes.indices) setTheme(themes[idx])
     }
 
-    fun showToast(msg: String) { 
-        runOnUiThread { 
-            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-            if(msg.contains("Invite received", true) || msg.contains("Joined Group", true)) {
-                loadGroups()
-            }
-        } 
+    private fun copyToClipboardSecure(label: String, text: String, toastMessage: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText(label, text)
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show()
+        clipboardHandler.postDelayed({ 
+            try { clipboard.setPrimaryClip(ClipData.newPlainText("", "")) } catch(e:Exception){} 
+        }, 60000)
     }
 }

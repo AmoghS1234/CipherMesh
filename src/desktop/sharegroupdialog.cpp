@@ -262,43 +262,27 @@ void ShareGroupDialog::onToggleAdminOnly(bool checked) {
 void ShareGroupDialog::onInviteClicked() {
     if (!m_vault || !m_p2pService) return;
 
-    // Create a custom dialog instead of using QInputDialog
     QDialog inviteDialog(this);
     inviteDialog.setWindowTitle("Invite User");
     inviteDialog.setMinimumWidth(400);
     
     QVBoxLayout* layout = new QVBoxLayout(&inviteDialog);
-    layout->setContentsMargins(20, 20, 20, 20);
-    layout->setSpacing(16);
     
     QLabel* titleLabel = new QLabel("Invite User to Group", &inviteDialog);
     titleLabel->setObjectName("DialogTitle");
     layout->addWidget(titleLabel);
     
-    QLabel* infoLabel = new QLabel(
-        "Enter the User ID of the person you want to invite to this group.\n"
-        "They will receive access to all entries in this group.",
-        &inviteDialog
-    );
-    infoLabel->setWordWrap(true);
-    layout->addWidget(infoLabel);
-    
     QLabel* inputLabel = new QLabel("User ID:", &inviteDialog);
     layout->addWidget(inputLabel);
     
     QLineEdit* userIdInput = new QLineEdit(&inviteDialog);
-    userIdInput->setPlaceholderText("e.g., user@example.com or user-id-123");
+    userIdInput->setPlaceholderText("e.g., user@example.com");
     layout->addWidget(userIdInput);
     
     QHBoxLayout* buttonLayout = new QHBoxLayout();
-    buttonLayout->setSpacing(8);
-    
     QPushButton* cancelButton = new QPushButton("Cancel", &inviteDialog);
-    cancelButton->setMinimumWidth(100);
-    
     QPushButton* inviteButton = new QPushButton("Send Invite", &inviteDialog);
     inviteButton->setObjectName("NewButton");
-    inviteButton->setMinimumWidth(100);
     inviteButton->setDefault(true);
     
     buttonLayout->addStretch();
@@ -308,7 +292,6 @@ void ShareGroupDialog::onInviteClicked() {
     
     connect(cancelButton, &QPushButton::clicked, &inviteDialog, &QDialog::reject);
     connect(inviteButton, &QPushButton::clicked, &inviteDialog, &QDialog::accept);
-    connect(userIdInput, &QLineEdit::returnPressed, &inviteDialog, &QDialog::accept);
     
     if (inviteDialog.exec() == QDialog::Accepted) {
         QString email = userIdInput->text().trimmed();
@@ -316,13 +299,29 @@ void ShareGroupDialog::onInviteClicked() {
             m_statusLabel->setText("Preparing data...");
             
             try {
+                // 1. Get Key
                 std::vector<unsigned char> key = m_vault->getGroupKey(m_groupName.toStdString());
+                
+                // 2. Get Entries
                 std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(m_groupName.toStdString());
                 
-                m_statusLabel->setText("Sending invite...");
-                m_p2pService->inviteUser(m_groupName.toStdString(), email.toStdString(), key, entries);
+                // 3. Get Members (New)
+                std::string members = m_vault->exportGroupMembers(m_groupName.toStdString());
                 
+                m_statusLabel->setText("Sending invite...");
+                
+                // 4. Send Invite via P2P
+                m_p2pService->inviteUser(
+                    m_groupName.toStdString(), 
+                    email.toStdString(), 
+                    key, 
+                    entries, 
+                    members // Pass members here
+                );
+                
+                // 5. Add Pending Member Locally
                 m_vault->addGroupMember(m_groupName.toStdString(), email.toStdString(), "member", "pending");
+                
                 loadMembers();
                 CipherMesh::Core::Crypto::secureWipe(key);
                 

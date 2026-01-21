@@ -1,6 +1,7 @@
 package com.ciphermesh.mobile
 
 import android.content.Context
+import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -9,64 +10,88 @@ import android.widget.ImageView
 import android.widget.TextView
 import java.util.ArrayList
 
-class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel>) : ArrayAdapter<EntryModel>(context, R.layout.item_list_row, dataList) {
+class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel>) : 
+    ArrayAdapter<EntryModel>(context, R.layout.item_list_row, dataList) {
+
+    // View Holder Pattern to improve scrolling performance
+    private class ViewHolder {
+        lateinit var title: TextView
+        lateinit var subtitle: TextView
+        lateinit var icon: ImageView
+    }
 
     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-        // 1. Inflate the new custom layout (item_list_row)
-        val view = convertView ?: LayoutInflater.from(context).inflate(R.layout.item_list_row, parent, false)
+        val view: View
+        val holder: ViewHolder
 
-        // 2. Get the data item for this position
+        // 1. Recycle View if possible (Performance Optimization)
+        if (convertView == null) {
+            view = LayoutInflater.from(context).inflate(R.layout.item_list_row, parent, false)
+            holder = ViewHolder()
+            holder.title = view.findViewById(R.id.rowTitle)
+            holder.subtitle = view.findViewById(R.id.rowSubtitle)
+            holder.icon = view.findViewById(R.id.rowIcon)
+            view.tag = holder
+        } else {
+            view = convertView
+            holder = view.tag as ViewHolder
+        }
+
+        // 2. Get Data
         val item = getItem(position) ?: return view
 
-        // 3. Find views in the new layout
-        val titleText = view.findViewById<TextView>(R.id.rowTitle)
-        val subtitleText = view.findViewById<TextView>(R.id.rowSubtitle)
-        val iconImg = view.findViewById<ImageView>(R.id.rowIcon)
+        // 3. Set Base Text
+        holder.title.text = item.title
+        holder.subtitle.text = item.subtitle
 
-        // 4. Set Text Data
-        titleText.text = item.title
-        subtitleText.text = item.subtitle
+        // 4. Default Styling (Reset state for recycled views)
+        holder.icon.alpha = 1.0f
+        holder.title.setTextColor(Color.WHITE)
+        holder.subtitle.setTextColor(Color.parseColor("#B0B0B0")) // Light Gray
 
-        // 5. Set Logic for Icon and Color based on ID
-        // - ID < -1000: Pending Invite (RED)
-        // - ID == -1:   Syncing Status
-        // - ID == 0:    Group (Folder)
-        // - ID > 0:     Vault Entry (Lock)
-        
+        // 5. Apply Logic based on ID types
         when {
+            // --- Case A: Pending Invite ---
             item.id < -1000 -> {
-                // Pending Invite - RED text
-                iconImg.setImageResource(android.R.drawable.ic_dialog_email)
-                iconImg.alpha = 0.7f // Dim it slightly
-                titleText.setTextColor(android.graphics.Color.parseColor("#FF5252")) // Red color
-                subtitleText.setTextColor(android.graphics.Color.parseColor("#FF8A80")) // Light red
+                holder.icon.setImageResource(android.R.drawable.ic_dialog_email)
+                holder.icon.alpha = 0.8f
+                
+                // Red Alert Style
+                holder.title.setTextColor(Color.parseColor("#FF5252")) 
+                holder.subtitle.setTextColor(Color.parseColor("#FF8A80")) 
             }
+
+            // --- Case B: Syncing / Status Message ---
             item.id == -1 -> {
-                // Syncing / Loading
-                iconImg.setImageResource(android.R.drawable.stat_notify_sync)
-                iconImg.alpha = 0.5f
-                titleText.setTextColor(android.graphics.Color.parseColor("#757575")) // Gray
-                subtitleText.setTextColor(android.graphics.Color.parseColor("#9E9E9E")) // Light gray
+                holder.icon.setImageResource(android.R.drawable.stat_notify_sync)
+                holder.icon.alpha = 0.5f
+                
+                // Dimmed Gray Style
+                holder.title.setTextColor(Color.parseColor("#757575"))
+                holder.subtitle.setTextColor(Color.parseColor("#9E9E9E"))
             }
+
+            // --- Case C: Password Entry ---
             item.id > 0 -> {
-                // Actual Password Entry
-                iconImg.setImageResource(android.R.drawable.ic_lock_lock)
-                iconImg.alpha = 1.0f
-                titleText.setTextColor(android.graphics.Color.parseColor("#FFFFFF")) // White
-                subtitleText.setTextColor(android.graphics.Color.parseColor("#B0B0B0")) // Light gray
+                // Check if it's a Note or a Password based on title/logic (optional)
+                holder.icon.setImageResource(android.R.drawable.ic_lock_lock)
             }
+
+            // --- Case D: Group (Folder) ---
             else -> {
-                // Group (ID is usually 0 for groups in this app logic)
-                iconImg.setImageResource(android.R.drawable.ic_menu_myplaces) 
-                iconImg.alpha = 1.0f
-                titleText.setTextColor(android.graphics.Color.parseColor("#FFFFFF")) // White
-                subtitleText.setTextColor(android.graphics.Color.parseColor("#B0B0B0")) // Light gray
+                holder.icon.setImageResource(android.R.drawable.ic_menu_myplaces)
+                
+                // Special highlight for Personal group
+                if (item.title == "Personal") {
+                    holder.title.setTextColor(Color.parseColor("#64B5F6")) // Light Blue
+                }
             }
         }
 
         return view
     }
 
+    // Helper to refresh list from Activity
     fun updateData(newData: ArrayList<EntryModel>) {
         dataList.clear()
         dataList.addAll(newData)

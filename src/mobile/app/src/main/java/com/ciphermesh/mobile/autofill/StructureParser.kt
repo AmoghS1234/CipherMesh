@@ -1,114 +1,63 @@
 package com.ciphermesh.mobile.autofill
 
 import android.app.assist.AssistStructure
-import android.os.Parcelable
-import android.text.InputType
+import android.os.Build
 import android.view.View
 import android.view.autofill.AutofillId
-import kotlinx.parcelize.Parcelize
+import androidx.annotation.RequiresApi
 
-@Parcelize
-data class LoginFields(
-    val usernameAutofillId: AutofillId,
-    val passwordAutofillId: AutofillId,
-    val usernameText: String? = null,
-    val passwordText: String? = null
-) : Parcelable
-
+@RequiresApi(Build.VERSION_CODES.O)
 class StructureParser(private val structure: AssistStructure) {
-    
-    fun parseLoginFields(): LoginFields? {
-        var usernameId: AutofillId? = null
-        var passwordId: AutofillId? = null
-        var usernameText: String? = null
-        var passwordText: String? = null
-        
-        structure.traverse { node ->
-            when {
-                // Check autofill hints first (most reliable)
-                node.autofillHints?.any { hint ->
-                    hint == View.AUTOFILL_HINT_USERNAME ||
-                    hint == View.AUTOFILL_HINT_EMAIL_ADDRESS
-                } == true -> {
-                    usernameId = node.autofillId
-                    usernameText = node.autofillValue?.textValue?.toString()
-                }
-                
-                node.autofillHints?.contains(View.AUTOFILL_HINT_PASSWORD) == true -> {
-                    passwordId = node.autofillId
-                    passwordText = node.autofillValue?.textValue?.toString()
-                }
-                
-                // Fallback: check input types and IDs
-                usernameId == null && isUsernameField(node) -> {
-                    usernameId = node.autofillId
-                    usernameText = node.autofillValue?.textValue?.toString()
-                }
-                
-                passwordId == null && isPasswordField(node) -> {
-                    passwordId = node.autofillId
-                    passwordText = node.autofillValue?.textValue?.toString()
+
+    val usernameFields = mutableListOf<AutofillId>()
+    val passwordFields = mutableListOf<AutofillId>()
+    var webDomain: String? = null
+    var packageName: String? = null
+
+    fun parse() {
+        val nodes = structure.windowNodeCount
+        for (i in 0 until nodes) {
+            val windowNode = structure.getWindowNodeAt(i)
+            val rootNode = windowNode.rootViewNode
+            
+            // [FIX] ViewNode uses 'idPackage', not 'packageName'
+            packageName = rootNode.idPackage?.toString()
+            
+            parseNode(rootNode)
+        }
+    }
+
+    private fun parseNode(node: AssistStructure.ViewNode) {
+        if (node.webDomain != null) {
+            webDomain = node.webDomain
+        }
+
+        val hints = node.autofillHints
+        if (hints != null) {
+            for (hint in hints) {
+                if (hint.contains(View.AUTOFILL_HINT_USERNAME) || 
+                    hint.contains("email") || 
+                    hint.contains("phone")) {
+                    node.autofillId?.let { usernameFields.add(it) }
+                } 
+                else if (hint.contains(View.AUTOFILL_HINT_PASSWORD)) {
+                    node.autofillId?.let { passwordFields.add(it) }
                 }
             }
         }
         
-        return if (usernameId != null && passwordId != null) {
-            LoginFields(usernameId!!, passwordId!!, usernameText, passwordText)
-        } else {
-            null
+        if (node.className?.contains("EditText") == true) {
+             val inputType = node.inputType
+             // 129 = textPassword, 145 = textVisiblePassword, 225 = textWebPassword
+             if ((inputType and 0xFFF) == 129 || (inputType and 0xFFF) == 225) {
+                 if (node.autofillId != null && !passwordFields.contains(node.autofillId)) {
+                     passwordFields.add(node.autofillId!!)
+                 }
+             }
         }
-    }
-    
-    fun getPackageName(): String {
-        return structure.activityComponent.packageName
-    }
-    
-    fun getWebDomain(): String? {
-        var domain: String? = null
-        
-        structure.traverse { node ->
-            if (node.webDomain != null && domain == null) {
-                domain = node.webDomain
-            }
+
+        for (i in 0 until node.childCount) {
+            parseNode(node.getChildAt(i))
         }
-        
-        return domain
-    }
-    
-    private fun isUsernameField(node: AssistStructure.ViewNode): Boolean {
-        val inputType = node.inputType
-        
-        return (inputType and InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS != 0) ||
-               (inputType and InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS != 0) ||
-               node.idEntry?.contains("username", ignoreCase = true) == true ||
-               node.idEntry?.contains("email", ignoreCase = true) == true ||
-               node.idEntry?.contains("user", ignoreCase = true) == true ||
-               node.hint?.contains("username", ignoreCase = true) == true ||
-               node.hint?.contains("email", ignoreCase = true) == true
-    }
-    
-    private fun isPasswordField(node: AssistStructure.ViewNode): Boolean {
-        val inputType = node.inputType
-        
-        return (inputType and InputType.TYPE_TEXT_VARIATION_PASSWORD != 0) ||
-               (inputType and InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD != 0) ||
-               node.idEntry?.contains("password", ignoreCase = true) == true ||
-               node.idEntry?.contains("pass", ignoreCase = true) == true ||
-               node.hint?.contains("password", ignoreCase = true) == true
-    }
-}
-
-// [FIXED] Removed 'inline' and 'crossinline' to allow recursion
-private fun AssistStructure.traverse(callback: (AssistStructure.ViewNode) -> Unit) {
-    for (i in 0 until windowNodeCount) {
-        val windowNode = getWindowNodeAt(i)
-        windowNode.rootViewNode.traverse(callback)
-    }
-}
-
-private fun AssistStructure.ViewNode.traverse(callback: (AssistStructure.ViewNode) -> Unit) {
-    callback(this)
-    for (i in 0 until childCount) {
-        getChildAt(i).traverse(callback)
     }
 }

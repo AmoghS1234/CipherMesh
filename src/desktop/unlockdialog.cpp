@@ -210,18 +210,7 @@ void UnlockDialog::onCreateClicked() {
     
     try {
         // [CHANGED] Use m_vault->getDBPath()
-        if (m_vault->createNewVault(m_vault->getDBPath(), p1)) {
-            std::vector<unsigned char> randomBytes = CipherMesh::Core::Crypto::randomBytes(8);
-            std::string hexSuffix;
-            for (unsigned char byte : randomBytes) {
-                char hex[3];
-                snprintf(hex, sizeof(hex), "%02x", byte);
-                hexSuffix += hex;
-            }
-            std::string userId = sanitized + "_" + hexSuffix;
-            
-            m_vault->setUserId(userId);
-            
+        if (m_vault->createNewVault(m_vault->getDBPath(), p1, username)) {
             CipherMesh::Core::Crypto::secureWipe(p1);
             CipherMesh::Core::Crypto::secureWipe(p2);
             m_createUsernameEdit->clear();

@@ -104,8 +104,8 @@ class MainActivity : AppCompatActivity() {
                     userLayout.error = "Username required"
                     return@setOnClickListener
                 }
-                if (p1.length < 8) {
-                    passLayout.error = "Password too short (min 8 chars)"
+                if (p1.length < 1) {
+                    passLayout.error = "Password too short (min 1 chars)"
                     return@setOnClickListener
                 }
                 if (p1 != p2) {

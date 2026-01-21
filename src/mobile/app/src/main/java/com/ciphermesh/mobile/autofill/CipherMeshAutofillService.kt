@@ -1,143 +1,128 @@
 package com.ciphermesh.mobile.autofill
 
 import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.CancellationSignal
-import android.service.autofill.AutofillService
-import android.service.autofill.FillCallback
-import android.service.autofill.FillRequest
-import android.service.autofill.FillResponse
-import android.service.autofill.SaveCallback
-import android.service.autofill.SaveRequest
-import android.service.autofill.Dataset
+import android.service.autofill.*
+import android.view.autofill.AutofillId
 import android.view.autofill.AutofillValue
 import android.widget.RemoteViews
+import android.util.Log
+import androidx.annotation.RequiresApi
+import com.ciphermesh.mobile.MainActivity
 import com.ciphermesh.mobile.R
+import com.ciphermesh.mobile.core.Vault
 
-/**
- * CipherMesh AutoFill Service
- * Provides automatic credential filling for apps and websites
- */
+@RequiresApi(Build.VERSION_CODES.O)
 class CipherMeshAutofillService : AutofillService() {
-    
+
+    private val vault = Vault()
+
+    override fun onConnected() {
+        super.onConnected()
+        Log.d("AutoFill", "Service Connected")
+        val dbPath = this.filesDir.absolutePath + "/vault.db"
+        vault.init(dbPath)
+    }
+
     override fun onFillRequest(
         request: FillRequest,
         cancellationSignal: CancellationSignal,
         callback: FillCallback
     ) {
-        // Parse the view structure to find login fields
+        Log.d("AutoFill", "onFillRequest")
+
         val structure = request.fillContexts.last().structure
         val parser = StructureParser(structure)
-        
-        // Find username and password fields
-        val loginFields = parser.parseLoginFields()
-        if (loginFields == null) {
-            // No login fields found
+        parser.parse()
+
+        var targetDomain = parser.webDomain
+        if (targetDomain == null) {
+            targetDomain = parser.packageName
+        }
+
+        if (targetDomain == null) {
             callback.onSuccess(null)
             return
         }
+
+        // Collect fields to attach authentication to
+        val authIds = ArrayList<AutofillId>()
+        authIds.addAll(parser.usernameFields)
+        authIds.addAll(parser.passwordFields)
+
+        if (vault.isLocked()) {
+            // [FIX] Check if we found fields. We cannot pass null to setAuthentication's first arg.
+            if (authIds.isNotEmpty()) {
+                val response = FillResponse.Builder()
+                    .setAuthentication(
+                        authIds.toTypedArray(), // Pass the array of IDs we found
+                        getAuthIntent(), 
+                        getRemoteViews("Unlock CipherMesh")
+                    )
+                    .build()
+                callback.onSuccess(response)
+            } else {
+                // If we can't find fields to attach auth to, we can't offer autofill securely
+                callback.onSuccess(null)
+            }
+            return
+        }
+
+        val matches = vault.findEntriesByLocation(targetDomain)
         
-        // Get app context (package name or web domain)
-        val appPackage = parser.getPackageName()
-        val webDomain = parser.getWebDomain()
-        
-        // Find matching entries in vault
-        val matcher = EntryMatcher(this)
-        val matches = matcher.findMatches(appPackage, webDomain)
-        
-        if (matches.isEmpty()) {
-            // No matching credentials found
+        if (matches == null || matches.isEmpty()) {
+            Log.d("AutoFill", "No matches found for $targetDomain")
             callback.onSuccess(null)
             return
         }
-        
-        // Build fill response with authentication requirement
-        val response = buildAuthResponse(matches, loginFields)
-        callback.onSuccess(response)
+
+        val responseBuilder = FillResponse.Builder()
+
+        for (matchStr in matches) {
+            val parts = matchStr.split("|")
+            if (parts.size < 4) continue
+
+            val title = parts[1]
+            val username = parts[2]
+            val password = parts[3]
+
+            val datasetBuilder = Dataset.Builder()
+            val presentation = getRemoteViews("$title\n$username")
+            
+            var valid = false
+            if (parser.usernameFields.isNotEmpty()) {
+                datasetBuilder.setValue(parser.usernameFields[0], AutofillValue.forText(username), presentation)
+                valid = true
+            }
+            if (parser.passwordFields.isNotEmpty()) {
+                datasetBuilder.setValue(parser.passwordFields[0], AutofillValue.forText(password), presentation)
+                valid = true
+            } 
+            
+            if (valid) {
+                responseBuilder.addDataset(datasetBuilder.build())
+            }
+        }
+
+        callback.onSuccess(responseBuilder.build())
     }
-    
-    override fun onSaveRequest(
-        request: SaveRequest,
-        callback: SaveCallback
-    ) {
-        // Handle auto-save of new credentials
-        val structure = request.fillContexts.last().structure
-        val parser = StructureParser(structure)
-        
-        val loginFields = parser.parseLoginFields()
-        if (loginFields == null) {
-            callback.onSuccess()
-            return
-        }
-        
-        // Extract entered credentials
-        val username = loginFields.usernameText ?: ""
-        val password = loginFields.passwordText ?: ""
-        
-        if (username.isEmpty() || password.isEmpty()) {
-            callback.onSuccess()
-            return
-        }
-        
-        // Get app context
-        val packageName = parser.getPackageName()
-        val webDomain = parser.getWebDomain()
-        
-        // Check never-save list
-        if (isNeverSave(packageName)) {
-            callback.onSuccess()
-            return
-        }
-        
-        // Show save prompt activity
-        val intent = Intent(this, AutoSaveActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            putExtra(AutoSaveActivity.EXTRA_USERNAME, username)
-            putExtra(AutoSaveActivity.EXTRA_PASSWORD, password)
-            putExtra(AutoSaveActivity.EXTRA_PACKAGE, packageName)
-            putExtra(AutoSaveActivity.EXTRA_WEB_DOMAIN, webDomain)
-        }
-        
-        startActivity(intent)
+
+    override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
         callback.onSuccess()
     }
-    
-    private fun buildAuthResponse(
-        matches: List<MatchedEntry>,
-        loginFields: LoginFields
-    ): FillResponse {
-        // Create intent for authentication activity
-        val authIntent = AutofillAuthActivity.createPendingIntent(
-            this,
-            loginFields,
-            matches
-        )
-        
-        // Create presentation view (what user sees before authentication)
-        val presentation = RemoteViews(packageName, R.layout.autofill_item).apply {
-            setTextViewText(
-                R.id.text,
-                if (matches.size == 1) {
-                    "AutoFill with ${matches[0].title}"
-                } else {
-                    "AutoFill (${matches.size} accounts)"
-                }
-            )
-        }
-        
-        // Build response requiring authentication
-        return FillResponse.Builder()
-            .setAuthentication(
-                arrayOf(loginFields.usernameAutofillId, loginFields.passwordAutofillId),
-                authIntent.intentSender,
-                presentation
-            )
-            .build()
+
+    private fun getRemoteViews(text: String): RemoteViews {
+        val pkg = packageName ?: "com.ciphermesh.mobile" // Safety fallback
+        val presentation = RemoteViews(pkg, android.R.layout.simple_list_item_1)
+        presentation.setTextViewText(android.R.id.text1, text)
+        return presentation
     }
-    
-    private fun isNeverSave(packageName: String): Boolean {
-        val prefs = getSharedPreferences("autofill_prefs", Context.MODE_PRIVATE)
-        return prefs.getBoolean("never_save_$packageName", false)
+
+    private fun getAuthIntent(): android.content.IntentSender {
+        val intent = Intent(this, MainActivity::class.java)
+        // Ensure FLAG_IMMUTABLE is used for Android 12+
+        return PendingIntent.getActivity(this, 1001, intent, PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE).intentSender
     }
 }

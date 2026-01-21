@@ -11,23 +11,21 @@
 #include <QTimer>
 #include <QMap>
 #include <QThread>
-#include <QTextEdit> // [FIX] Added missing include
+#include <QTextEdit> 
 #include <vector>
 #include <memory>
 
-// Forward declarations to avoid circular includes
+// Forward declarations
 namespace CipherMesh { 
     namespace Core { 
         class Vault; 
         struct VaultEntry; 
     }
-    // [FIX] Correct namespace for P2P service
     namespace P2P {
         class IP2PService;
     }
 }
 
-// Forward declare BreachChecker
 class BreachChecker;
 
 class MainWindow : public QMainWindow {
@@ -74,8 +72,9 @@ private slots:
     void onAcceptInviteClicked();
     void onRejectInviteClicked();
     
-    // Breach
+    // Breach & Sync
     void onCheckPasswordBreach();
+    void onVaultSyncEvent(const QString& type, const QString& payload);
 
     // UI Misc
     void refreshTOTPCode();
@@ -112,10 +111,7 @@ private:
 
     // Member Variables
     CipherMesh::Core::Vault* m_vault;
-    
-    // [FIX] Use namespaced type
     CipherMesh::P2P::IP2PService* m_p2pService;
-    
     BreachChecker* m_breachChecker;
 
     QString m_currentUserId;

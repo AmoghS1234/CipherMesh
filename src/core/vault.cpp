@@ -1,7 +1,8 @@
 #include <sodium.h>
 #include "vault.hpp"
 #include "crypto.hpp"
-#include "database.hpp" 
+#include "database.hpp"
+#include "vault_entry.hpp" 
 #include <stdexcept>
 #include <iostream>
 #include <sstream> 
@@ -9,8 +10,15 @@
 #include <string>
 #include <algorithm>
 #include <iomanip>
+#include <ctime>
 
-// Compatibility for desktop if needed
+#ifdef __ANDROID__
+    #include <android/log.h>
+    #define LOG_DEBUG(msg) __android_log_print(ANDROID_LOG_DEBUG, "CipherMesh_Core", "%s", std::string(msg).c_str())
+#else
+    #define LOG_DEBUG(msg) std::cout << "[CORE_DEBUG] " << msg << std::endl
+#endif
+
 #ifdef __ANDROID__
     #include <sqlite3.h>
 #endif
@@ -21,8 +29,40 @@ namespace Core {
 const std::string KEY_CANARY = "CIPHERMESH_OK";
 
 // =========================================================
-//  JSON HELPERS (Dependency-Free)
+//  STATIC HELPERS
 // =========================================================
+
+static std::string base64EncodeInternal(const std::vector<unsigned char>& in) {
+    static const std::string b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int val = 0, valb = -6;
+    for (unsigned char c : in) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(b64[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6) out.push_back(b64[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (out.size() % 4) out.push_back('=');
+    return out;
+}
+
+static std::vector<unsigned char> base64DecodeInternal(const std::string& in) {
+    std::vector<unsigned char> out;
+    std::vector<int> T(256, -1);
+    static const std::string b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (int i=0; i<64; i++) T[b64[i]] = i; 
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        if (T[c] == -1) continue;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) { out.push_back(char((val >> valb) & 0xFF)); valb -= 8; }
+    }
+    return out;
+}
 
 static std::string escapeJson(const std::string& s) {
     std::ostringstream o;
@@ -44,29 +84,44 @@ static std::string escapeJson(const std::string& s) {
 }
 
 static std::string getJsonString(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":\"";
-    size_t start = json.find(search);
-    if (start == std::string::npos) return "";
-    start += search.length();
-    size_t end = json.find("\"", start);
-    if (end == std::string::npos) return "";
-    return json.substr(start, end - start);
+    std::string pattern = "\"" + key + "\"";
+    size_t keyPos = json.find(pattern);
+    if (keyPos == std::string::npos) return "";
+    
+    size_t colonPos = json.find(":", keyPos + pattern.length());
+    if (colonPos == std::string::npos) return "";
+    
+    size_t valStart = colonPos + 1;
+    while (valStart < json.length() && (json[valStart] == ' ' || json[valStart] == '\t' || json[valStart] == '\n' || json[valStart] == '\r')) {
+        valStart++;
+    }
+    
+    if (valStart >= json.length()) return "";
+
+    if (json[valStart] == '"') {
+        size_t start = valStart + 1;
+        size_t end = start;
+        while (end < json.length()) {
+            if (json[end] == '"' && json[end-1] != '\\') break;
+            end++;
+        }
+        if (end >= json.length()) return "";
+        return json.substr(start, end - start);
+    } else {
+        size_t end = json.find_first_of(",}", valStart);
+        if (end == std::string::npos) end = json.length();
+        return json.substr(valStart, end - valStart);
+    }
 }
 
 static long long getJsonLong(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":";
-    size_t start = json.find(search);
-    if (start == std::string::npos) return 0;
-    start += search.length();
-    size_t end = json.find_first_of(",}", start);
-    if (end == std::string::npos) return 0;
-    try {
-        return std::stoll(json.substr(start, end - start));
-    } catch (...) { return 0; }
+    std::string val = getJsonString(json, key);
+    if (val.empty()) return 0;
+    try { return std::stoll(val); } catch(...) { return 0; }
 }
 
 // =========================================================
-//  VAULT LIFECYCLE
+//  VAULT IMPLEMENTATION
 // =========================================================
 
 Vault::Vault() : m_activeGroupId(-1) {
@@ -93,25 +148,43 @@ bool Vault::unlock(const std::string& masterPassword) {
     return loadVault(m_dbPath, masterPassword);
 }
 
-bool Vault::createNewVault(const std::string& path, const std::string& masterPassword) {
+bool Vault::createNewVault(const std::string& path, const std::string& masterPassword, const std::string& username) {
     try {
         if (m_db) m_db->close();
         lock();
         m_dbPath = path;
         m_db->open(path);
         m_db->createTables();
+
         std::vector<unsigned char> salt = m_crypto->randomBytes(m_crypto->SALT_SIZE);
         m_masterKey_RAM = m_crypto->deriveKey(masterPassword, salt);
         m_db->storeMetadata("argon_salt", salt);
-        std::vector<unsigned char> canary_blob = m_crypto->encrypt(KEY_CANARY, m_masterKey_RAM);
-        m_db->storeMetadata("key_canary", canary_blob);
+
+        std::vector<unsigned char> canary = m_crypto->encrypt(KEY_CANARY, m_masterKey_RAM);
+        m_db->storeMetadata("key_canary", canary);
+
         ensureIdentityKeys();
-        
-        addGroup("Personal"); 
+        generateAndSetUniqueId(username);
+        addGroup("Personal");
         setThemeId("professional");
         setAutoLockTimeout(15);
         return true;
-    } catch (...) { lock(); return false; }
+    } catch (...) {
+        lock();
+        return false;
+    }
+}
+
+static std::string sanitizeUsername(const std::string& input) {
+    std::string out;
+    for (char c : input) {
+        if (std::isalnum(static_cast<unsigned char>(c))) {
+            out += std::tolower(static_cast<unsigned char>(c));
+        }
+    }
+    if (out.empty()) out = "user";
+    if (out.length() > 12) out.resize(12);
+    return out;
 }
 
 void Vault::addEncryptedEntry(const VaultEntry& entry, const std::string& base64Ciphertext) {
@@ -120,60 +193,39 @@ void Vault::addEncryptedEntry(const VaultEntry& entry, const std::string& base64
         VaultEntry temp = entry;
         if(temp.uuid.empty()) temp.uuid = m_crypto->generateUUID();
         
-        // 1. Decode Base64 ciphertext
         std::vector<unsigned char> encryptedBlob;
         if(!base64Ciphertext.empty()) {
-            encryptedBlob = m_crypto->base64Decode(base64Ciphertext);
+            encryptedBlob = base64DecodeInternal(base64Ciphertext);
         }
-        
-        // 2. Store directly in DB
         m_db->storeEntry(m_activeGroupId, temp, encryptedBlob);
-        
     } catch (...) {}
 }
 
 bool Vault::loadVault(const std::string& path, const std::string& masterPassword) {
     try {
         if (!m_db->isOpen() || m_dbPath != path) connect(path);
+
         std::vector<unsigned char> salt = m_db->getMetadata("argon_salt");
         if (salt.empty()) return false;
+
         m_masterKey_RAM = m_crypto->deriveKey(masterPassword, salt);
-        std::vector<unsigned char> canary_blob = m_db->getMetadata("key_canary");
-        std::string decrypted_canary = m_crypto->decryptToString(canary_blob, m_masterKey_RAM);
-        if (decrypted_canary != KEY_CANARY) { lock(); return false; }
-        
-        ensureIdentityKeys();
-        
-        try {
-            std::vector<unsigned char> uidData = m_db->getMetadata("user_id");
-            m_userId = std::string(uidData.begin(), uidData.end());
-        } catch(...) { m_userId = ""; }
-        
-        // [FIX] Ensure userId exists (for old vaults or migration)
-        if (m_userId.empty()) {
-            generateAndSetUniqueId("user");
-        }
-        
-        // [FIX] Migration: Update any group members with empty user_id to current userId
-        try {
-            auto groups = getGroupNames();
-            for (const auto& groupName : groups) {
-                int groupId = getGroupId(groupName);
-                auto members = m_db->getGroupMembers(groupId);
-                for (const auto& member : members) {
-                    if (member.userId.empty()) {
-                        // Remove the empty entry and add the current user
-                        m_db->removeGroupMember(groupId, "");
-                        m_db->addGroupMember(groupId, m_userId, member.role, member.status);
-                    }
-                }
-            }
-        } catch (...) {
-            // Migration failed, but don't block login
+
+        std::vector<unsigned char> canary = m_db->getMetadata("key_canary");
+        if (m_crypto->decryptToString(canary, m_masterKey_RAM) != KEY_CANARY) {
+            lock();
+            return false;
         }
 
+        std::vector<unsigned char> uid = m_db->getMetadata("user_id");
+        if (uid.empty()) throw std::runtime_error("Vault has no user_id");
+        m_userId.assign(uid.begin(), uid.end());
+
+        loadIdentityKeys();
         return true;
-    } catch (...) { lock(); return false; }
+    } catch (...) {
+        lock();
+        return false;
+    }
 }
 
 bool Vault::verifyMasterPassword(const std::string& password) {
@@ -242,297 +294,275 @@ void Vault::checkLocked() const { if (isLocked()) throw std::runtime_error("Vaul
 void Vault::checkGroupActive() const { checkLocked(); if (!isGroupActive()) throw std::runtime_error("No group is active."); }
 bool Vault::isConnected() const { return m_db && m_db->isOpen(); }
 
-// =========================================================
-//  SYNC LOGIC (Store-and-Forward)
-// =========================================================
-
 void Vault::setP2PSendCallback(P2PSendCallback cb) { m_p2pSender = cb; }
 void Vault::setSyncCallback(SyncCallback cb) { m_syncCb = cb; }
 void Vault::notifySync(const std::string& type, const std::string& payload) { if(m_syncCb) m_syncCb(type, payload); }
-void Vault::processSyncEvent(const std::string&) {} // Stub
+void Vault::processSyncEvent(const std::string&) {}
 
-std::string Vault::serializeEntry(const VaultEntry& e, const std::string& password) {
+std::string Vault::serializeEntry(const VaultEntry& e, const std::string& password, const std::vector<unsigned char>& key) {
     std::ostringstream json;
+    std::vector<unsigned char> encBytes = m_crypto->encrypt(password, key);
+    std::string encBase64 = base64EncodeInternal(encBytes);
+
     json << "{"
          << "\"uuid\":\"" << escapeJson(e.uuid) << "\","
          << "\"title\":\"" << escapeJson(e.title) << "\","
          << "\"username\":\"" << escapeJson(e.username) << "\","
-         << "\"password\":\"" << escapeJson(password) << "\","
+         << "\"password\":\"" << encBase64 << "\"," 
          << "\"url\":\"" << escapeJson(e.url) << "\","
          << "\"notes\":\"" << escapeJson(e.notes) << "\","
-         << "\"totpSecret\":\"" << escapeJson(e.totpSecret) << "\","
          << "\"type\":\"" << escapeJson(e.entryType) << "\","
-         << "\"updatedAt\":" << e.updatedAt << ","
-         << "\"locations\":[";
-         
-    for(size_t i=0; i<e.locations.size(); ++i) {
-        json << "{\"type\":\"" << escapeJson(e.locations[i].type) << "\","
-             << "\"value\":\"" << escapeJson(e.locations[i].value) << "\"}";
-        if(i < e.locations.size()-1) json << ",";
-    }
-    json << "]}";
+         << "\"updatedAt\":" << std::chrono::system_clock::to_time_t(std::chrono::system_clock::now())
+         << "}";
     return json.str();
 }
 
 void Vault::queueSyncForGroup(const std::string& groupName, const std::string& operation, const std::string& payload) {
+    if (groupName == "Personal") return;
     int gid = m_db->getGroupId(groupName);
-    if(gid == -1) return;
-    
+    if (gid == -1) return;
     std::vector<GroupMember> members = m_db->getGroupMembers(gid);
     std::string myId = getUserId();
-    
-    for(const auto& m : members) {
-        if (m.userId == myId) continue; 
+    for (const auto& m : members) {
+        if (m.userId == myId) continue;
         m_db->storeSyncJob(m.userId, groupName, operation, payload);
         processOutboxForUser(m.userId);
     }
 }
 
-// [NEW] Queue sync for a specific member (used for GROUP_SPLIT)
 void Vault::queueSyncForMember(const std::string& groupName, const std::string& memberId, const std::string& operation, const std::string& payload) {
+    if (groupName == "Personal") return;
     m_db->storeSyncJob(memberId, groupName, operation, payload);
     processOutboxForUser(memberId);
 }
 
 void Vault::processOutboxForUser(const std::string& userId) {
     if (!m_p2pSender) return;
-    try {
-        std::vector<SyncJob> jobs = m_db->getSyncJobsForUser(userId);
-        for(const auto& job : jobs) {
-            std::ostringstream wrapper;
-            wrapper << "{"
-                    << "\"type\":\"sync-payload\","
-                    << "\"jobId\":" << job.id << ","
-                    << "\"group\":\"" << escapeJson(job.groupName) << "\","
-                    << "\"op\":\"" << escapeJson(job.operation) << "\","
-                    << "\"data\":" << job.payload 
-                    << "}";
-            m_p2pSender(userId, wrapper.str());
-        }
-    } catch(...) {}
+    std::vector<SyncJob> jobs;
+    try { jobs = m_db->getSyncJobsForUser(userId); } catch (...) { return; }
+    for (const auto& job : jobs) {
+        std::ostringstream msg;
+        msg << "{"
+            << "\"type\":\"sync-payload\","
+            << "\"jobId\":" << job.id << ","
+            << "\"group\":\"" << escapeJson(job.groupName) << "\","
+            << "\"op\":\"" << escapeJson(job.operation) << "\","
+            << "\"data\":" << job.payload
+            << "}";
+        m_p2pSender(userId, msg.str());
+    }
+}
+
+void Vault::onPeerOnline(const std::string& userId) {
+    processOutboxForUser(userId);
+    notifySync("peer-online", userId);
 }
 
 void Vault::handleSyncAck(int jobId) {
     try { m_db->deleteSyncJob(jobId); } catch(...) {}
 }
 
+int Vault::findGroupIdForSync(const std::string& remoteGroupName, const std::string& senderId) {
+    int gid = m_db->getGroupId(remoteGroupName);
+    if (gid != -1) {
+        auto members = m_db->getGroupMembers(gid);
+        for (const auto& m : members) { if (m.userId == senderId) return gid; }
+    }
+    std::vector<std::string> allGroups = m_db->getAllGroupNames();
+    for (const auto& localName : allGroups) {
+        if (localName.find(remoteGroupName) == 0) {
+            int candidateId = m_db->getGroupId(localName);
+            auto members = m_db->getGroupMembers(candidateId);
+            for (const auto& m : members) { if (m.userId == senderId) return candidateId; }
+        }
+    }
+    return m_db->getGroupId(remoteGroupName);
+}
+
 void Vault::handleIncomingSync(const std::string& senderId, const std::string& payload) {
+    long long jobId = getJsonLong(payload, "jobId");
+    std::string op, group, dataJson;
+    int gid = -1;
+    std::vector<unsigned char> groupKey;
+    bool found = false;
+
     try {
-        // 1. Check if it's an ACK
-        bool isAck = (payload.find("\"type\":\"sync-ack\"") != std::string::npos);
-        if (isAck) {
-            long long jobId = getJsonLong(payload, "jobId");
+        // 1. Always handle ACKs immediately
+        if (payload.find("\"type\":\"sync-ack\"") != std::string::npos) {
             if (jobId > 0) handleSyncAck((int)jobId);
             return;
         }
 
-        // 2. Parse Incoming Data
-        std::string op = getJsonString(payload, "op");
-        std::string group = getJsonString(payload, "group");
-        long long remoteJobId = getJsonLong(payload, "jobId");
-        
-        int gid = m_db->getGroupId(group);
-        if (gid == -1) {
-            std::cerr << "Sync error: Unknown group " << group << std::endl;
-            return; // Unknown group
+        op = getJsonString(payload, "op");
+        group = getJsonString(payload, "group");
+
+        // 2. Robust JSON Object Extraction
+        size_t dpos = payload.find("\"data\"");
+        if (dpos != std::string::npos) {
+            size_t b = payload.find("{", dpos);
+            if (b != std::string::npos) {
+                int depth = 1;
+                size_t i = b + 1;
+                for (; i < payload.size() && depth > 0; ++i) {
+                    if (payload[i] == '{') depth++;
+                    else if (payload[i] == '}') depth--;
+                }
+                dataJson = payload.substr(b + 1, i - b - 2);
+            }
         }
 
-        std::vector<unsigned char> encGroupKey = m_db->getEncryptedGroupKeyById(gid);
-        std::vector<unsigned char> groupKey = m_crypto->decrypt(encGroupKey, m_masterKey_RAM);
+        if (op == "INVITE") {
+            m_db->storePendingInvite(senderId, group, dataJson);
+            notifySync("invites-updated", "");
+            goto SEND_ACK; // Always ACK invites
+        }
 
-        // [FIX] Improved JSON parsing - find matching closing brace, not just last }
-        size_t dataPos = payload.find("\"data\":{");
-        if (dataPos == std::string::npos) {
-            std::cerr << "Sync error: No data field in payload" << std::endl;
-            return;
-        }
-        
-        // Find the matching closing brace for the data object
-        size_t braceStart = dataPos + 7; // Position of opening {
-        int depth = 1;
-        size_t endPos = braceStart + 1;
-        while (endPos < payload.length() && depth > 0) {
-            if (payload[endPos] == '{') depth++;
-            else if (payload[endPos] == '}') depth--;
-            endPos++;
-        }
-        if (depth != 0) {
-            std::cerr << "Sync error: Malformed JSON - unmatched braces" << std::endl;
-            return;
-        }
-        std::string dataJson = payload.substr(braceStart + 1, endPos - braceStart - 2); 
+        gid = findGroupIdForSync(group, senderId);
+        if (gid == -1) goto SEND_ACK; // Not found locally, but ACK to stop retries
+
+        groupKey = m_crypto->decrypt(m_db->getEncryptedGroupKeyById(gid), m_masterKey_RAM);
 
         if (op == "UPSERT") {
-             VaultEntry e;
-             e.uuid = getJsonString(dataJson, "uuid");
-             
-             // [FIX] Validate UUID exists before proceeding
-             if (e.uuid.empty()) {
-                 std::cerr << "Sync error: UPSERT without UUID - skipping" << std::endl;
-                 // Still send ACK to avoid infinite retry
-                 if (m_p2pSender && remoteJobId > 0) {
-                     std::ostringstream ack;
-                     ack << "{\"type\":\"sync-ack\",\"jobId\":" << remoteJobId << "}";
-                     m_p2pSender(senderId, ack.str());
-                 }
-                 m_crypto->secureWipe(groupKey);
-                 return;
-             }
-             
-             e.title = getJsonString(dataJson, "title");
-             e.username = getJsonString(dataJson, "username");
-             std::string pass = getJsonString(dataJson, "password");
-             e.url = getJsonString(dataJson, "url");
-             e.notes = getJsonString(dataJson, "notes");
-             e.updatedAt = getJsonLong(dataJson, "updatedAt");
-             e.entryType = getJsonString(dataJson, "type");
-             e.passwordExpiry = 0; 
-             
-             std::vector<unsigned char> encPass = m_crypto->encrypt(pass, groupKey);
-             m_db->storeEntry(gid, e, encPass);
-        } 
-        else if (op == "MEMBER_REMOVE") {
-             std::string uid = getJsonString(dataJson, "userId");
-             if (!uid.empty()) {
-                 m_db->removeGroupMember(gid, uid);
-             }
-        }
-        else if (op == "MEMBER_ADD") {
-             // [FIX] Handle new member being added to group
-             std::string uid = getJsonString(dataJson, "userId");
-             std::string status = getJsonString(dataJson, "status");
-             if (!uid.empty()) {
-                 // Check if member already exists to avoid duplicate
-                 auto members = m_db->getGroupMembers(gid);
-                 bool exists = false;
-                 for (const auto& m : members) {
-                     if (m.userId == uid) {
-                         exists = true;
-                         break;
-                     }
-                 }
-                 if (!exists) {
-                     m_db->addGroupMember(gid, uid, "member", status.empty() ? "accepted" : status);
-                 }
-             }
-        }
-        else if (op == "MEMBER_KICK") {
-             // [FIX] Handle being kicked from a group
-             // The group owner has removed us from the group
-             // The message is sent directly to the kicked user, so we remove ourselves
-             std::string myId = getUserId();
-             // Verify this kick message is actually for us
-             // The sender should have sent this directly to the kicked user
-             m_db->removeGroupMember(gid, myId);
-        }
-        else if (op == "GROUP_SPLIT") {
-             // [NEW] Handle group split (owner deleted group, each member becomes solo owner)
-             // Remove all other members, making this user the sole owner
-             std::string myId = getUserId();
-             auto members = m_db->getGroupMembers(gid);
-             
-             // Remove all members except self
-             for (const auto& member : members) {
-                 if (member.userId != myId) {
-                     m_db->removeGroupMember(gid, member.userId);
-                 }
-             }
-             
-             // Update self to owner status
-             m_db->updateGroupMemberRole(gid, myId, "owner");
-             
-             std::cerr << "Group split: " << group << " - now solo owner" << std::endl;
+            VaultEntry e;
+            e.uuid = getJsonString(dataJson, "uuid");
+            e.updatedAt = getJsonLong(dataJson, "updatedAt");
+
+            auto locals = m_db->getEntriesForGroup(gid);
+            found = false;
+            for (auto& l : locals) {
+                if (l.uuid == e.uuid) {
+                    // IDEMPOTENCY: If local is newer or same, ignore but still ACK
+                    if (l.updatedAt >= e.updatedAt) goto SEND_ACK;
+                    e.id = l.id;
+                    found = true;
+                    break;
+                }
+            }
+
+            e.title = getJsonString(dataJson, "title");
+            e.username = getJsonString(dataJson, "username");
+            e.url = getJsonString(dataJson, "url");
+            e.notes = getJsonString(dataJson, "notes");
+            e.entryType = getJsonString(dataJson, "type");
+            
+            auto encPass = base64DecodeInternal(getJsonString(dataJson, "password"));
+            if (found) m_db->updateEntry(e, &encPass);
+            else m_db->storeEntry(gid, e, encPass);
+
+            notifySync("entry-updated", group);
         }
         else if (op == "DELETE") {
-             // [FIX] Handle password deletion via sync
-             std::string uuid = getJsonString(dataJson, "uuid");
-             if (!uuid.empty()) {
-                 // Find and delete entry by UUID
-                 auto entries = m_db->getEntriesForGroup(gid);
-                 bool found = false;
-                 for (const auto& entry : entries) {
-                     if (entry.uuid == uuid) {
-                         m_db->deleteEntry(entry.id);
-                         found = true;
-                         break;
-                     }
-                 }
-                 if (!found) {
-                     std::cerr << "Sync warning: DELETE for non-existent UUID " << uuid << std::endl;
-                 }
-             }
+            std::string uuid = getJsonString(dataJson, "uuid");
+            auto locals = m_db->getEntriesForGroup(gid);
+            for (auto& l : locals) {
+                if (l.uuid == uuid) {
+                    m_db->deleteEntry(l.id);
+                    notifySync("entry-deleted", group);
+                    break;
+                }
+            }
         }
 
-        m_crypto->secureWipe(groupKey);
-
-        // 3. Send ACK back
-        if (m_p2pSender && remoteJobId > 0) {
-             std::ostringstream ack;
-             ack << "{\"type\":\"sync-ack\",\"jobId\":" << remoteJobId << "}";
-             m_p2pSender(senderId, ack.str());
+    SEND_ACK:
+        if (jobId > 0 && m_p2pSender) {
+            std::ostringstream ack;
+            ack << "{\"type\":\"sync-ack\",\"jobId\":" << jobId << "}";
+            m_p2pSender(senderId, ack.str());
         }
-
-    } catch (const std::exception& e) {
-        std::cerr << "Error handling incoming sync from " << senderId << ": " << e.what() << std::endl;
     } catch (...) {
-        std::cerr << "Unknown error handling incoming sync from " << senderId << std::endl;
+        // Guarantee ACK on error to clear sender outbox
+        if (jobId > 0 && m_p2pSender) {
+            std::ostringstream ack;
+            ack << "{\"type\":\"sync-ack\",\"jobId\":" << jobId << "}";
+            m_p2pSender(senderId, ack.str());
+        }
     }
 }
 
-// =========================================================
-//  ENTRY MANAGEMENT
-// =========================================================
-
 bool Vault::addEntry(const VaultEntry& entry, const std::string& password) {
-    checkGroupActive();
-    try {
-        VaultEntry temp = entry;
-        if(temp.uuid.empty()) temp.uuid = m_crypto->generateUUID();
-        
-        std::vector<unsigned char> encryptedPassword = m_crypto->encrypt(password, m_activeGroupKey_RAM);
-        m_db->storeEntry(m_activeGroupId, temp, encryptedPassword);
-        
-        std::string json = serializeEntry(temp, password);
-        queueSyncForGroup(m_activeGroupName, "UPSERT", json);
-        
-        return true;
-    } catch (...) { return false; }
+    if (isLocked()) return false;
+    if (!isGroupActive()) return false;
+
+    VaultEntry e = entry;
+    if (e.uuid.empty()) e.uuid = m_crypto->generateUUID();
+    e.createdAt = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    e.updatedAt = e.createdAt;
+
+    std::vector<unsigned char> encPass = m_crypto->encrypt(password, m_activeGroupKey_RAM);
+    m_db->storeEntry(m_activeGroupId, e, encPass);
+
+    if (m_activeGroupName != "Personal") {
+        std::string payload = serializeEntry(e, password, m_activeGroupKey_RAM);
+        queueSyncForGroup(m_activeGroupName, "UPSERT", payload);
+    }
+    return true;
 }
 
 bool Vault::updateEntry(const VaultEntry& entry, const std::string& newPassword) {
-    checkGroupActive();
-    try {
-        std::vector<unsigned char> encryptedPassword;
-        if (!newPassword.empty()) {
-            encryptedPassword = m_crypto->encrypt(newPassword, m_activeGroupKey_RAM);
-            m_db->updateEntry(entry, &encryptedPassword);
-        } else {
-            m_db->updateEntry(entry, nullptr);
-        }
-        
-        std::string passToSync = newPassword;
-        if(passToSync.empty()) passToSync = getDecryptedPassword(entry.id);
-        
-        std::string json = serializeEntry(entry, passToSync);
-        queueSyncForGroup(m_activeGroupName, "UPSERT", json);
-        return true;
-    } catch (...) { return false; }
+    checkLocked();
+    int groupId = m_db->getGroupIdForEntry(entry.id);
+    if (groupId == -1) return false;
+
+    VaultEntry original;
+    auto existingEntries = m_db->getEntriesForGroup(groupId);
+    bool found = false;
+    for(const auto& ex : existingEntries) {
+        if (ex.id == entry.id) { original = ex; found = true; break; }
+    }
+    if (!found) return false;
+
+    VaultEntry updated = entry;
+    updated.uuid = original.uuid; 
+    updated.entryType = original.entryType;
+    updated.totpSecret = original.totpSecret;
+    updated.updatedAt = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
+    std::vector<unsigned char> encryptionKey;
+    std::string groupName;
+    auto names = m_db->getAllGroupNames();
+    for(const auto& n : names) if(m_db->getGroupId(n) == groupId) { groupName = n; break; }
+
+    if (groupId == m_activeGroupId && !m_activeGroupKey_RAM.empty()) {
+        encryptionKey = m_activeGroupKey_RAM;
+    } else {
+        auto encKey = m_db->getEncryptedGroupKeyById(groupId);
+        try { encryptionKey = m_crypto->decrypt(encKey, m_masterKey_RAM); } catch (...) { return false; }
+    }
+
+    std::vector<unsigned char> encPass = m_crypto->encrypt(newPassword, encryptionKey);
+    m_db->updateEntry(updated, &encPass);
+
+    if (groupName != "Personal" && !groupName.empty()) {
+        std::string payload = serializeEntry(updated, newPassword, encryptionKey);
+        queueSyncForGroup(groupName, "UPSERT", payload);
+    }
+    return true;
 }
 
 bool Vault::deleteEntry(int entryId) {
-    checkGroupActive();
-    std::string uuid = "";
-    auto entries = m_db->getEntriesForGroup(m_activeGroupId);
-    for(const auto& e : entries) { if(e.id == entryId) { uuid = e.uuid; break; } }
-    
-    bool res = m_db->deleteEntry(entryId);
-    
-    if (res && !uuid.empty()) {
-        std::ostringstream json;
-        json << "{\"uuid\":\"" << uuid << "\"}";
-        queueSyncForGroup(m_activeGroupName, "DELETE", json.str());
+    if (isLocked()) return false;
+    int groupId = m_db->getGroupIdForEntry(entryId);
+    if (groupId == -1) return false;
+
+    std::string uuid;
+    auto existingEntries = m_db->getEntriesForGroup(groupId);
+    for(const auto& ex : existingEntries) {
+        if (ex.id == entryId) { uuid = ex.uuid; break; }
     }
-    return res;
+
+    if (!m_db->deleteEntry(entryId)) return false;
+
+    if (!uuid.empty()) {
+        std::string groupName;
+        auto names = m_db->getAllGroupNames();
+        for(const auto& n : names) if(m_db->getGroupId(n) == groupId) { groupName = n; break; }
+
+        if (!groupName.empty() && groupName != "Personal") { 
+            std::string payload = "{\"uuid\":\"" + escapeJson(uuid) + "\"}";
+            queueSyncForGroup(groupName, "DELETE", payload);
+        }
+    }
+    return true;
 }
 
 std::vector<VaultEntry> Vault::getEntries() {
@@ -563,6 +593,43 @@ std::string Vault::getEntryFullDetails(int entryId) {
     return ss.str();
 }
 
+bool Vault::renameGroup(const std::string& oldName, const std::string& newName) {
+    checkLocked();
+    if (!isGroupOwner(oldName)) return false;
+    int gid = m_db->getGroupId(oldName);
+    if (gid == -1) return false;
+
+    m_db->exec("UPDATE groups SET name = '" + escapeJson(newName) + "' WHERE id = " + std::to_string(gid));
+
+    std::ostringstream payload;
+    payload << "{\"old\":\"" << escapeJson(oldName) << "\",\"new\":\"" << escapeJson(newName) << "\"}";
+
+    queueSyncForGroup(newName, "GROUP_RENAME", payload.str());
+    notifySync("groups-updated", "");
+    return true;
+}
+
+void Vault::leaveGroup(const std::string& groupName) {
+    checkLocked();
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return;
+
+    std::string myId = getUserId();
+    m_db->removeGroupMember(gid, myId);
+
+    std::string owner = m_db->getGroupOwner(gid);
+    if (!owner.empty() && owner != myId) {
+        std::ostringstream payload;
+        payload << "{\"userId\":\"" << escapeJson(myId) << "\"}";
+        m_db->storeSyncJob(owner, groupName, "MEMBER_REMOVE", payload.str());
+        processOutboxForUser(owner);
+    }
+    
+    // Delete group locally to avoid ghost groups
+    m_db->deleteGroup(groupName);
+    notifySync("groups-updated", "");
+}
+
 std::vector<VaultEntry> Vault::searchEntries(const std::string& searchTerm) {
     checkLocked();
     std::vector<VaultEntry> allEntries;
@@ -590,10 +657,6 @@ std::vector<VaultEntry> Vault::findEntriesByLocation(const std::string& location
     return m_db->findEntriesByLocation(locationValue);
 }
 
-// =========================================================
-//  GROUP & MEMBER MANAGEMENT
-// =========================================================
-
 bool Vault::setActiveGroup(const std::string& groupName) {
     checkLocked();
     lockActiveGroup();
@@ -616,26 +679,48 @@ void Vault::lockActiveGroup() {
 bool Vault::isGroupActive() const { return !m_activeGroupKey_RAM.empty() && m_activeGroupId != -1; }
 
 bool Vault::addGroup(const std::string& groupName, const std::vector<unsigned char>& key, const std::string& ownerId) {
-    if (isLocked()) return false;
-    std::vector<unsigned char> finalKey = key;
-    if (finalKey.empty()) {
-        finalKey.resize(32);
-        CipherMesh::Core::Crypto::randomBytes(finalKey.data(), 32);
-    }
+    checkLocked();
+    std::string myId = getUserId();
+    if (myId.empty()) return false;
+
     try {
-        std::vector<unsigned char> encryptedKey = CipherMesh::Core::Crypto::encrypt(finalKey, m_masterKey_RAM);
-        std::string myId = getUserId();
-        std::string finalOwner = (ownerId.empty() || ownerId == myId) ? myId : ownerId;
+        std::vector<unsigned char> finalKey = key;
+        if (finalKey.empty()) {
+            finalKey.resize(32);
+            Crypto::randomBytes(finalKey.data(), 32);
+        }
+        std::vector<unsigned char> encryptedKey = Crypto::encrypt(finalKey, m_masterKey_RAM);
+        std::string finalOwner = ownerId.empty() || ownerId == myId ? myId : ownerId;
+
         m_db->storeEncryptedGroup(groupName, encryptedKey, finalOwner);
-        std::string role = (finalOwner == myId) ? "owner" : "member";
-        m_db->addGroupMember(m_db->getGroupId(groupName), myId, role, "accepted");
+        int gid = m_db->getGroupId(groupName);
+        if (gid == -1) return false;
+
+        m_db->addGroupMember(gid, finalOwner, "owner", "accepted");
+        m_db->updateGroupOwner(gid, finalOwner);
+        m_db->updateGroupMemberRole(gid, finalOwner, "owner");
         return true;
-    } catch (const DBException&) { return false; }
+    } catch (...) { return false; }
 }
 
 bool Vault::deleteGroup(const std::string& groupName) {
     checkLocked();
-    return m_db->deleteGroup(groupName);
+    if (!isGroupOwner(groupName)) return false;
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return false;
+
+    auto members = m_db->getGroupMembers(gid);
+    std::string myId = getUserId();
+    for (const auto& m : members) {
+        if (m.userId == myId) continue;
+        std::ostringstream payload;
+        payload << "{ \"reason\":\"group_deleted\" }";
+        m_db->storeSyncJob(m.userId, groupName, "GROUP_SPLIT", payload.str());
+        processOutboxForUser(m.userId);
+    }
+    m_db->deleteGroup(groupName);
+    notifySync("group-deleted", groupName);
+    return true;
 }
 
 void Vault::removeUser(const std::string& groupName, const std::string& userId) {
@@ -644,19 +729,16 @@ void Vault::removeUser(const std::string& groupName, const std::string& userId) 
     if(gid == -1) return;
     m_db->removeGroupMember(gid, userId);
     
-    // Sync KICK
     std::ostringstream kickPayload;
     kickPayload << "{\"reason\":\"removed\"}";
     m_db->storeSyncJob(userId, groupName, "MEMBER_KICK", kickPayload.str());
     processOutboxForUser(userId);
     
-    // Sync MEMBER_REMOVE
     std::ostringstream updatePayload;
     updatePayload << "{\"userId\":\"" << userId << "\"}";
     queueSyncForGroup(groupName, "MEMBER_REMOVE", updatePayload.str());
 }
 
-// [FIX] Compatibility for Desktop
 void Vault::removeGroupMember(const std::string& groupName, const std::string& userId) {
     removeUser(groupName, userId);
 }
@@ -682,9 +764,25 @@ bool Vault::canUserEdit(const std::string& groupName) {
 std::vector<std::string> Vault::getGroupNames() { checkLocked(); return m_db->getAllGroupNames(); }
 bool Vault::groupExists(const std::string& groupName) { try { return m_db->getGroupId(groupName) != -1; } catch(...) { return false; } }
 int Vault::getGroupId(const std::string& groupName) { return m_db->getGroupId(groupName); }
-std::string Vault::getGroupOwner(int groupId) { checkLocked(); return m_db->getGroupOwner(groupId); }
+std::string Vault::getGroupOwner(int groupId) {
+    checkLocked();
+    if (groupId == -1) return "";
+    auto members = m_db->getGroupMembers(groupId);
+    for (const auto& m : members) { if (m.role == "owner") return m.userId; }
+    return "";
+}
+
 std::string Vault::getGroupOwner(const std::string& groupName) { return getGroupOwner(getGroupId(groupName)); }
-bool Vault::isGroupOwner(const std::string& groupName) { return getGroupOwner(groupName) == getUserId(); }
+bool Vault::isGroupOwner(const std::string& groupName) {
+    checkLocked();
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return false;
+    std::string myId = getUserId();
+    auto members = m_db->getGroupMembers(gid);
+    for (const auto& m : members) { if (m.userId == myId && m.role == "owner") return true; }
+    return false;
+}
+
 void Vault::addGroupMember(const std::string& groupName, const std::string& userId, const std::string& role, const std::string& status) { checkLocked(); m_db->addGroupMember(m_db->getGroupId(groupName), userId, role, status); }
 std::vector<GroupMember> Vault::getGroupMembers(const std::string& groupName) { checkLocked(); return m_db->getGroupMembers(m_db->getGroupId(groupName)); }
 
@@ -699,19 +797,29 @@ std::vector<unsigned char> Vault::getGroupKey(const std::string& groupName) {
 void Vault::setGroupPermissions(int groupId, bool adminsOnly) { m_db->setGroupPermissions(groupId, adminsOnly); }
 GroupPermissions Vault::getGroupPermissions(int groupId) { return m_db->getGroupPermissions(groupId); }
 void Vault::updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole) { m_db->updateGroupMemberRole(groupId, userId, newRole); }
-void Vault::updateGroupMemberStatus(const std::string& groupName, const std::string& userId, const std::string& newStatus) { 
-    int gid = m_db->getGroupId(groupName); 
-    m_db->updateGroupMemberStatus(gid, userId, newStatus);
-    
-    // [FIX] When a member's status changes to "accepted", broadcast updated member list to all members
-    if (newStatus == "accepted") {
-        std::ostringstream memberData;
-        memberData << "{\"userId\":\"" << escapeJson(userId) << "\",\"status\":\"accepted\"}";
-        queueSyncForGroup(groupName, "MEMBER_ADD", memberData.str());
-    }
-}
+void Vault::updateGroupMemberStatus(const std::string& groupName, const std::string& userId, const std::string& newStatus) {
+    checkLocked();
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return;
 
-// --- Identity & Invites ---
+    m_db->updateGroupMemberStatus(gid, userId, newStatus);
+    if (newStatus != "accepted") return;
+    if (!isGroupOwner(groupName)) return;
+
+    auto members = m_db->getGroupMembers(gid);
+    std::ostringstream snapshot;
+    snapshot << "{ \"members\":[";
+    for (size_t i = 0; i < members.size(); ++i) {
+        snapshot << "{\"userId\":\"" << escapeJson(members[i].userId) << "\","
+                 << "\"role\":\"" << escapeJson(members[i].role) << "\","
+                 << "\"status\":\"" << escapeJson(members[i].status) << "\"}";
+        if (i + 1 < members.size()) snapshot << ",";
+    }
+    snapshot << "]}";
+
+    queueSyncForGroup(groupName, "MEMBER_LIST", snapshot.str());
+    notifySync("members-updated", groupName);
+}
 
 void Vault::setUserId(const std::string& userId) {
     checkLocked();
@@ -723,54 +831,37 @@ void Vault::setUserId(const std::string& userId) {
 std::string Vault::getUserId() {
     checkLocked();
     if (!m_userId.empty()) return m_userId;
-    try { 
-        std::vector<unsigned char> data = m_db->getMetadata("user_id"); 
-        m_userId = std::string(data.begin(), data.end()); 
-        
-        // [FIX] If userId is still empty (old vaults), generate one
-        if (m_userId.empty()) {
-            generateAndSetUniqueId("user");
-        }
-        
-        return m_userId; 
-    } catch (...) {
-        // [FIX] If no userId exists, generate one
-        try {
-            generateAndSetUniqueId("user");
-            return m_userId;
-        } catch (...) {
-            return "";
-        }
-    }
+    std::vector<unsigned char> data = m_db->getMetadata("user_id");
+    if (data.empty()) throw std::runtime_error("Vault has no user_id. Vault is corrupted.");
+    m_userId.assign(data.begin(), data.end());
+    return m_userId;
 }
 
 void Vault::generateAndSetUniqueId(const std::string& username) {
     checkLocked();
-    if (m_identityPublicKey.empty()) ensureIdentityKeys();
-    unsigned char hash[4]; 
-    crypto_generichash(hash, sizeof(hash), m_identityPublicKey.data(), m_identityPublicKey.size(), NULL, 0);
-    char suffix[16];
-    snprintf(suffix, sizeof(suffix), "#%02X%02X%02X%02X", hash[0], hash[1], hash[2], hash[3]);
-    std::string uniqueId = username + std::string(suffix);
-    setUserId(uniqueId);
+    std::string uuid = m_crypto->generateUUID();
+    std::string finalId = sanitizeUsername(username) + "#" + uuid.substr(0, 8);
+    setUserId(finalId);
     setUsername(username);
 }
 
 void Vault::ensureIdentityKeys() {
-    try {
-        std::vector<unsigned char> encPriv = m_db->getMetadata("identity_priv");
-        std::vector<unsigned char> pub = m_db->getMetadata("identity_pub");
-        if (encPriv.empty() || pub.empty()) throw std::runtime_error("Keys missing");
-        m_identityPrivateKey = m_crypto->decrypt(encPriv, m_masterKey_RAM);
-        m_identityPublicKey = pub;
-    } catch (...) {
-        m_identityPublicKey.resize(crypto_box_PUBLICKEYBYTES);
-        m_identityPrivateKey.resize(crypto_box_SECRETKEYBYTES);
-        crypto_box_keypair(m_identityPublicKey.data(), m_identityPrivateKey.data());
-        std::vector<unsigned char> encPriv = m_crypto->encrypt(m_identityPrivateKey, m_masterKey_RAM);
-        m_db->storeMetadata("identity_priv", encPriv);
-        m_db->storeMetadata("identity_pub", m_identityPublicKey);
-    }
+    checkLocked();
+    m_identityPublicKey.resize(crypto_box_PUBLICKEYBYTES);
+    m_identityPrivateKey.resize(crypto_box_SECRETKEYBYTES);
+    crypto_box_keypair(m_identityPublicKey.data(), m_identityPrivateKey.data());
+    std::vector<unsigned char> encPriv = m_crypto->encrypt(m_identityPrivateKey, m_masterKey_RAM);
+    m_db->storeMetadata("identity_priv", encPriv);
+    m_db->storeMetadata("identity_pub", m_identityPublicKey);
+}
+
+void Vault::loadIdentityKeys() {
+    checkLocked();
+    std::vector<unsigned char> encPriv = m_db->getMetadata("identity_priv");
+    std::vector<unsigned char> pub = m_db->getMetadata("identity_pub");
+    if (encPriv.empty() || pub.empty()) throw std::runtime_error("Identity keys missing");
+    m_identityPrivateKey = m_crypto->decrypt(encPriv, m_masterKey_RAM);
+    m_identityPublicKey = pub;
 }
 
 std::string Vault::decryptIncomingKey(const std::string& encryptedBase64) {
@@ -786,60 +877,85 @@ std::vector<unsigned char> Vault::encryptForUser(const std::string& recipientPub
     return std::vector<unsigned char>(encrypted.begin(), encrypted.end());
 }
 
-// --- History & Misc ---
-
-std::vector<PasswordHistoryEntry> Vault::getPasswordHistory(int entryId) {
-    return m_db->getPasswordHistory(entryId);
-}
-
+std::vector<PasswordHistoryEntry> Vault::getPasswordHistory(int entryId) { return m_db->getPasswordHistory(entryId); }
 std::string Vault::decryptPasswordFromHistory(const std::string& encryptedPassword) {
     checkLocked();
     try {
         std::vector<unsigned char> encryptedData = m_crypto->base64Decode(encryptedPassword);
-        std::string decrypted = m_crypto->decryptToString(encryptedData, m_masterKey_RAM);
-        return decrypted;
+        return m_crypto->decryptToString(encryptedData, m_masterKey_RAM);
     } catch (const std::exception& e) {
         throw std::runtime_error(std::string("Failed: ") + e.what());
     }
 }
-
 void Vault::updateEntryAccessTime(int entryId) { m_db->updateEntryAccessTime(entryId); }
 std::vector<VaultEntry> Vault::getRecentlyAccessedEntries(int limit) { return m_db->getRecentEntries(limit); }
 
-// Invites & Stubs
+// [FIX] Implemented 2-arg Overload for Desktop
+std::vector<VaultEntry> Vault::getRecentlyAccessedEntries(int groupId, int limit) {
+    return m_db->getRecentlyAccessedEntries(groupId, limit);
+}
+
 void Vault::storePendingInvite(const std::string& s, const std::string& g, const std::string& p) { checkLocked(); m_db->storePendingInvite(s, g, p); }
 std::vector<PendingInvite> Vault::getPendingInvites() { checkLocked(); return m_db->getPendingInvites(); }
 void Vault::deletePendingInvite(int id) { checkLocked(); m_db->deletePendingInvite(id); }
 void Vault::updatePendingInviteStatus(int id, const std::string& s) { checkLocked(); m_db->updatePendingInviteStatus(id, s); }
-void Vault::respondToInvite(const std::string&, const std::string&, bool) {}
-void Vault::sendP2PInvite(const std::string&, const std::string&) {}
-std::vector<VaultEntry> Vault::exportGroupEntries(const std::string& groupName) {
-    checkLocked();
-    
-    int groupId = m_db->getGroupId(groupName);
-    if (groupId == -1) return {}; 
 
-    std::vector<VaultEntry> entries = m_db->getEntriesForGroup(groupId);
-    
-    for (auto& entry : entries) {
-        try {
-            // 1. Get the RAW encrypted bytes from DB (AES-GCM ciphertext)
-            std::vector<unsigned char> encryptedPassword = m_db->getEncryptedPassword(entry.id);
-            
-            if (!encryptedPassword.empty()) {
-                // 2. Convert to Base64 to transport safely via JSON
-                // The receiver (Mobile) has the Group Key, so they can use this blob directly.
-                entry.password = m_crypto->base64Encode(encryptedPassword);
-            } else {
-                entry.password = "";
-            }
-        } catch (...) {
-            entry.password = "";
+void Vault::respondToInvite(const std::string& groupName, const std::string& senderId, bool accept) {
+    checkLocked();
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return;
+    std::string myId = getUserId();
+
+    if (accept) {
+        m_db->addGroupMember(gid, myId, "member", "accepted");
+        std::ostringstream payload;
+        payload << "{\"userId\":\"" << escapeJson(myId) << "\"}";
+        m_db->storeSyncJob(senderId, groupName, "INVITE_ACCEPT", payload.str());
+        processOutboxForUser(senderId);
+    }
+
+    auto invites = m_db->getPendingInvites();
+    for (const auto& i : invites) {
+        if (i.groupName == groupName && i.senderId == senderId) {
+            m_db->deletePendingInvite(i.id);
         }
     }
-    
+    notifySync("invites-updated", "");
+}
+
+void Vault::sendP2PInvite(const std::string& groupName, const std::string& targetUser) {
+    checkLocked();
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return;
+    if (!isGroupOwner(groupName)) return;
+
+    std::ostringstream payload;
+    payload << "{\"group\":\"" << escapeJson(groupName) << "\","
+            << "\"owner\":\"" << escapeJson(getUserId()) << "\","
+            << "\"ownerName\":\"" << escapeJson(getDisplayUsername()) << "\"}";
+
+    m_db->storePendingInvite(getUserId(), groupName, payload.str());
+    m_db->storeSyncJob(targetUser, groupName, "INVITE", payload.str());
+    processOutboxForUser(targetUser);
+    notifySync("invite-sent", groupName);
+}
+
+std::vector<VaultEntry> Vault::exportGroupEntries(const std::string& groupName) {
+    checkLocked();
+    int groupId = m_db->getGroupId(groupName);
+    if (groupId == -1) return {}; 
+    std::vector<VaultEntry> entries = m_db->getEntriesForGroup(groupId);
+    for (auto& entry : entries) {
+        try {
+            std::vector<unsigned char> encryptedPassword = m_db->getEncryptedPassword(entry.id);
+            if (!encryptedPassword.empty()) {
+                entry.password = m_crypto->base64Encode(encryptedPassword);
+            } else { entry.password = ""; }
+        } catch (...) { entry.password = ""; }
+    }
     return entries;
 }
+
 std::string Vault::getIdentityPublicKey() { if(m_identityPublicKey.empty()) ensureIdentityKeys(); return m_crypto->base64Encode(m_identityPublicKey); }
 void Vault::setUsername(const std::string& name) { checkLocked(); std::vector<unsigned char> d(name.begin(), name.end()); m_db->storeMetadata("user_display_name", d); }
 std::string Vault::getDisplayUsername() { try { std::vector<unsigned char> d = m_db->getMetadata("user_display_name"); return std::string(d.begin(), d.end()); } catch(...) { return "User"; } }
@@ -850,12 +966,7 @@ int Vault::getAutoLockTimeout() { try { std::vector<unsigned char> d = m_db->get
 
 void Vault::importGroupMembers(const std::string& groupName, const std::string& membersJson) {
     checkLocked();
-    int groupId = m_db->getGroupId(groupName);
-    if (groupId == -1) return;
-    
-    // Simple parser for legacy import format (User1|role|status,User2|role|status)
-    // This is a stub for desktop restore functionality
-    // Real implementation would parse JSON or CSV string
+    // Stub
     (void)membersJson; 
 }
 
@@ -863,21 +974,48 @@ void Vault::importGroupEntries(const std::string& groupName, const std::vector<V
     checkLocked();
     int groupId = m_db->getGroupId(groupName);
     if (groupId == -1) return;
-    
     for (const auto& entry : entries) {
-        // 1. Decode the Base64 ciphertext coming from the sender
         std::vector<unsigned char> encPass;
         if(!entry.password.empty()) {
             encPass = m_crypto->base64Decode(entry.password);
         }
-        
         VaultEntry e = entry;
-        e.id = -1; // Reset ID for new DB insertion
-        
-        // 2. Store the ciphertext directly. 
-        // No re-encryption needed because it is ALREADY encrypted with the Group Key!
+        e.id = -1; 
         m_db->storeEntry(groupId, e, encPass);
     }
+}
+
+void Vault::broadcastSync(const std::string& groupName) {
+    checkLocked();
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return;
+
+    auto members = m_db->getGroupMembers(gid);
+    std::string myId = getUserId();
+
+    for (const auto& m : members) {
+        if (m.userId != myId && m.status == "accepted") {
+            processOutboxForUser(m.userId);
+        }
+    }
+    notifySync("groups-updated", groupName);
+}
+
+std::string Vault::exportGroupMembers(const std::string& groupName) {
+    checkLocked();
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return "[]";
+    auto members = m_db->getGroupMembers(gid);
+    std::ostringstream json;
+    json << "[";
+    for (size_t i = 0; i < members.size(); ++i) {
+        json << "{\"userId\":\"" << escapeJson(members[i].userId) << "\","
+             << "\"role\":\"" << escapeJson(members[i].role) << "\","
+             << "\"status\":\"" << escapeJson(members[i].status) << "\"}";
+        if (i + 1 < members.size()) json << ",";
+    }
+    json << "]";
+    return json.str();
 }
 
 } // namespace Core

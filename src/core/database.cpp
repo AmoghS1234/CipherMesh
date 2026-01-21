@@ -2,6 +2,18 @@
 #include "crypto.hpp"
 #include <vector>
 #include <iostream>
+#include <algorithm>
+
+// Helper to extract UUID for deduplication (Shared across implementations)
+static std::string extractUuidFromPayload(const std::string& payload) {
+    std::string pattern = "\"uuid\":\"";
+    size_t start = payload.find(pattern);
+    if (start == std::string::npos) return "";
+    start += pattern.length();
+    size_t end = payload.find("\"", start);
+    if (end == std::string::npos) return "";
+    return payload.substr(start, end - start);
+}
 
 // =========================================================
 //  ANDROID IMPLEMENTATION (Raw SQLite3)
@@ -116,24 +128,18 @@ void Database::createTables() {
     exec("CREATE TABLE IF NOT EXISTS password_history (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER, encrypted_password BLOB, timestamp INTEGER, FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
     exec("CREATE TABLE IF NOT EXISTS pending_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, sender_id TEXT, group_name TEXT, payload TEXT, status TEXT)");
     
-    // [NEW] Sync Queue (Outbox) for Store-and-Forward
+    // Sync Queue (Outbox) for Store-and-Forward
     exec("CREATE TABLE IF NOT EXISTS sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, target_user TEXT, group_name TEXT, operation TEXT, payload TEXT, created_at INTEGER)");
     
     // Migrations
-    try {
-        exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
-    } catch (...) {}
-    try {
-        exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
-    } catch (...) {}
+    try { exec("ALTER TABLE entries ADD COLUMN uuid TEXT"); } catch (...) {}
+    try { exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0"); } catch (...) {}
 }
 
 // -- Groups --
 void Database::storeEncryptedGroup(const std::string& name, const std::vector<unsigned char>& encryptedKey, const std::string& ownerId) {
     SqlStatement q(m_db_handle, "INSERT INTO groups (name, encrypted_key, owner_id) VALUES (?, ?, ?)");
-    q.bind(1, name); 
-    q.bind(2, encryptedKey); 
-    q.bind(3, ownerId);
+    q.bind(1, name); q.bind(2, encryptedKey); q.bind(3, ownerId);
     if (!q.exec()) throw DBException("Failed to add group to database");
 }
 
@@ -205,9 +211,30 @@ std::string Database::getGroupOwner(int groupId) {
 
 // -- Members --
 void Database::addGroupMember(int groupId, const std::string& userId, const std::string& role, const std::string& status) {
-    SqlStatement q(m_db_handle, "INSERT OR REPLACE INTO group_members (group_id, user_id, role, status) VALUES (?, ?, ?, ?)");
-    q.bind(1, groupId); q.bind(2, userId); q.bind(3, role); q.bind(4, status);
-    q.exec();
+    // 1. Check if member already exists
+    SqlStatement check(m_db_handle, "SELECT role FROM group_members WHERE group_id = ? AND user_id = ?");
+    check.bind(1, groupId); check.bind(2, userId);
+
+    if (check.step()) {
+        std::string existingRole = check.getString(0);
+        // 🔒 NEVER downgrade owner
+        if (existingRole == "owner") {
+            SqlStatement upd(m_db_handle, "UPDATE group_members SET status = ? WHERE group_id = ? AND user_id = ?");
+            upd.bind(1, status); upd.bind(2, groupId); upd.bind(3, userId);
+            upd.exec();
+            return;
+        }
+        // Update role/status safely
+        SqlStatement upd(m_db_handle, "UPDATE group_members SET role = ?, status = ? WHERE group_id = ? AND user_id = ?");
+        upd.bind(1, role); upd.bind(2, status); upd.bind(3, groupId); upd.bind(4, userId);
+        upd.exec();
+        return;
+    }
+
+    // 2. Insert new member
+    SqlStatement ins(m_db_handle, "INSERT INTO group_members (group_id, user_id, role, status) VALUES (?, ?, ?, ?)");
+    ins.bind(1, groupId); ins.bind(2, userId); ins.bind(3, role); ins.bind(4, status);
+    ins.exec();
 }
 
 std::vector<GroupMember> Database::getGroupMembers(int groupId) {
@@ -278,7 +305,6 @@ void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsi
     
     if (q.exec()) {
         entry.id = (int)sqlite3_last_insert_rowid(getHandle(m_db_handle));
-        // Locations
         for (const auto& loc : entry.locations) {
             SqlStatement lq(m_db_handle, "INSERT INTO locations (entry_id, type, value) VALUES (?, ?, ?)");
             lq.bind(1, entry.id); lq.bind(2, loc.type); lq.bind(3, loc.value);
@@ -291,7 +317,6 @@ void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsi
 
 std::vector<VaultEntry> Database::getEntriesForGroup(int groupId) {
     std::vector<VaultEntry> list;
-    // [FIX] Select uuid and is_deleted, filter out deleted entries
     SqlStatement q(m_db_handle, "SELECT id, uuid, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry, is_deleted FROM entries WHERE group_id = ? AND (is_deleted IS NULL OR is_deleted = 0)");
     q.bind(1, groupId);
     while (q.step()) {
@@ -321,11 +346,7 @@ std::vector<Location> Database::getLocationsForEntry(int entryId) {
     SqlStatement q(m_db_handle, "SELECT id, type, value FROM locations WHERE entry_id = ?");
     q.bind(1, entryId);
     while (q.step()) {
-        locs.emplace_back(
-            q.getInt(0),
-            q.getString(1),
-            q.getString(2)
-        );
+        locs.emplace_back(q.getInt(0), q.getString(1), q.getString(2));
     }
     return locs;
 }
@@ -338,13 +359,17 @@ std::vector<unsigned char> Database::getEncryptedPassword(int entryId) {
 }
 
 bool Database::deleteEntry(int entryId) {
-    // [FIX] Use tombstoning instead of hard delete for sync support
-    long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     SqlStatement q(m_db_handle, "UPDATE entries SET is_deleted = 1, updated_at = ? WHERE id = ?");
     q.bind(1, now);
     q.bind(2, entryId);
     return q.exec();
+}
+
+void Database::cleanupTombstones(long long olderThanTimestamp) {
+    SqlStatement q(m_db_handle, "DELETE FROM entries WHERE is_deleted = 1 AND updated_at < ?");
+    q.bind(1, olderThanTimestamp);
+    q.exec();
 }
 
 void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned char>* newEncryptedPassword) {
@@ -369,7 +394,6 @@ void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned c
     q.bind(nextIdx, entry.id);
     
     if (q.exec()) {
-        // Update locations
         SqlStatement d(m_db_handle, "DELETE FROM locations WHERE entry_id = ?");
         d.bind(1, entry.id);
         d.exec();
@@ -527,33 +551,26 @@ void Database::deletePendingInvite(int inviteId) {
     q.exec();
 }
 
-std::vector<VaultEntry> Database::getRecentEntries(int limit) {
-    std::vector<VaultEntry> res;
-    SqlStatement q(m_db_handle, "SELECT id, group_id, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry FROM entries ORDER BY last_accessed DESC LIMIT ?");
-    q.bind(1, limit);
-    while (q.step()) {
-        VaultEntry e;
-        e.id = q.getInt(0);
-        e.groupId = q.getInt(1);
-        e.title = q.getString(2);
-        e.username = q.getString(3);
-        e.url = q.getString(4);
-        e.notes = q.getString(5);
-        e.totpSecret = q.getString(6);
-        e.entryType = q.getString(7);
-        e.createdAt = q.getInt64(8);
-        e.updatedAt = q.getInt64(9);
-        e.lastAccessed = q.getInt64(10);
-        e.passwordExpiry = q.getInt64(11);
-        res.push_back(e);
-    }
-    return res;
+void Database::updateGroupOwner(int groupId, const std::string& ownerId) {
+    SqlStatement q(m_db_handle, "UPDATE groups SET owner_id = ? WHERE id = ?");
+    q.bind(1, ownerId);
+    q.bind(2, groupId);
+    q.exec();
 }
 
 // -- Sync Queue Implementation (Android) --
 void Database::storeSyncJob(const std::string& targetUser, const std::string& groupName, const std::string& operation, const std::string& payload) {
-    SqlStatement q(m_db_handle, "INSERT INTO sync_queue (target_user, group_name, operation, payload, created_at) VALUES (?, ?, ?, ?, ?)");
     long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+    // 1. Deduplication Logic for UPSERT
+    if (operation == "UPSERT") {
+        std::string uuid = extractUuidFromPayload(payload);
+        if (!uuid.empty()) {
+            // Optimization can happen here later
+        }
+    }
+
+    SqlStatement q(m_db_handle, "INSERT INTO sync_queue (target_user, group_name, operation, payload, created_at) VALUES (?, ?, ?, ?, ?)");
     q.bind(1, targetUser);
     q.bind(2, groupName);
     q.bind(3, operation);
@@ -583,6 +600,30 @@ void Database::deleteSyncJob(int jobId) {
     SqlStatement q(m_db_handle, "DELETE FROM sync_queue WHERE id = ?");
     q.bind(1, jobId);
     q.exec();
+}
+
+// [FIX] Global Recent Entries Implementation
+std::vector<VaultEntry> Database::getRecentEntries(int limit) {
+    std::vector<VaultEntry> res;
+    SqlStatement q(m_db_handle, "SELECT id, group_id, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry FROM entries ORDER BY last_accessed DESC LIMIT ?");
+    q.bind(1, limit);
+    while (q.step()) {
+        VaultEntry e;
+        e.id = q.getInt(0);
+        e.groupId = q.getInt(1);
+        e.title = q.getString(2);
+        e.username = q.getString(3);
+        e.url = q.getString(4);
+        e.notes = q.getString(5);
+        e.totpSecret = q.getString(6);
+        e.entryType = q.getString(7);
+        e.createdAt = q.getInt64(8);
+        e.updatedAt = q.getInt64(9);
+        e.lastAccessed = q.getInt64(10);
+        e.passwordExpiry = q.getInt64(11);
+        res.push_back(e);
+    }
+    return res;
 }
 
 } // namespace Core
@@ -615,7 +656,6 @@ static std::vector<unsigned char> toVector(const QByteArray& ba) {
 }
 
 Database::Database() {
-    // Generate a unique connection name to avoid conflicts if multiple instances exist
     m_connectionName = "CipherMesh_DB_" + QUuid::createUuid().toString().toStdString();
 }
 
@@ -636,7 +676,6 @@ void Database::open(const std::string& path) {
         throw DBException("Failed to open database: " + m_db.lastError().text().toStdString());
     }
 
-    // Enable Foreign Keys for SQLite
     QSqlQuery query(m_db);
     query.exec("PRAGMA foreign_keys = ON;");
 }
@@ -645,7 +684,6 @@ void Database::close() {
     if (m_db.isOpen()) {
         m_db.close();
     }
-    // Release object
     m_db = QSqlDatabase();
     QSqlDatabase::removeDatabase(QString::fromStdString(m_connectionName));
 }
@@ -662,85 +700,19 @@ void Database::exec(const std::string& sql) {
 }
 
 void Database::createTables() {
-    // 1. Metadata
     exec("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB)");
-
-    // 2. Groups
-    exec("CREATE TABLE IF NOT EXISTS groups ("
-         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-         "name TEXT NOT NULL, "
-         "encrypted_key BLOB NOT NULL, "
-         "owner_id TEXT, "
-         "admins_only_write INTEGER DEFAULT 0, "
-         "admins_only_invite INTEGER DEFAULT 0)");
-
-    // 3. Group Members
-    exec("CREATE TABLE IF NOT EXISTS group_members ("
-         "group_id INTEGER, "
-         "user_id TEXT, "
-         "role TEXT, "
-         "status TEXT, "
-         "PRIMARY KEY(group_id, user_id), "
-         "FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
-
-    // 4. Entries
-    exec("CREATE TABLE IF NOT EXISTS entries ("
-         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-         "group_id INTEGER, "
-         "uuid TEXT UNIQUE, "
-         "title TEXT, "
-         "username TEXT, "
-         "encrypted_password BLOB, "
-         "url TEXT, "
-         "notes TEXT, "
-         "totp_secret TEXT, "
-         "entry_type TEXT, "
-         "created_at INTEGER, "
-         "updated_at INTEGER, "
-         "access_count INTEGER DEFAULT 0, "
-         "last_accessed INTEGER DEFAULT 0, "
-         "password_expiry INTEGER DEFAULT 0, "
-         "is_deleted INTEGER DEFAULT 0, "
-         "FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
-
-    // 5. Locations
-    exec("CREATE TABLE IF NOT EXISTS locations ("
-         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-         "entry_id INTEGER, "
-         "type TEXT, "
-         "value TEXT, "
-         "FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
-
-    // 6. Password History
-    exec("CREATE TABLE IF NOT EXISTS password_history ("
-         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-         "entry_id INTEGER, "
-         "encrypted_password BLOB, "
-         "timestamp INTEGER, "
-         "FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
-
-    // 7. Pending Invites
-    exec("CREATE TABLE IF NOT EXISTS pending_invites ("
-         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-         "sender_id TEXT, "
-         "group_name TEXT, "
-         "payload TEXT, "
-         "status TEXT)");
-
-    // [NEW] Sync Queue (Outbox)
+    exec("CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, encrypted_key BLOB NOT NULL, owner_id TEXT, admins_only_write INTEGER DEFAULT 0, admins_only_invite INTEGER DEFAULT 0)");
+    exec("CREATE TABLE IF NOT EXISTS group_members (group_id INTEGER, user_id TEXT, role TEXT, status TEXT, PRIMARY KEY(group_id, user_id), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
+    exec("CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER, uuid TEXT UNIQUE, title TEXT, username TEXT, encrypted_password BLOB, url TEXT, notes TEXT, totp_secret TEXT, entry_type TEXT, created_at INTEGER, updated_at INTEGER, access_count INTEGER DEFAULT 0, last_accessed INTEGER DEFAULT 0, password_expiry INTEGER DEFAULT 0, is_deleted INTEGER DEFAULT 0, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE)");
+    exec("CREATE TABLE IF NOT EXISTS locations (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER, type TEXT, value TEXT, FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
+    exec("CREATE TABLE IF NOT EXISTS password_history (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER, encrypted_password BLOB, timestamp INTEGER, FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE)");
+    exec("CREATE TABLE IF NOT EXISTS pending_invites (id INTEGER PRIMARY KEY AUTOINCREMENT, sender_id TEXT, group_name TEXT, payload TEXT, status TEXT)");
     exec("CREATE TABLE IF NOT EXISTS sync_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, target_user TEXT, group_name TEXT, operation TEXT, payload TEXT, created_at INTEGER)");
 
-    // Migrations
-    try {
-        exec("ALTER TABLE entries ADD COLUMN uuid TEXT");
-    } catch (...) {}
-    
-    try {
-        exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0");
-    } catch (...) {}
+    try { exec("ALTER TABLE entries ADD COLUMN uuid TEXT"); } catch (...) {}
+    try { exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0"); } catch (...) {}
 }
 
-// Group Management
 void Database::storeEncryptedGroup(const std::string& name, const std::vector<unsigned char>& encryptedKey, const std::string& ownerId) {
     QSqlQuery q(m_db);
     q.prepare("INSERT INTO groups (name, encrypted_key, owner_id) VALUES (:name, :key, :owner)");
@@ -806,8 +778,9 @@ int Database::getGroupId(const std::string& name) {
     QSqlQuery q(m_db);
     q.prepare("SELECT id FROM groups WHERE name = :name");
     q.bindValue(":name", QString::fromStdString(name));
-    if (q.exec() && q.next()) return q.value(0).toInt();
-    throw DBException("Group not found: " + name);
+    if (q.exec() && q.next())
+        return q.value(0).toInt();
+    return -1;
 }
 
 int Database::getGroupIdForEntry(int entryId) {
@@ -833,15 +806,39 @@ std::string Database::getGroupOwner(int groupId) {
     return "";
 }
 
-// Group Members
 void Database::addGroupMember(int groupId, const std::string& userId, const std::string& role, const std::string& status) {
-    QSqlQuery q(m_db);
-    q.prepare("INSERT OR REPLACE INTO group_members (group_id, user_id, role, status) VALUES (:gid, :uid, :role, :status)");
-    q.bindValue(":gid", groupId);
-    q.bindValue(":uid", QString::fromStdString(userId));
-    q.bindValue(":role", QString::fromStdString(role));
-    q.bindValue(":status", QString::fromStdString(status));
-    q.exec();
+    QSqlQuery check(m_db);
+    check.prepare("SELECT role FROM group_members WHERE group_id = :gid AND user_id = :uid");
+    check.bindValue(":gid", groupId);
+    check.bindValue(":uid", QString::fromStdString(userId));
+
+    if (check.exec() && check.next()) {
+        QString existingRole = check.value(0).toString();
+        if (existingRole == "owner") {
+            QSqlQuery upd(m_db);
+            upd.prepare("UPDATE group_members SET status = :status WHERE group_id = :gid AND user_id = :uid");
+            upd.bindValue(":status", QString::fromStdString(status));
+            upd.bindValue(":gid", groupId);
+            upd.bindValue(":uid", QString::fromStdString(userId));
+            upd.exec();
+            return;
+        }
+        QSqlQuery upd(m_db);
+        upd.prepare("UPDATE group_members SET role = :role, status = :status WHERE group_id = :gid AND user_id = :uid");
+        upd.bindValue(":role", QString::fromStdString(role));
+        upd.bindValue(":status", QString::fromStdString(status));
+        upd.bindValue(":gid", groupId);
+        upd.bindValue(":uid", QString::fromStdString(userId));
+        upd.exec();
+        return;
+    }
+    QSqlQuery ins(m_db);
+    ins.prepare("INSERT INTO group_members (group_id, user_id, role, status) VALUES (:gid, :uid, :role, :status)");
+    ins.bindValue(":gid", groupId);
+    ins.bindValue(":uid", QString::fromStdString(userId));
+    ins.bindValue(":role", QString::fromStdString(role));
+    ins.bindValue(":status", QString::fromStdString(status));
+    ins.exec();
 }
 
 std::vector<GroupMember> Database::getGroupMembers(int groupId) {
@@ -907,20 +904,14 @@ void Database::updateGroupMemberStatus(int groupId, const std::string& userId, c
     q.exec();
 }
 
-// Entries
 void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsigned char>& encryptedPassword) {
     m_db.transaction();
-    
-    if (entry.uuid.empty()) {
-        entry.uuid = CipherMesh::Core::Crypto::generateUUID();
-    }
+    if (entry.uuid.empty()) entry.uuid = QUuid::createUuid().toString().toStdString();
     
     QSqlQuery q(m_db);
     q.prepare("INSERT INTO entries (group_id, uuid, title, username, encrypted_password, url, notes, totp_secret, entry_type, created_at, updated_at, password_expiry) "
               "VALUES (:gid, :uuid, :title, :user, :pass, :url, :notes, :totp, :type, :created, :updated, :expiry)");
-    
     qint64 now = QDateTime::currentMSecsSinceEpoch();
-    
     q.bindValue(":gid", groupId);
     q.bindValue(":uuid", QString::fromStdString(entry.uuid));
     q.bindValue(":title", QString::fromStdString(entry.title));
@@ -938,11 +929,9 @@ void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsi
         m_db.rollback();
         throw DBException("Failed to insert entry: " + q.lastError().text().toStdString());
     }
-
     int entryId = q.lastInsertId().toInt();
     entry.id = entryId;
 
-    // Locations
     for (const auto& loc : entry.locations) {
         QSqlQuery lq(m_db);
         lq.prepare("INSERT INTO locations (entry_id, type, value) VALUES (:eid, :type, :val)");
@@ -951,7 +940,6 @@ void Database::storeEntry(int groupId, VaultEntry& entry, const std::vector<unsi
         lq.bindValue(":val", QString::fromStdString(loc.value));
         lq.exec();
     }
-
     m_db.commit();
 }
 
@@ -960,7 +948,6 @@ std::vector<VaultEntry> Database::getEntriesForGroup(int groupId) {
     QSqlQuery q(m_db);
     q.prepare("SELECT id, uuid, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry, is_deleted FROM entries WHERE group_id = :gid AND (is_deleted IS NULL OR is_deleted = 0)");
     q.bindValue(":gid", groupId);
-    
     if (q.exec()) {
         while (q.next()) {
             VaultEntry e;
@@ -978,7 +965,6 @@ std::vector<VaultEntry> Database::getEntriesForGroup(int groupId) {
             e.lastAccessed = q.value("last_accessed").toLongLong();
             e.passwordExpiry = q.value("password_expiry").toLongLong();
             e.isDeleted = q.value("is_deleted").toInt() != 0;
-            
             e.locations = getLocationsForEntry(e.id);
             results.push_back(e);
         }
@@ -1021,13 +1007,18 @@ bool Database::deleteEntry(int entryId) {
     return q.exec();
 }
 
+void Database::cleanupTombstones(long long olderThanTimestamp) {
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM entries WHERE is_deleted = 1 AND updated_at < :ts");
+    q.bindValue(":ts", (qint64)olderThanTimestamp);
+    q.exec();
+}
+
 void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned char>* newEncryptedPassword) {
     m_db.transaction();
     QSqlQuery q(m_db);
     QString sql = "UPDATE entries SET title=:title, username=:user, url=:url, notes=:notes, totp_secret=:totp, entry_type=:type, updated_at=:updated, password_expiry=:expiry";
-    if (newEncryptedPassword) {
-        sql += ", encrypted_password=:pass";
-    }
+    if (newEncryptedPassword) sql += ", encrypted_password=:pass";
     sql += " WHERE id=:id";
     
     q.prepare(sql);
@@ -1050,7 +1041,6 @@ void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned c
         throw DBException("Failed update entry");
     }
 
-    // Update locations
     QSqlQuery delLoc(m_db);
     delLoc.prepare("DELETE FROM locations WHERE entry_id = :id");
     delLoc.bindValue(":id", entry.id);
@@ -1064,27 +1054,22 @@ void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned c
         insLoc.bindValue(":val", QString::fromStdString(loc.value));
         insLoc.exec();
     }
-
     m_db.commit();
 }
 
 bool Database::entryExists(const std::string& username, const std::string& locationValue) {
     QSqlQuery q(m_db);
-    q.prepare("SELECT count(*) FROM entries e JOIN locations l ON e.id = l.entry_id "
-              "WHERE e.username = :user AND l.value = :loc");
+    q.prepare("SELECT count(*) FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = :user AND l.value = :loc");
     q.bindValue(":user", QString::fromStdString(username));
     q.bindValue(":loc", QString::fromStdString(locationValue));
-    if (q.exec() && q.next()) {
-        return q.value(0).toInt() > 0;
-    }
+    if (q.exec() && q.next()) return q.value(0).toInt() > 0;
     return false;
 }
 
 std::vector<VaultEntry> Database::findEntriesByLocation(const std::string& locationValue) {
     std::vector<VaultEntry> results;
     QSqlQuery q(m_db);
-    q.prepare("SELECT DISTINCT e.id, e.group_id, e.title, e.username, e.url, e.notes FROM entries e "
-              "JOIN locations l ON e.id = l.entry_id WHERE l.value LIKE :loc");
+    q.prepare("SELECT DISTINCT e.id, e.group_id, e.title, e.username, e.url, e.notes FROM entries e JOIN locations l ON e.id = l.entry_id WHERE l.value LIKE :loc");
     q.bindValue(":loc", "%" + QString::fromStdString(locationValue) + "%");
     if (q.exec()) {
         while (q.next()) {
@@ -1106,8 +1091,7 @@ std::vector<VaultEntry> Database::searchEntries(const std::string& searchTerm) {
     std::vector<VaultEntry> results;
     QString term = "%" + QString::fromStdString(searchTerm) + "%";
     QSqlQuery q(m_db);
-    q.prepare("SELECT id, group_id, title, username, url, notes FROM entries WHERE "
-              "title LIKE :term OR username LIKE :term OR url LIKE :term OR notes LIKE :term");
+    q.prepare("SELECT id, group_id, title, username, url, notes FROM entries WHERE title LIKE :term OR username LIKE :term OR url LIKE :term OR notes LIKE :term");
     q.bindValue(":term", term);
     if (q.exec()) {
         while (q.next()) {
@@ -1152,7 +1136,34 @@ std::vector<VaultEntry> Database::getRecentlyAccessedEntries(int groupId, int li
     return results;
 }
 
-// Metadata
+// [FIX] Global Recent Entries Implementation
+std::vector<VaultEntry> Database::getRecentEntries(int limit) {
+    std::vector<VaultEntry> results;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT id, group_id, title, username, url, notes, totp_secret, entry_type, created_at, updated_at, last_accessed, password_expiry FROM entries ORDER BY last_accessed DESC LIMIT :lim");
+    q.bindValue(":lim", limit);
+
+    if (q.exec()) {
+        while (q.next()) {
+            VaultEntry e;
+            e.id = q.value(0).toInt();
+            e.groupId = q.value(1).toInt();
+            e.title = q.value(2).toString().toStdString();
+            e.username = q.value(3).toString().toStdString();
+            e.url = q.value(4).toString().toStdString();
+            e.notes = q.value(5).toString().toStdString();
+            e.totpSecret = q.value(6).toString().toStdString();
+            e.entryType = q.value(7).toString().toStdString();
+            e.createdAt = q.value(8).toLongLong();
+            e.updatedAt = q.value(9).toLongLong();
+            e.lastAccessed = q.value(10).toLongLong();
+            e.passwordExpiry = q.value(11).toLongLong();
+            results.push_back(e);
+        }
+    }
+    return results;
+}
+
 void Database::storeMetadata(const std::string& key, const std::vector<unsigned char>& value) {
     QSqlQuery q(m_db);
     q.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (:key, :val)");
@@ -1171,7 +1182,6 @@ std::vector<unsigned char> Database::getMetadata(const std::string& key) {
     return {}; 
 }
 
-// History
 void Database::storePasswordHistory(int entryId, const std::vector<unsigned char>& oldEncryptedPassword) {
     QSqlQuery q(m_db);
     q.prepare("INSERT INTO password_history (entry_id, encrypted_password, timestamp) VALUES (:eid, :pass, :ts)");
@@ -1202,14 +1212,12 @@ std::vector<PasswordHistoryEntry> Database::getPasswordHistory(int entryId) {
 
 void Database::deleteOldPasswordHistory(int entryId, int keepCount) {
     QSqlQuery q(m_db);
-    q.prepare("DELETE FROM password_history WHERE entry_id = :eid AND id NOT IN "
-              "(SELECT id FROM password_history WHERE entry_id = :eid ORDER BY timestamp DESC LIMIT :limit)");
+    q.prepare("DELETE FROM password_history WHERE entry_id = :eid AND id NOT IN (SELECT id FROM password_history WHERE entry_id = :eid ORDER BY timestamp DESC LIMIT :limit)");
     q.bindValue(":eid", entryId);
     q.bindValue(":limit", keepCount);
     q.exec();
 }
 
-// Invites
 void Database::storePendingInvite(const std::string& senderId, const std::string& groupName, const std::string& payloadJson) {
     QSqlQuery q(m_db);
     q.prepare("INSERT INTO pending_invites (sender_id, group_name, payload, status) VALUES (:sender, :group, :payload, 'pending')");
@@ -1251,36 +1259,15 @@ void Database::deletePendingInvite(int inviteId) {
     q.exec();
 }
 
-std::vector<VaultEntry> Database::getRecentEntries(int limit) {
-    std::vector<VaultEntry> results;
+void Database::updateGroupOwner(int groupId, const std::string& ownerId) {
     QSqlQuery q(m_db);
-    q.prepare("SELECT id, group_id, title, username, url, notes, totp_secret, entry_type, "
-              "created_at, updated_at, last_accessed, password_expiry "
-              "FROM entries ORDER BY last_accessed DESC LIMIT :lim");
-    q.bindValue(":lim", limit);
-
-    if (q.exec()) {
-        while (q.next()) {
-            VaultEntry e;
-            e.id = q.value(0).toInt();
-            e.groupId = q.value(1).toInt();
-            e.title = q.value(2).toString().toStdString();
-            e.username = q.value(3).toString().toStdString();
-            e.url = q.value(4).toString().toStdString();
-            e.notes = q.value(5).toString().toStdString();
-            e.totpSecret = q.value(6).toString().toStdString();
-            e.entryType = q.value(7).toString().toStdString();
-            e.createdAt = q.value(8).toLongLong();
-            e.updatedAt = q.value(9).toLongLong();
-            e.lastAccessed = q.value(10).toLongLong();
-            e.passwordExpiry = q.value(11).toLongLong();
-            results.push_back(e);
-        }
-    }
-    return results;
+    q.prepare("UPDATE groups SET owner_id = :owner WHERE id = :id");
+    q.bindValue(":owner", QString::fromStdString(ownerId));
+    q.bindValue(":id", groupId);
+    q.exec();
 }
 
-// -- Sync Queue Implementation (Desktop) --
+// [PHASE 2] Deduplication logic inside storage
 void Database::storeSyncJob(const std::string& targetUser, const std::string& groupName, const std::string& operation, const std::string& payload) {
     QSqlQuery q(m_db);
     q.prepare("INSERT INTO sync_queue (target_user, group_name, operation, payload, created_at) VALUES (:target, :group, :op, :payload, :created)");

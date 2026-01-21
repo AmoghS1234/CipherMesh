@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 
 class P2PManager(private val activity: Activity, private val vault: Vault) : SignalingCallback {
 
-    private val SIGNALING_URL = "wss://ciphermesh-signal-server.onrender.com" 
+    private val SIGNALING_URL = "wss://ciphermesh-signal-server.onrender.com/" 
     private var webSocket: WebSocket? = null
     
     // Track connection state
@@ -102,9 +102,10 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
                     vault.onPeerOnline(onlineUser)
                 }
             }
-            "sync-packet" -> {
+            "sync-payload" -> {
                 val payload = json.optString("payload")
                 if (payload.isNotEmpty()) {
+                    Log.d("P2P", "🔁 Sync payload from $sender")
                     vault.handleSyncMessage(sender, payload)
                 }
             }
@@ -190,7 +191,25 @@ class P2PManager(private val activity: Activity, private val vault: Vault) : Sig
                 
                 when (type) {
                     "offer", "answer" -> json.put("sdp", payload)
-                    "ice-candidate" -> json.put("candidate", payload)
+                    "ice-candidate" -> {
+                        // [FIX] Handle the JSON payload from C++ to extract MID
+                        if (payload.trim().startsWith("{")) {
+                            try {
+                                val obj = JSONObject(payload)
+                                json.put("candidate", obj.optString("candidate"))
+                                // WebRTC usually expects "mid" or "sdpMid"
+                                json.put("mid", obj.optString("mid")) 
+                            } catch (e: Exception) {
+                                // Fallback for raw string
+                                json.put("candidate", payload)
+                                json.put("mid", "0")
+                            }
+                        } else {
+                            // Legacy fallback
+                            json.put("candidate", payload)
+                            json.put("mid", "0")
+                        }
+                    }
                     else -> json.put("payload", payload)
                 }
 
