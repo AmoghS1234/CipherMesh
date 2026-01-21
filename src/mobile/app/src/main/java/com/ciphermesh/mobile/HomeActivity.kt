@@ -191,47 +191,47 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
     private fun initSignaling() {
         updateConnectionState(ConnectionState.CONNECTING)
-        
-        // [FIX] OkHttpClient needs a ping interval to keep the connection alive on mobile networks
+        Log.d(TAG, "Connecting to Signaling Server: $SIGNALING_URL")
+
+        // [FIX 1] Add pingInterval to keep connection alive through NATs/Firewalls
         client = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
-            .connectTimeout(15, TimeUnit.SECONDS) 
-            .pingInterval(20, TimeUnit.SECONDS) // Prevents silent disconnects
+            .pingInterval(30, TimeUnit.SECONDS) 
             .build()
 
         val request = Request.Builder().url(SIGNALING_URL).build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                // [CRITICAL FIX] Must assign the active socket to the class variable
+                // [FIX 2] CRITICAL: Assign the socket to the class variable!
                 this@HomeActivity.webSocket = webSocket
                 
-                Log.d(TAG, "WebSocket Connected")
+                Log.d(TAG, "WebSocket Connected to $SIGNALING_URL")
                 updateConnectionState(ConnectionState.CONNECTED)
 
                 val userId = vault.getUserId()
-                // [FIX] Send both 'id' and 'userId' for server compatibility
-                val registerJson = JSONObject()
-                registerJson.put("type", "register")
-                registerJson.put("id", userId)
-                registerJson.put("userId", userId)
-                webSocket.send(registerJson.toString())
+                if (userId.isEmpty()) Log.e(TAG, "CRITICAL: UserID is empty!")
+                
+                val json = """{"type":"register", "userId":"$userId"}"""
+                Log.d(TAG, "Sending Register: $json")
+                webSocket.send(json)
 
                 runOnUiThread { vault.initP2P(SIGNALING_URL) }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.d(TAG, "RX Signaling: $text") // Added log for debugging
                 vault.receiveSignalingMessage(text)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket Failure: ${t.message}")
                 updateConnectionState(ConnectionState.DISCONNECTED)
-                // [FIX] Auto-retry after 5 seconds if it fails (useful for sleeping servers)
-                Handler(Looper.getMainLooper()).postDelayed({ initSignaling() }, 5000)
+                // Optional: Add auto-reconnect logic here with a Handler/Runnable
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.d(TAG, "WebSocket Closed: $reason")
                 updateConnectionState(ConnectionState.DISCONNECTED)
             }
         })

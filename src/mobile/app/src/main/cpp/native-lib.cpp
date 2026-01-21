@@ -113,6 +113,7 @@ void sendSignalingToKotlin(const std::string& target, const std::string& type, c
 void showToastFromNative(const std::string& message) {
     std::lock_guard<std::mutex> lock(g_jniMutex);
     if (!g_jvm || !g_context) return;
+    
     JNIEnv* env;
     bool attached = false;
     int status = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
@@ -120,13 +121,21 @@ void showToastFromNative(const std::string& message) {
         if (g_jvm->AttachCurrentThread(&env, nullptr) != 0) return;
         attached = true;
     }
+
     jclass contextClass = env->GetObjectClass(g_context);
     jmethodID mid = env->GetMethodID(contextClass, "showToast", "(Ljava/lang/String;)V");
-    if (mid) {
+    
+    // [FIX] Check for and CLEAR any pending exception (NoSuchMethodError)
+    // This prevents the app from crashing if the method is missing/renamed.
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear(); 
+        LOGE("Could not find showToast method in Activity");
+    } else if (mid) {
         jstring jMsg = env->NewStringUTF(message.c_str());
         env->CallVoidMethod(g_context, mid, jMsg);
         env->DeleteLocalRef(jMsg);
     }
+
     if (attached) g_jvm->DetachCurrentThread();
 }
 
