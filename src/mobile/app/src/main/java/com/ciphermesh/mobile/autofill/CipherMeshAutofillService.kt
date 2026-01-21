@@ -105,12 +105,50 @@ class CipherMeshAutofillService : AutofillService() {
                 responseBuilder.addDataset(datasetBuilder.build())
             }
         }
+        
+        // Add SaveInfo to trigger onSaveRequest when form is submitted
+        if (parser.usernameFields.isNotEmpty() || parser.passwordFields.isNotEmpty()) {
+            val saveInfoBuilder = SaveInfo.Builder(
+                SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD,
+                (parser.usernameFields + parser.passwordFields).toTypedArray()
+            )
+            responseBuilder.setSaveInfo(saveInfoBuilder.build())
+        }
 
         callback.onSuccess(responseBuilder.build())
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
-        callback.onSuccess()
+        Log.d("AutoFill", "onSaveRequest triggered")
+        
+        try {
+            val structure = request.fillContexts.last().structure
+            val parser = StructureParser(structure)
+            parser.parse()
+            
+            val username = parser.usernameValues.firstOrNull() ?: ""
+            val password = parser.passwordValues.firstOrNull() ?: ""
+            
+            if (username.isEmpty() && password.isEmpty()) {
+                Log.d("AutoFill", "No credentials to save")
+                callback.onSuccess()
+                return
+            }
+            
+            val intent = Intent(this, AutoSaveActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(AutoSaveActivity.EXTRA_USERNAME, username)
+                putExtra(AutoSaveActivity.EXTRA_PASSWORD, password)
+                putExtra(AutoSaveActivity.EXTRA_WEB_DOMAIN, parser.webDomain)
+                putExtra(AutoSaveActivity.EXTRA_PACKAGE, parser.packageName)
+            }
+            startActivity(intent)
+            callback.onSuccess()
+            
+        } catch (e: Exception) {
+            Log.e("AutoFill", "Error in onSaveRequest: ${e.message}")
+            callback.onFailure(e.message)
+        }
     }
 
     private fun getRemoteViews(text: String): RemoteViews {

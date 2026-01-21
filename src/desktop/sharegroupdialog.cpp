@@ -1,6 +1,7 @@
 #include "sharegroupdialog.hpp"
 #include "vault.hpp" 
 #include "crypto.hpp" 
+#include "mainwindow.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -50,6 +51,15 @@ ShareGroupDialog::ShareGroupDialog(const QString& groupName,
     setupServiceCallbacks();
     loadMembers(); 
     loadPermissions();
+    
+    // Connect to MainWindow signals for global updates
+    if (MainWindow* mw = qobject_cast<MainWindow*>(parent)) {
+        connect(mw, &MainWindow::groupMembersUpdated, this, [this](const QString& groupName) {
+            if (groupName == m_groupName) {
+                loadMembers();
+            }
+        });
+    }
 }
 
 ShareGroupDialog::~ShareGroupDialog() {

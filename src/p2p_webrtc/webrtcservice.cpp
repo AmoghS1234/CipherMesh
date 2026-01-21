@@ -386,6 +386,7 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
         std::ostringstream entryJson;
         entryJson << "{\"type\":\"entry-data\","
                   << "\"group\":\"" << escapeJsonString(groupName) << "\","
+                  << "\"uuid\":\"" << escapeJsonString(e.uuid) << "\","
                   << "\"title\":\"" << escapeJsonString(e.title) << "\","
                   << "\"username\":\"" << escapeJsonString(e.username) << "\","
                   << "\"password\":\"" << escapeJsonString(e.password) << "\"," 
@@ -551,7 +552,8 @@ void WebRTCService::onWsTextMessageReceived(const QString& message) {
     else if (type == "ice-candidate") handleCandidate(obj);
     else if (type == "user-online") {
         QString user = obj["user"].toString();
-        if (onPeerOnline) onPeerOnline(user.toStdString());
+        // [FIX] Do NOT trigger onPeerOnline here. Wait for DataChannel open (line 615).
+        // This prevents Vault from trying to sync before P2P is ready.
         if (m_pendingInvites.contains(user)) retryPendingInviteFor(user);
         QMutexLocker l(&g_peerMutex);
         bool connected = m_peerConnections.contains(user);
@@ -783,9 +785,14 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
                     sendGroupData(remoteId.toStdString(), groupName.toStdString(), k, e, mList);
                 });
                 locker.relock();
+                // [FIX] IDEMPOTENCY: Clear pending data so we don't send again if we receive duplicate accept
+                m_pendingKeys.erase(remoteId); 
+                m_pendingEntries.erase(remoteId);
+                m_pendingMembers.remove(remoteId);
             }
-            m_pendingInvites.remove(remoteId);
-            if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), true);
+            if (m_pendingInvites.remove(remoteId) > 0) {
+                 if (onInviteResponse) onInviteResponse(remoteId.toStdString(), groupName.toStdString(), true);
+            }
         }
     }
     else if (type == "invite-reject") {
@@ -857,10 +864,14 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
     header["key"] = QString::fromUtf8(keyBytes.toBase64());
     sendP2PMessage(recipient, header);
     
+    // [FIX] Give the mobile app 500ms to commit the group to SQLite (Per User Diagnostics)
+    QThread::msleep(500); 
+    
     for (const auto& entry : entries) {
         QJsonObject entryObj;
         entryObj["type"] = "entry-data";
         entryObj["group"] = QString::fromStdString(groupName);
+        entryObj["uuid"] = QString::fromStdString(entry.uuid);
         entryObj["title"] = QString::fromStdString(entry.title);
         entryObj["username"] = QString::fromStdString(entry.username);
         entryObj["password"] = QString::fromStdString(entry.password);
@@ -873,7 +884,9 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
         }
         entryObj["locations"] = locArray;
         sendP2PMessage(recipient, entryObj);
-        QThread::msleep(20); 
+        
+        // Keep a small gap between entries to prevent buffer overflow
+        QThread::msleep(50); 
     }
     
     QJsonObject memberListMsg;

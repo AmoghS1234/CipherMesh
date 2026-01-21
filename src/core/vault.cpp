@@ -193,6 +193,14 @@ void Vault::addEncryptedEntry(const VaultEntry& entry, const std::string& base64
         VaultEntry temp = entry;
         if(temp.uuid.empty()) temp.uuid = m_crypto->generateUUID();
         
+        // UUID-based deduplication: Skip if entry with same UUID exists
+        auto existing = m_db->getEntriesForGroup(m_activeGroupId);
+        for (const auto& e : existing) {
+            if (e.uuid == temp.uuid) {
+                return; // Entry already exists, skip to prevent duplicates
+            }
+        }
+        
         std::vector<unsigned char> encryptedBlob;
         if(!base64Ciphertext.empty()) {
             encryptedBlob = base64DecodeInternal(base64Ciphertext);
@@ -387,6 +395,113 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
     bool found = false;
 
     try {
+        // Check message type first for initial group transfer
+        std::string msgType = getJsonString(payload, "type");
+        
+        // Handle initial group transfer types (from P2P sharing)
+        // Handle initial group transfer types (from P2P sharing)
+        if (msgType == "group-data") {
+            std::string groupName = getJsonString(payload, "group");
+            std::string keyBase64 = getJsonString(payload, "key");
+            
+            // [FIX] Handle collisions (e.g. "Personal") by renaming
+            std::string localGroup = groupName;
+            if (groupExists(localGroup)) {
+                 // Check if we already have this specific group from this sender
+                 int existingId = findGroupIdForSync(groupName, senderId);
+                 if (existingId != -1 && existingId != getGroupId(localGroup)) {
+                     // We already have a mapped group, ignore creation or update key?
+                     // For now, ignore creation if exists.
+                     return;
+                 }
+                 
+                 // Create new unique name
+                 std::string uniqueName = localGroup + " (from " + senderId + ")";
+                 int counter = 1;
+                 std::string baseName = uniqueName;
+                 while (groupExists(uniqueName)) {
+                     uniqueName = baseName + " " + std::to_string(counter++);
+                 }
+                 localGroup = uniqueName;
+            }
+
+            if (!groupExists(localGroup) && !keyBase64.empty()) {
+                std::vector<unsigned char> key = base64DecodeInternal(keyBase64);
+                addGroup(localGroup, key, senderId); // Set sender as owner
+                
+                // [FIX] Add sender as MEMBER so findGroupIdForSync can find this group later for entries
+                addGroupMember(localGroup, senderId, "owner", "accepted");
+                addGroupMember(localGroup, getUserId(), "member", "accepted");
+                
+                notifySync("groups-updated", localGroup);
+            }
+            return;
+        }
+        else if (msgType == "entry-data") {
+            std::string remoteGroupName = getJsonString(payload, "group");
+            
+            // [FIX] Resolve local group name using sender ID
+            std::string groupName = remoteGroupName;
+            int gid = findGroupIdForSync(remoteGroupName, senderId);
+            if (gid != -1) {
+                // Find name from ID
+                auto names = m_db->getAllGroupNames();
+                for(const auto& n : names) {
+                    if (m_db->getGroupId(n) == gid) { groupName = n; break; }
+                }
+            } else {
+                if (!groupExists(groupName)) return;
+            }
+            
+            if (!groupExists(groupName)) return;
+            
+            VaultEntry e;
+            e.uuid = getJsonString(payload, "uuid");
+            e.title = getJsonString(payload, "title");
+            e.username = getJsonString(payload, "username");
+            e.notes = getJsonString(payload, "notes");
+            e.url = getJsonString(payload, "url");
+            e.totpSecret = getJsonString(payload, "totpSecret");
+            
+            std::string encPass = getJsonString(payload, "password");
+            
+            // Parse locations array from JSON
+            size_t locPos = payload.find("\"locations\"");
+            if (locPos != std::string::npos) {
+                size_t arrStart = payload.find('[', locPos);
+                if (arrStart != std::string::npos) {
+                    size_t objStart = arrStart;
+                    while ((objStart = payload.find('{', objStart)) != std::string::npos) {
+                        size_t objEnd = payload.find('}', objStart);
+                        if (objEnd == std::string::npos || objEnd > payload.find(']', arrStart)) break;
+                        std::string locObj = payload.substr(objStart, objEnd - objStart + 1);
+                        std::string locType = getJsonString(locObj, "type");
+                        std::string locValue = getJsonString(locObj, "value");
+                        if (!locType.empty() && !locValue.empty()) {
+                            e.locations.push_back(Location(-1, locType, locValue));
+                        }
+                        objStart = objEnd + 1;
+                    }
+                }
+            }
+            
+            // Fallback: add url as location if no locations parsed
+            if (e.locations.empty() && !e.url.empty()) {
+                e.locations.push_back(Location(-1, "url", e.url));
+            }
+            
+            if (setActiveGroup(groupName)) {
+                addEncryptedEntry(e, encPass);
+                notifySync("entry-updated", groupName);
+            }
+            return;
+        }
+        else if (msgType == "member-list") {
+            // Handle member list import if needed
+            notifySync("members-updated", getJsonString(payload, "group"));
+            return;
+        }
+        
         // 1. Always handle ACKs immediately
         if (payload.find("\"type\":\"sync-ack\"") != std::string::npos) {
             if (jobId > 0) handleSyncAck((int)jobId);

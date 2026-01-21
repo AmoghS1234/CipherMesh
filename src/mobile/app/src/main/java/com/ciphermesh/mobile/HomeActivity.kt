@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
-import android.graphics.PorterDuff
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
@@ -20,6 +19,7 @@ import android.view.MenuItem
 import android.view.View
 import android.widget.*
 import androidx.activity.OnBackPressedCallback
+import androidx.annotation.Keep
 import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -29,30 +29,24 @@ import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import com.ciphermesh.mobile.core.Vault
-import com.ciphermesh.mobile.core.SignalingCallback
+import com.ciphermesh.mobile.p2p.P2PConnectionListener
+import com.ciphermesh.mobile.p2p.P2PManager
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.textfield.TextInputEditText
-import com.google.android.material.bottomsheet.BottomSheetDialog 
 import java.io.File
 import java.util.*
-import java.util.concurrent.TimeUnit
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import org.json.JSONObject
 
-class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener, SignalingCallback {
+class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener, P2PConnectionListener {
 
     companion object {
         private const val TAG = "HomeActivity"
-        private const val SIGNALING_URL = "wss://ciphermesh-signal-server.onrender.com"
     }
 
     private val vault = Vault()
+    private lateinit var p2pManager: P2PManager
     
     // UI Elements
     private lateinit var drawerLayout: DrawerLayout
@@ -61,34 +55,41 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private lateinit var adapter: CustomAdapter
     private lateinit var toggle: ActionBarDrawerToggle
     
-    // Signaling
-    private lateinit var client: OkHttpClient
-    private var webSocket: WebSocket? = null
-    
     private var reconnectMenuItem: MenuItem? = null
-    private var currentConnectionState = ConnectionState.DISCONNECTED
-    private enum class ConnectionState { DISCONNECTED, CONNECTING, CONNECTED }
+    private var currentConnectionState = P2PManager.ConnectionState.DISCONNECTED
 
+    // State
     private var isShowingGroups = true 
     private var currentGroup = "" 
     private var isGroupOwner = false 
     private var allEntries = ArrayList<EntryModel>()
+    private val processingInvites = mutableSetOf<String>()
     
     private val clipboardHandler = Handler(Looper.getMainLooper())
     private var clipboardClearRunnable: Runnable? = null
-    
     private var isReceiverRegistered = false
-    private val processingInvites = mutableSetOf<String>()
 
+    // JNI Callbacks
     private val refreshReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) { refreshUI() }
     }
 
+    @Keep
     fun refreshUI() {
         runOnUiThread {
             Log.d(TAG, "Refreshing UI triggered from Native")
             if (isShowingGroups) loadGroups() else loadEntries()
         }
+    }
+
+    @Keep
+    fun showToast(msg: String) { 
+        runOnUiThread { 
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            if(msg.contains("Invite received", true) || msg.contains("Joined Group", true)) {
+                loadGroups()
+            }
+        } 
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -102,11 +103,10 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         
         setContentView(R.layout.activity_home)
 
+        // Init Core
         val dbPath = File(filesDir, "vault.db").absolutePath
         vault.init(dbPath)
         vault.setActivityContext(this)
-
-        vault.registerSignalingCallback(this)
 
         if (vault.isLocked()) {
             Toast.makeText(this, "Session Expired", Toast.LENGTH_SHORT).show()
@@ -115,7 +115,8 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             return
         }
 
-        client = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build()
+        // Init P2P Manager
+        p2pManager = P2PManager(vault, this)
 
         setupUI()
         
@@ -137,9 +138,45 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             }
         })
 
-        initSignaling()
+        // Start Connection
+        p2pManager.connect()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        p2pManager.disconnect()
+        if (isReceiverRegistered) {
+            try { unregisterReceiver(refreshReceiver); isReceiverRegistered = false } catch (e: Exception) {}
+        }
+        clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
+    }
+
+    // --- P2P Listener ---
+    override fun onConnectionStateChanged(state: P2PManager.ConnectionState) {
+        currentConnectionState = state
+        runOnUiThread {
+            // Update menu icon color based on connection state
+            reconnectMenuItem?.let { item ->
+                val icon = item.icon?.mutate()
+                if (icon != null) {
+                    val color = when (state) {
+                        P2PManager.ConnectionState.CONNECTED -> Color.parseColor("#4CAF50")
+                        P2PManager.ConnectionState.CONNECTING -> Color.parseColor("#FFC107")
+                        P2PManager.ConnectionState.DISCONNECTED -> Color.parseColor("#F44336")
+                    }
+                    DrawableCompat.setTint(icon, color)
+                    item.icon = icon
+                }
+                item.title = when (state) {
+                    P2PManager.ConnectionState.CONNECTED -> "Connected"
+                    P2PManager.ConnectionState.CONNECTING -> "Connecting..."
+                    P2PManager.ConnectionState.DISCONNECTED -> "Reconnect"
+                }
+            }
+        }
+    }
+
+    // --- UI Setup ---
     private fun setupUI() {
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -174,131 +211,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        webSocket?.close(1000, "Activity Destroyed")
-        if (isReceiverRegistered) {
-            try { unregisterReceiver(refreshReceiver); isReceiverRegistered = false } catch (e: Exception) {}
-        }
-        clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
-    }
-
-    // =========================================================================
-    // SIGNALING (WebSocket + JNI Bridge)
-    // =========================================================================
-
-// In HomeActivity.kt
-
-    private fun initSignaling() {
-        updateConnectionState(ConnectionState.CONNECTING)
-        Log.d(TAG, "Connecting to Signaling Server: $SIGNALING_URL")
-
-        // [FIX 1] Add pingInterval to keep connection alive through NATs/Firewalls
-        client = OkHttpClient.Builder()
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .pingInterval(30, TimeUnit.SECONDS) 
-            .build()
-
-        val request = Request.Builder().url(SIGNALING_URL).build()
-
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                // [FIX 2] CRITICAL: Assign the socket to the class variable!
-                this@HomeActivity.webSocket = webSocket
-                
-                Log.d(TAG, "WebSocket Connected to $SIGNALING_URL")
-                updateConnectionState(ConnectionState.CONNECTED)
-
-                val userId = vault.getUserId()
-                if (userId.isEmpty()) Log.e(TAG, "CRITICAL: UserID is empty!")
-                
-                val json = """{"type":"register", "userId":"$userId"}"""
-                Log.d(TAG, "Sending Register: $json")
-                webSocket.send(json)
-
-                runOnUiThread { vault.initP2P(SIGNALING_URL) }
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.d(TAG, "RX Signaling: $text") // Added log for debugging
-                vault.receiveSignalingMessage(text)
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket Failure: ${t.message}")
-                updateConnectionState(ConnectionState.DISCONNECTED)
-                // Optional: Add auto-reconnect logic here with a Handler/Runnable
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket Closed: $reason")
-                updateConnectionState(ConnectionState.DISCONNECTED)
-            }
-        })
-    }
-
-    override fun sendSignalingMessage(targetId: String, type: String, payload: String) {
-        val currentSocket = webSocket
-        if (currentSocket == null || currentConnectionState != ConnectionState.CONNECTED) {
-            Log.e(TAG, "Cannot send $type - Socket is null or disconnected")
-            return
-        }
-
-        try {
-            val json = JSONObject()
-            json.put("type", type)
-            json.put("target", targetId)
-            json.put("sender", vault.getUserId())
-
-            // [FIX] Logic to prevent double-wrapping SDP and candidates
-            if (payload.trim().startsWith("{")) {
-                val payloadObj = JSONObject(payload)
-                if (type == "offer" || type == "answer") {
-                    // Extract raw SDP from C++ JSON wrapper
-                    json.put("sdp", payloadObj.optString("sdp"))
-                } else if (type == "ice-candidate") {
-                    json.put("candidate", payloadObj.optString("candidate"))
-                    json.put("mid", payloadObj.optString("mid", "0"))
-                }
-            } else {
-                // Raw payload fallback
-                val key = if (type == "offer" || type == "answer") "sdp" else "payload"
-                json.put(key, payload)
-            }
-
-            currentSocket.send(json.toString())
-        } catch (e: Exception) {
-            Log.e(TAG, "Signaling Error: ${e.message}")
-        }
-    }
-
-    private fun updateConnectionState(state: ConnectionState) {
-        currentConnectionState = state
-        runOnUiThread {
-            reconnectMenuItem?.let { item ->
-                val icon = item.icon?.mutate()
-                if (icon != null) {
-                    val color = when (state) {
-                        ConnectionState.CONNECTED -> Color.parseColor("#4CAF50")
-                        ConnectionState.CONNECTING -> Color.parseColor("#FFC107")
-                        ConnectionState.DISCONNECTED -> Color.parseColor("#F44336")
-                    }
-                    DrawableCompat.setTint(icon, color)
-                    item.icon = icon
-                }
-                item.title = when (state) {
-                    ConnectionState.CONNECTED -> "Connected"
-                    ConnectionState.CONNECTING -> "Connecting..."
-                    ConnectionState.DISCONNECTED -> "Reconnect"
-                }
-            }
-        }
-    }
-
-    // =========================================================================
-    // MENU & LOGIC
-    // =========================================================================
-
+    // --- Menus ---
     override fun onCreateOptionsMenu(menu: Menu?): Boolean { 
         menuInflater.inflate(R.menu.menu_home, menu)
         val searchItem = menu?.findItem(R.id.action_search)
@@ -323,7 +236,8 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onPrepareOptionsMenu(menu: Menu?): Boolean { 
         val searchItem = menu?.findItem(R.id.action_search)
         reconnectMenuItem = menu?.findItem(R.id.action_reconnect)
-        updateConnectionState(currentConnectionState)
+        // Ensure icon is correct when menu opens
+        onConnectionStateChanged(currentConnectionState)
 
         val settingsItem = menu?.findItem(R.id.action_group_settings)
 
@@ -342,9 +256,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onOptionsItemSelected(item: MenuItem): Boolean { 
         when (item.itemId) {
             R.id.action_reconnect -> { 
-                updateConnectionState(ConnectionState.CONNECTING)
-                webSocket?.close(1000, "Manual Reconnect")
-                initSignaling()
+                p2pManager.connect()
                 Toast.makeText(this, "Reconnecting...", Toast.LENGTH_SHORT).show()
                 return true
             }
@@ -356,10 +268,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         return super.onOptionsItemSelected(item)
     }
 
-    // =========================================================================
-    // HELPERS
-    // =========================================================================
-
+    // --- Logic Helpers ---
     private fun checkOwnership(groupName: String) {
         if (groupName == "Personal") { isGroupOwner = true; return }
         val ownerId = vault.getGroupOwner(groupName)
@@ -401,7 +310,8 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         if (groupsRaw != null) {
             for (g in groupsRaw) {
                 val ownerId = vault.getGroupOwner(g)
-                val roleLabel = if (ownerId == myId || ownerId.isEmpty() || g == "Personal") "Owner" else "Member"
+                val isOwner = (ownerId == myId || ownerId.isEmpty() || g == "Personal")
+                val roleLabel = if (isOwner) "★ Owner" else "Member"
                 groupList.add(EntryModel(0, g, roleLabel)) 
             }
         }
@@ -432,6 +342,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         adapter.updateData(entryList)
     }
 
+    // --- Interaction ---
     private fun setupListClick() {
         listView.setOnItemClickListener { _, _, position, _ ->
             val item = adapter.getItem(position) ?: return@setOnItemClickListener
@@ -471,6 +382,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         }
     }
 
+    // --- Dialogs ---
     private fun showGroupOptionsDialog(groupName: String) {
         val options = if (isGroupOwner) {
             if (groupName == "Personal") arrayOf("Manage Group")
@@ -516,86 +428,84 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             }.setNegativeButton("Cancel", null).show()
     }
 
-    // [FIX] Replace problematic dialog functions with these clean versions
-private fun showManageGroupDialog() {
-    // Use layoutInflater property directly
-    val dialogView = layoutInflater.inflate(R.layout.dialog_manage_group, null)
-    val titleText = dialogView.findViewById<TextView>(R.id.textGroupTitle)
-    val sectionSync = dialogView.findViewById<LinearLayout>(R.id.sectionSyncSettings)
-    val sectionInvite = dialogView.findViewById<LinearLayout>(R.id.sectionInvite)
-    val btnManualSync = dialogView.findViewById<Button>(R.id.btnManualSync)
-    val inputInvite = dialogView.findViewById<TextInputEditText>(R.id.inputInviteId)
-    val btnSendInvite = dialogView.findViewById<Button>(R.id.btnSendInvite)
-    val membersContainer = dialogView.findViewById<LinearLayout>(R.id.containerMembers)
+    private fun showManageGroupDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_manage_group, null)
+        val titleText = dialogView.findViewById<TextView>(R.id.textGroupTitle)
+        val sectionSync = dialogView.findViewById<LinearLayout>(R.id.sectionSyncSettings)
+        val sectionInvite = dialogView.findViewById<LinearLayout>(R.id.sectionInvite)
+        val btnManualSync = dialogView.findViewById<Button>(R.id.btnManualSync)
+        val inputInvite = dialogView.findViewById<TextInputEditText>(R.id.inputInviteId)
+        val btnSendInvite = dialogView.findViewById<Button>(R.id.btnSendInvite)
+        val membersContainer = dialogView.findViewById<LinearLayout>(R.id.containerMembers)
 
-    titleText.setText("Manage '$currentGroup'")
+        titleText.setText("Manage '$currentGroup'")
 
-    if (isGroupOwner) {
-        sectionSync.setVisibility(View.VISIBLE)
-        sectionInvite.setVisibility(View.VISIBLE)
-        btnManualSync.setOnClickListener {
-            vault.broadcastSync(currentGroup)
-            Toast.makeText(this, "Broadcasting Update...", Toast.LENGTH_SHORT).show()
+        if (isGroupOwner) {
+            sectionSync.visibility = View.VISIBLE
+            sectionInvite.visibility = View.VISIBLE
+            btnManualSync.setOnClickListener {
+                vault.broadcastSync(currentGroup)
+                Toast.makeText(this, "Broadcasting Update...", Toast.LENGTH_SHORT).show()
+            }
+            btnSendInvite.setOnClickListener {
+                val target = inputInvite.text.toString().trim()
+                if (target.isNotEmpty()) {
+                    vault.sendP2PInvite(currentGroup, target)
+                    Toast.makeText(this, "Invite Sent", Toast.LENGTH_SHORT).show()
+                    inputInvite.setText("")
+                }
+            }
+        } else {
+            sectionSync.visibility = View.GONE
+            sectionInvite.visibility = View.GONE
         }
-        btnSendInvite.setOnClickListener {
-            val target = inputInvite.text.toString().trim()
-            if (target.isNotEmpty()) {
-                vault.sendP2PInvite(currentGroup, target)
-                Toast.makeText(this, "Invite Sent", Toast.LENGTH_SHORT).show()
-                inputInvite.setText("")
+
+        fun loadMembers() {
+            membersContainer.removeAllViews()
+            val members = vault.getGroupMembers(currentGroup)
+            val myId = vault.getUserId()
+
+            if (members == null || members.isEmpty()) {
+                val emptyView = TextView(this)
+                emptyView.text = "No other members"
+                emptyView.setPadding(16, 16, 16, 16)
+                membersContainer.addView(emptyView)
+                return
+            }
+
+            for (m in members) {
+                val parts = m.split("|")
+                if (parts.size < 3) continue
+                val uid = parts[0]
+                val status = parts[2]
+
+                val row = layoutInflater.inflate(R.layout.item_member_row, membersContainer, false)
+                val nameTxt = row.findViewById<TextView>(R.id.memberName)
+                val statusTxt = row.findViewById<TextView>(R.id.memberStatus)
+                val btnRemove = row.findViewById<View>(R.id.btnRemove)
+
+                nameTxt.setText(if (uid == myId) "$uid (You)" else uid)
+                statusTxt.setText(status.uppercase())
+                
+                if (status.equals("pending", true)) statusTxt.setTextColor(Color.parseColor("#FFA000"))
+                else if (status.equals("accepted", true)) statusTxt.setTextColor(Color.parseColor("#4CAF50"))
+
+                if (isGroupOwner && uid != myId) {
+                    btnRemove.visibility = View.VISIBLE
+                    btnRemove.setOnClickListener {
+                        MaterialAlertDialogBuilder(this)
+                            .setTitle("Remove Member")
+                            .setMessage("Kick $uid?")
+                            .setPositiveButton("Remove") { _, _ -> vault.removeUser(currentGroup, uid); loadMembers() }
+                            .setNegativeButton("Cancel", null).show()
+                    }
+                } else btnRemove.visibility = View.GONE
+                membersContainer.addView(row)
             }
         }
-    } else {
-        sectionSync.setVisibility(View.GONE)
-        sectionInvite.setVisibility(View.GONE)
+        loadMembers()
+        MaterialAlertDialogBuilder(this).setView(dialogView as View).setPositiveButton("Close", null).show()
     }
-
-    fun loadMembers() {
-        membersContainer.removeAllViews()
-        val members = vault.getGroupMembers(currentGroup)
-        val myId = vault.getUserId()
-
-        if (members == null || members.isEmpty()) {
-            val emptyView = TextView(this)
-            emptyView.text = "No other members"
-            emptyView.setPadding(16, 16, 16, 16)
-            membersContainer.addView(emptyView)
-            return
-        }
-
-        for (m in members) {
-            val parts = m.split("|")
-            if (parts.size < 3) continue
-            val uid = parts[0]
-            val status = parts[2]
-
-            val row = layoutInflater.inflate(R.layout.item_member_row, membersContainer, false)
-            val nameTxt = row.findViewById<TextView>(R.id.memberName)
-            val statusTxt = row.findViewById<TextView>(R.id.memberStatus)
-            val btnRemove = row.findViewById<View>(R.id.btnRemove)
-
-            nameTxt.setText(if (uid == myId) "$uid (You)" else uid)
-            statusTxt.setText(status.uppercase())
-            
-            if (status.equals("pending", true)) statusTxt.setTextColor(Color.parseColor("#FFA000"))
-            else if (status.equals("accepted", true)) statusTxt.setTextColor(Color.parseColor("#4CAF50"))
-
-            if (isGroupOwner && uid != myId) {
-                btnRemove.setVisibility(View.VISIBLE)
-                btnRemove.setOnClickListener {
-                    MaterialAlertDialogBuilder(this)
-                        .setTitle("Remove Member")
-                        .setMessage("Kick $uid?")
-                        .setPositiveButton("Remove") { _, _ -> vault.removeUser(currentGroup, uid); loadMembers() }
-                        .setNegativeButton("Cancel", null).show()
-                }
-            } else btnRemove.setVisibility(View.GONE)
-            membersContainer.addView(row)
-        }
-    }
-    loadMembers()
-    MaterialAlertDialogBuilder(this).setView(dialogView as View).setPositiveButton("Close", null).show()
-}
 
     private fun showEntryOptions(item: EntryModel) {
         val dialog = BottomSheetDialog(this)
@@ -633,7 +543,7 @@ private fun showManageGroupDialog() {
     private fun showCreateGroupDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_group, null)
         val input = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.dialogInput)
-        MaterialAlertDialogBuilder(this).setTitle("Create New Group").setView(dialogView).setPositiveButton("Create") { _, _ ->
+        MaterialAlertDialogBuilder(this).setTitle("Create New Group").setView(dialogView as View).setPositiveButton("Create") { _, _ ->
                 val groupName = input.text.toString().trim()
                 if (groupName.isNotEmpty()) {
                     if (vault.addGroup(groupName)) loadGroups()
@@ -696,7 +606,7 @@ private fun showManageGroupDialog() {
     }
 
     private fun showAcceptRejectInviteDialog(inviteId: Int, fromUser: String, groupName: String) {
-        val view = LayoutInflater.from(this).inflate(R.layout.dialog_accept_invite, null)
+        val view = layoutInflater.inflate(R.layout.dialog_accept_invite, null)
         val text = view.findViewById<TextView>(R.id.inviteDetailText)
         val btnAccept = view.findViewById<Button>(R.id.btnAcceptInvite)
         val btnReject = view.findViewById<Button>(R.id.btnRejectInvite)

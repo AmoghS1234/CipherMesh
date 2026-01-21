@@ -39,6 +39,9 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     bool eventFilter(QObject *obj, QEvent *event) override;
 
+signals:
+    void groupMembersUpdated(const QString& groupName);
+
 private slots:
     // Groups
     void onNewGroupClicked();

@@ -144,6 +144,20 @@ MainWindow::MainWindow(CipherMesh::Core::Vault* vault, QWidget *parent)
         }, Qt::QueuedConnection);
     };
     
+    // [FIX] Enable incremental sync by connecting Vault output to P2P service
+    if (m_vault) {
+        m_vault->setP2PSendCallback([p2pWorker](const std::string& userId, const std::string& msg) {
+            QMetaObject::invokeMethod(p2pWorker, [p2pWorker, userId, msg]() {
+                QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(msg));
+                if (!doc.isNull() && doc.isObject()) {
+                    p2pWorker->sendP2PMessage(QString::fromStdString(userId), doc.object());
+                } else {
+                    qWarning() << "Invalid JSON in sync message to" << QString::fromStdString(userId);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
+    
     p2pWorker->onPeerOnline = [this](const std::string& userId) {
         QMetaObject::invokeMethod(this, [this, userId]() {
             handlePeerOnline(QString::fromStdString(userId));
@@ -371,6 +385,9 @@ void MainWindow::onAcceptInviteClicked() {
 
     m_vault->updatePendingInviteStatus(m_currentSelectedInviteId, "accepted");
     m_p2pService->respondToInvite(target.senderId, true);
+    
+    // [FIX] Cleanup UI: Delete pending invite so it disappears from the list
+    m_vault->deletePendingInvite(m_currentSelectedInviteId);
     
     m_inviteInfoLabel->setText("<b>Acceptance Sent!</b><br>Waiting for sender to transfer data...<br>(They must be online)");
     m_acceptInviteButton->setEnabled(false);
@@ -1737,6 +1754,7 @@ void MainWindow::handleInviteResponse(const QString& userId, const QString& grou
         }
         loadGroups();
         qDebug() << "DEBUG: Updated member status for" << userId << "in group" << groupName;
+        emit groupMembersUpdated(groupName);
     } catch (const std::exception& e) {
         qWarning() << "ERROR: Failed to update member status:" << e.what();
     }

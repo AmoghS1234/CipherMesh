@@ -13,6 +13,10 @@ class StructureParser(private val structure: AssistStructure) {
     val passwordFields = mutableListOf<AutofillId>()
     var webDomain: String? = null
     var packageName: String? = null
+    
+    // Value extraction for save operations
+    val usernameValues = mutableListOf<String>()
+    val passwordValues = mutableListOf<String>()
 
     fun parse() {
         val nodes = structure.windowNodeCount
@@ -33,15 +37,19 @@ class StructureParser(private val structure: AssistStructure) {
         }
 
         val hints = node.autofillHints
+        val textValue = node.text?.toString() ?: ""
+        
         if (hints != null) {
             for (hint in hints) {
                 if (hint.contains(View.AUTOFILL_HINT_USERNAME) || 
                     hint.contains("email") || 
                     hint.contains("phone")) {
                     node.autofillId?.let { usernameFields.add(it) }
+                    if (textValue.isNotEmpty()) usernameValues.add(textValue)
                 } 
                 else if (hint.contains(View.AUTOFILL_HINT_PASSWORD)) {
                     node.autofillId?.let { passwordFields.add(it) }
+                    if (textValue.isNotEmpty()) passwordValues.add(textValue)
                 }
             }
         }
@@ -52,6 +60,7 @@ class StructureParser(private val structure: AssistStructure) {
              if ((inputType and 0xFFF) == 129 || (inputType and 0xFFF) == 225) {
                  if (node.autofillId != null && !passwordFields.contains(node.autofillId)) {
                      passwordFields.add(node.autofillId!!)
+                     if (textValue.isNotEmpty()) passwordValues.add(textValue)
                  }
              }
         }

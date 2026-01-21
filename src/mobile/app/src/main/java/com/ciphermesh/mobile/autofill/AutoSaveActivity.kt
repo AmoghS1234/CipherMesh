@@ -29,6 +29,10 @@ class AutoSaveActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         
         vault = Vault()
+        // FIX: Initialize vault with database path
+        val dbPath = java.io.File(filesDir, "vault.db").absolutePath
+        vault.init(dbPath)
+        
         executor = ContextCompat.getMainExecutor(this)
         
         val isUpdate = intent.getBooleanExtra(EXTRA_IS_UPDATE, false)
@@ -175,9 +179,9 @@ class AutoSaveActivity : AppCompatActivity() {
             vault.setActiveGroup(groupName)
             
             // Build location JSON
-            val locationType = if (webDomain != null) "URL" else "Android App"
-            val locationValue = webDomain?.let { "https://$it" } ?: packageName
-            val locationsJson = """{"locations":[{"type":"$locationType","value":"$locationValue"}]}"""
+            val locationType = if (webDomain != null) "url" else "android"
+            val locationValue = webDomain?.let { if (it.startsWith("http")) it else "https://$it" } ?: packageName
+            val entryUrl = if (webDomain != null) locationValue else ""
             
             // Save entry
             vault.addEntry(
@@ -185,8 +189,8 @@ class AutoSaveActivity : AppCompatActivity() {
                 username = username,
                 pass = password,
                 type = "Login",
-                url = locationsJson,
-                notes = "Auto-saved via AutoFill",
+                url = entryUrl,
+                notes = "Auto-saved from " + packageName,
                 totp = ""
             )
             

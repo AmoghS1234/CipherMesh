@@ -406,6 +406,14 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         sendSignalingToKotlin(target, type, payload);
     };
 
+    // [FIX] Enable incremental sync
+    g_vault->setP2PSendCallback([](const std::string& userId, const std::string& msg) {
+        std::lock_guard<std::mutex> pLock(g_p2pMutex);
+        if (g_p2p) {
+            g_p2p->sendP2PMessage(userId, msg);
+        }
+    });
+
     // [FIX] Updated lambda signature to match DataCallback (sender, message)
     g_p2p->onSyncMessage = [](std::string sender, std::string message) {
         std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
@@ -480,6 +488,7 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         }
         else if (type == "entry-data") {
             CipherMesh::Core::VaultEntry e;
+            e.uuid = extractJsonValueJNI(json, "uuid");  // Extract UUID for deduplication
             e.title = extractJsonValueJNI(json, "title");
             e.username = extractJsonValueJNI(json, "username");
             e.notes = extractJsonValueJNI(json, "notes");
@@ -532,7 +541,9 @@ Java_com_ciphermesh_mobile_core_Vault_addEntryNative(JNIEnv* env, jobject thiz, 
     const char* t = env->GetStringUTFChars(title, 0); e.title = t;
     const char* u = env->GetStringUTFChars(user, 0); e.username = u;
     const char* p = env->GetStringUTFChars(pass, 0); e.password = p;
-    const char* l = env->GetStringUTFChars(url, 0); e.locations.push_back(CipherMesh::Core::Location(-1, "url", l));
+    const char* l = env->GetStringUTFChars(url, 0); 
+    e.url = l; // [FIX] Set main URL field
+    e.locations.push_back(CipherMesh::Core::Location(-1, "url", l));
     const char* n = env->GetStringUTFChars(notes, 0); e.notes = n;
     try { g_vault->addEntry(e, e.password); } JNI_CATCH_VOID
     env->ReleaseStringUTFChars(title, t); env->ReleaseStringUTFChars(user, u);
