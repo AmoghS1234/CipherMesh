@@ -456,18 +456,19 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
     // [FIX] Route all group data through the core handleIncomingSync function
     // This ensures consistent behavior between Android and Desktop, and proper
     // active group context management
-    g_p2p->onGroupDataReceived = [&](std::string senderId, std::string json) {
+    g_p2p->onGroupDataReceived = [](std::string senderId, std::string json) {
         std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
         if (!g_vault || g_vault->isLocked()) {
             LOGW("Vault is null or locked, cannot process group data");
             return;
         }
 
-        LOGI("onGroupDataReceived from %s", senderId.c_str());
+        LOGI("onGroupDataReceived from %s: %s", senderId.c_str(), json.substr(0, 100).c_str());
         
         // Use the core vault's handleIncomingSync for consistent behavior
         try {
             g_vault->handleIncomingSync(senderId, json);
+            LOGI("handleIncomingSync completed successfully");
         } catch (const std::exception& ex) {
             LOGE("Error handling group data: %s", ex.what());
         } catch (...) {

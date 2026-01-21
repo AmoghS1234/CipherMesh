@@ -393,7 +393,12 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
                                          const std::vector<unsigned char>& groupKey, 
                                          const std::vector<CipherMesh::Core::VaultEntry>& entries,
                                          const std::string& memberListJson) {
-    if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) return;
+    if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
+        LOGE("sendGroupData_unsafe: Channel not open for %s - cannot send group data", recipientId.c_str());
+        return;
+    }
+    
+    LOGI("sendGroupData_unsafe: Sending group '%s' to %s with %zu entries", groupName.c_str(), recipientId.c_str(), entries.size());
     
     std::ostringstream jsonHeader;
     jsonHeader << "{\"type\":\"group-data\",\"group\":\"" << escapeJsonString(groupName) << "\",";
@@ -451,6 +456,8 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
     std::string safeMembers = memberListJson.empty() ? "[]" : memberListJson;
     memberListMsg << "{\"type\":\"member-list\",\"group\":\"" << escapeJsonString(groupName) << "\",\"members\":" << safeMembers << "}";
     m_channels[recipientId]->send(memberListMsg.str());
+    
+    LOGI("sendGroupData_unsafe: Completed sending all data to %s", recipientId.c_str());
     
     m_pendingKeys.erase(recipientId);
     m_pendingEntries.erase(recipientId);
@@ -785,7 +792,9 @@ void WebRTCService::sendP2PMessage(const QString& remoteId, const QJsonObject& p
         auto dc = m_dataChannels[remoteId];
         locker.unlock();
         try {
+            QString msgType = payload["type"].toString();
             dc->send(QJsonDocument(payload).toJson(QJsonDocument::Compact).toStdString());
+            qDebug() << "[P2P] Sent message to" << remoteId << "- type:" << msgType;
         } catch (const std::exception& e) {
             qWarning() << "[P2P] Failed to send message to" << remoteId << ":" << e.what();
         }
