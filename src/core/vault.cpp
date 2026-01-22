@@ -354,8 +354,20 @@ void Vault::queueSyncForGroup(const std::string& groupName, const std::string& o
     if (gid == -1) return;
     std::vector<GroupMember> members = m_db->getGroupMembers(gid);
     std::string myId = getUserId();
+    LOG_DEBUG("queueSyncForGroup: Queueing '" + operation + "' for group '" + groupName + "' with " + std::to_string(members.size()) + " members");
+    
     for (const auto& m : members) {
         if (m.userId == myId) continue;
+        
+        // [FIX] Log member status to diagnose sync issues
+        LOG_DEBUG("queueSyncForGroup: Checking member " + m.userId + " with status " + m.status);
+        
+        // Ensure we only sync to accepted members (unless it's an invite/kick)
+        if (m.status != "accepted" && operation != "MEMBER_KICK" && operation != "GROUP_SPLIT") {
+             LOG_DEBUG("queueSyncForGroup: Skipping sync for " + m.userId + " (status not accepted)");
+             continue;
+        }
+
         m_db->storeSyncJob(m.userId, groupName, operation, payload);
         processOutboxForUser(m.userId);
     }
@@ -750,7 +762,10 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         }
 
         gid = findGroupIdForSync(group, senderId);
-        if (gid == -1) goto SEND_ACK; // Not found locally, but ACK to stop retries
+        if (gid == -1) {
+            LOGW("handleIncomingSync: Group '" + group + "' from sender " + senderId + " NOT FOUND locally. Acknowledging but skipping processing.");
+            goto SEND_ACK; 
+        }
 
         groupKey = m_crypto->decrypt(m_db->getEncryptedGroupKeyById(gid), m_masterKey_RAM);
 
@@ -1022,6 +1037,14 @@ std::string Vault::getEntryFullDetails(int entryId) {
     std::ostringstream ss;
     ss << e.title << "|" << e.username << "|" << getDecryptedPassword(entryId) << "|" << e.notes 
        << "|" << e.totpSecret << "|" << e.createdAt << "|" << e.updatedAt << "|" << e.lastAccessed << "|" << e.url;
+
+    // Append locations
+    ss << "|[";
+    for(size_t i = 0; i < e.locations.size(); ++i) {
+        ss << "{\"type\":\"" << escapeJson(e.locations[i].type) << "\",\"value\":\"" << escapeJson(e.locations[i].value) << "\"}";
+        if(i < e.locations.size() - 1) ss << ",";
+    }
+    ss << "]";
     return ss.str();
 }
 

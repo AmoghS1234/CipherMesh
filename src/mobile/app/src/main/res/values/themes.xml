@@ -11,12 +11,13 @@
     <style name="Theme.CipherMesh.AppBarOverlay" parent="ThemeOverlay.AppCompat.Dark.ActionBar" />
     <style name="Theme.CipherMesh.PopupOverlay" parent="ThemeOverlay.AppCompat.Light" />
 
-    <style name="Theme.CipherMesh.Professional" parent="Theme.CipherMesh">
+    <style name="Theme.CipherMesh.Professional" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowBackground">@color/prof_bg</item>
         <item name="colorSurface">@color/prof_surface</item>
         <item name="colorOnSurface">@color/prof_text_primary</item>
         <item name="android:textColorPrimary">@color/prof_text_primary</item>
         <item name="android:textColorSecondary">@color/prof_text_secondary</item>
+        <item name="android:statusBarColor">@color/prof_bg</item>
         
         <item name="colorOnPrimary">@color/black</item>
         
@@ -26,15 +27,17 @@
         <item name="colorControlNormal">@color/prof_text_primary</item>
         <item name="android:editTextColor">@color/prof_text_primary</item>
         <item name="android:listDivider">@color/prof_divider</item>
+        <item name="textInputStyle">@style/CipherMesh.Input</item>
     </style>
 
-    <style name="Theme.CipherMesh.ModernLight" parent="Theme.CipherMesh">
+    <style name="Theme.CipherMesh.ModernLight" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="android:windowBackground">@color/light_bg</item>
         <item name="colorSurface">@color/light_surface</item>
         <item name="colorOnSurface">@color/light_text_primary</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:textColorPrimary">@color/light_text_primary</item>
         <item name="android:textColorSecondary">@color/light_text_secondary</item>
+        <item name="android:statusBarColor">@color/light_bg</item>
         <item name="colorOnPrimary">@color/white</item>
         <item name="colorPrimary">@color/light_primary</item>
         <item name="colorPrimaryVariant">@color/light_variant</item>
@@ -42,14 +45,16 @@
         <item name="colorControlNormal">@color/light_control</item>
         <item name="android:editTextColor">@color/light_text_primary</item>
         <item name="android:listDivider">@color/light_divider</item>
+        <item name="textInputStyle">@style/CipherMesh.Input</item>
     </style>
 
-    <style name="Theme.CipherMesh.Ocean" parent="Theme.CipherMesh">
+    <style name="Theme.CipherMesh.Ocean" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowBackground">@color/ocean_bg</item>
         <item name="colorSurface">@color/ocean_surface</item>
         <item name="colorOnSurface">@color/ocean_text_primary</item>
         <item name="android:textColorPrimary">@color/ocean_text_primary</item>
         <item name="android:textColorSecondary">@color/ocean_text_secondary</item>
+         <item name="android:statusBarColor">@color/ocean_bg</item>
         <item name="colorOnPrimary">@color/ocean_bg</item>
         <item name="colorPrimary">@color/ocean_primary</item>
         <item name="colorPrimaryVariant">@color/ocean_variant</item>
@@ -57,15 +62,17 @@
         <item name="colorControlNormal">@color/ocean_text_primary</item>
         <item name="android:editTextColor">@color/ocean_text_primary</item>
         <item name="android:listDivider">@color/ocean_divider</item>
+        <item name="textInputStyle">@style/CipherMesh.Input</item>
     </style>
 
-    <style name="Theme.CipherMesh.Warm" parent="Theme.CipherMesh">
+    <style name="Theme.CipherMesh.Warm" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="android:windowBackground">@color/warm_bg</item>
         <item name="colorSurface">@color/warm_surface</item>
         <item name="colorOnSurface">@color/warm_text_primary</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:textColorPrimary">@color/warm_text_primary</item>
         <item name="android:textColorSecondary">@color/warm_text_secondary</item>
+         <item name="android:statusBarColor">@color/warm_bg</item>
         <item name="colorOnPrimary">@color/white</item>
         <item name="colorPrimary">@color/warm_primary</item>
         <item name="colorPrimaryVariant">@color/warm_variant</item>
@@ -73,15 +80,17 @@
         <item name="colorControlNormal">@color/warm_text_primary</item>
         <item name="android:editTextColor">@color/warm_text_primary</item>
         <item name="android:listDivider">@color/warm_divider</item>
+        <item name="textInputStyle">@style/CipherMesh.Input</item>
     </style>
 
-    <style name="Theme.CipherMesh.Vibrant" parent="Theme.CipherMesh">
+    <style name="Theme.CipherMesh.Vibrant" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="android:windowBackground">@color/vibrant_bg</item>
         <item name="colorSurface">@color/vibrant_surface</item>
         <item name="colorOnSurface">@color/vibrant_text_primary</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:textColorPrimary">@color/vibrant_text_primary</item>
         <item name="android:textColorSecondary">@color/vibrant_text_secondary</item>
+         <item name="android:statusBarColor">@color/vibrant_bg</item>
         <item name="colorOnPrimary">@color/white</item>
         <item name="colorPrimary">@color/vibrant_primary</item>
         <item name="colorPrimaryVariant">@color/vibrant_variant</item>
@@ -89,6 +98,7 @@
         <item name="colorControlNormal">@color/vibrant_text_primary</item>
         <item name="android:editTextColor">@color/vibrant_text_primary</item>
         <item name="android:listDivider">@color/vibrant_divider</item>
+        <item name="textInputStyle">@style/CipherMesh.Input</item>
     </style>
 
     <style name="CipherMesh.Input" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">

@@ -21,19 +21,18 @@ class AutoSaveActivity : AppCompatActivity() {
         const val EXTRA_IS_UPDATE = "is_update"
         const val EXTRA_ENTRY_ID = "entry_id"
     }
-    
-    private lateinit var vault: Vault
+
     private lateinit var executor: Executor
-    
+    private val vault = com.ciphermesh.mobile.core.Vault()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        vault = Vault()
-        // FIX: Initialize vault with database path
+        executor = ContextCompat.getMainExecutor(this)
+        
+        // Initialize vault with database path
         val dbPath = java.io.File(filesDir, "vault.db").absolutePath
         vault.init(dbPath)
-        
-        executor = ContextCompat.getMainExecutor(this)
         
         val isUpdate = intent.getBooleanExtra(EXTRA_IS_UPDATE, false)
         
@@ -55,9 +54,61 @@ class AutoSaveActivity : AppCompatActivity() {
             finish()
             return
         }
+
+        // [Smart Save] Check for existing credentials
+        if (!vault.isLocked()) {
+            val location = webDomain ?: packageName
+            val matches = vault.findEntriesByLocation(location)
+            
+            if (matches != null) {
+                for (match in matches) {
+                    val parts = match.split("|")
+                    if (parts.size >= 4) {
+                        val idStr = parts[0]
+                        val existingUser = parts[2]
+                        val existingPass = parts[3]
+                        
+                        if (existingUser == username) {
+                            if (existingPass == password) {
+                                // Exact match found - already saved. Silent exit.
+                                finish()
+                                return
+                            } else {
+                                // Username match, but password differs - Prompt Update
+                                val entryId = idStr.toIntOrNull()
+                                if (entryId != null) {
+                                    showUpdatePrompt(entryId, password)
+                                    return
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         
         val appName = getAppName(packageName) ?: webDomain ?: packageName
+        showSavePrompt(username, password, packageName, webDomain, appName)
+    }
+    
+    private fun handleUpdate() {
+        val entryId = intent.getIntExtra(EXTRA_ENTRY_ID, -1)
+        val newPassword = intent.getStringExtra(EXTRA_PASSWORD) ?: ""
         
+        if (entryId != -1) {
+            showUpdatePrompt(entryId, newPassword)
+        } else {
+            finish()
+        }
+    }
+
+    private fun showSavePrompt(
+        username: String, 
+        password: String, 
+        packageName: String, 
+        webDomain: String?, 
+        appName: String
+    ) {
         MaterialAlertDialogBuilder(this)
             .setTitle("Save Password?")
             .setMessage("Save credentials for $appName?")
@@ -74,11 +125,8 @@ class AutoSaveActivity : AppCompatActivity() {
             .setOnCancelListener { finish() }
             .show()
     }
-    
-    private fun handleUpdate() {
-        val entryId = intent.getIntExtra(EXTRA_ENTRY_ID, -1)
-        val newPassword = intent.getStringExtra(EXTRA_PASSWORD) ?: ""
-        
+
+    private fun showUpdatePrompt(entryId: Int, newPassword: String) {
         MaterialAlertDialogBuilder(this)
             .setTitle("Update Password?")
             .setMessage("Update saved password with new one?")

@@ -18,10 +18,60 @@ data class LoginFields(
 
 @RequiresApi(Build.VERSION_CODES.O)
 class AutofillAuthActivity : Activity() {
+    
+    private lateinit var passwordInput: android.widget.EditText
+    private lateinit var unlockButton: android.widget.Button
+    private val vault = com.ciphermesh.mobile.core.Vault()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val replyIntent = Intent()
-        setResult(RESULT_OK, replyIntent)
-        finish()
+        
+        // Simple programmatic UI for authentication dialog
+        val layout = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(50, 50, 50, 50)
+            gravity = android.view.Gravity.CENTER
+        }
+
+        val title = android.widget.TextView(this).apply {
+            text = "Unlock CipherMesh"
+            textSize = 20f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setPadding(0, 0, 0, 30)
+        }
+
+        passwordInput = android.widget.EditText(this).apply {
+            hint = "Master Password"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+
+        unlockButton = android.widget.Button(this).apply {
+            text = "Unlock"
+            setOnClickListener { attemptUnlock() }
+        }
+
+        layout.addView(title)
+        layout.addView(passwordInput)
+        layout.addView(unlockButton)
+
+        setContentView(layout)
+        
+        // Initialize vault path
+        val dbPath = this.filesDir.absolutePath + "/vault.db"
+        vault.init(dbPath)
+    }
+
+    private fun attemptUnlock() {
+        val pwd = passwordInput.text.toString()
+        if (pwd.isEmpty()) return
+
+        if (vault.unlock(pwd)) {
+             val replyIntent = Intent()
+             // AutofillManager expects the dataset to be ready now, so we return OK
+             setResult(RESULT_OK, replyIntent)
+             finish()
+        } else {
+             android.widget.Toast.makeText(this, "Incorrect password", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 }

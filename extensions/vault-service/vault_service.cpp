@@ -23,16 +23,16 @@ std::string VaultService::getDefaultVaultPath() {
         home = "/tmp";
     }
     
+    std::string standardPath = "/home/amogh/.local/share/CipherMesh-Desktop/ciphermesh.db";
+    std::ifstream standardFile(standardPath);
+    if (standardFile.good()) {
+        return standardPath;
+    }
+
     std::string fullPath = std::string(home) + "/Projects/CipherMesh/build/ciphermesh.db";
     std::ifstream fullFile(fullPath);
     if (fullFile.good()) {
         return fullPath;
-    }
-
-    std::string standardPath = std::string(home) + "/.ciphermesh/ciphermesh.db";
-    std::ifstream standardFile(standardPath);
-    if (standardFile.good()) {
-        return standardPath;
     }
 
     std::string buildPath = "build/ciphermesh.db";
@@ -53,7 +53,7 @@ std::string VaultService::getDefaultVaultPath() {
         return currentDirPath;
     }
 
-    return fullPath;
+    return standardPath;
 }
 
 json VaultService::handleRequest(const json& request) {
@@ -299,7 +299,7 @@ json VaultService::handleSaveCredentials(const json& request) {
         entry.username = username;
         entry.notes = "Saved from browser extension";
         entry.url = url;
-        entry.locations.push_back(Location(-1, "url", url));
+        entry.locations.push_back(Location(-1, "URL", url));
         
         if (!m_vault->addEntry(entry, password)) {
             response["status"] = "error";

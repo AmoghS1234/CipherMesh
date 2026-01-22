@@ -13,6 +13,9 @@ import androidx.annotation.RequiresApi
 import com.ciphermesh.mobile.MainActivity
 import com.ciphermesh.mobile.R
 import com.ciphermesh.mobile.core.Vault
+// import android.service.autofill.InlinePresentation
+// import android.widget.inline.InlinePresentationSpec
+// import androidx.autofill.inline.v1.InlineSuggestionUi
 
 @RequiresApi(Build.VERSION_CODES.O)
 class CipherMeshAutofillService : AutofillService() {
@@ -31,91 +34,140 @@ class CipherMeshAutofillService : AutofillService() {
         cancellationSignal: CancellationSignal,
         callback: FillCallback
     ) {
-        Log.d("AutoFill", "onFillRequest")
+        Log.d("AutoFill", "onFillRequest: Starting")
+        
+        try {
+            val structure = request.fillContexts.last().structure
+            Log.d("AutoFill", "Structure retrieved. WindowNodeCount: ${structure.windowNodeCount}")
+            
+            val parser = StructureParser(structure)
+            parser.parse()
+            
+            Log.d("AutoFill", "Parsing finished. Found: User=${parser.usernameFields.size}, Pass=${parser.passwordFields.size}, Domain=${parser.webDomain}")
 
-        val structure = request.fillContexts.last().structure
-        val parser = StructureParser(structure)
-        parser.parse()
+            var targetDomain = parser.webDomain
+            if (targetDomain == null) {
+                targetDomain = parser.packageName
+            }
 
-        var targetDomain = parser.webDomain
-        if (targetDomain == null) {
-            targetDomain = parser.packageName
-        }
+            if (targetDomain == null) {
+                Log.d("AutoFill", "Target domain is null, returning null response")
+                callback.onSuccess(null)
+                return
+            }
 
-        if (targetDomain == null) {
-            callback.onSuccess(null)
-            return
-        }
+            // Collect fields to attach authentication to
+            val authIds = ArrayList<AutofillId>()
+            if (parser.usernameFields.isNotEmpty()) authIds.add(parser.usernameFields[0])
+            if (parser.passwordFields.isNotEmpty()) authIds.add(parser.passwordFields[0])
 
-        // Collect fields to attach authentication to
-        val authIds = ArrayList<AutofillId>()
-        authIds.addAll(parser.usernameFields)
-        authIds.addAll(parser.passwordFields)
+            // 1. Initial Response Builder
+            val responseBuilder = FillResponse.Builder()
 
-        if (vault.isLocked()) {
-            // [FIX] Check if we found fields. We cannot pass null to setAuthentication's first arg.
-            if (authIds.isNotEmpty()) {
-                val response = FillResponse.Builder()
-                    .setAuthentication(
-                        authIds.toTypedArray(), // Pass the array of IDs we found
+            // 2. Handle Locked State
+            if (vault.isLocked()) {
+                Log.d("AutoFill", "Vault is locked")
+                if (authIds.isNotEmpty()) {
+                    responseBuilder.setAuthentication(
+                        authIds.toTypedArray(), 
                         getAuthIntent(), 
                         getRemoteViews("Unlock CipherMesh")
                     )
-                    .build()
-                callback.onSuccess(response)
+                }
+                // Even if locked, we want to set SaveInfo so users can save new logins
             } else {
-                // If we can't find fields to attach auth to, we can't offer autofill securely
+                Log.d("AutoFill", "Vault is unlocked, searching for matches")
+                // 3. Handle Unlocked State: Find & Add Datasets
+                val matches = vault.findEntriesByLocation(targetDomain)
+                if (matches != null && matches.isNotEmpty()) {
+                    Log.d("AutoFill", "Found ${matches.size} matches for $targetDomain")
+                    for (matchStr in matches) {
+                        try {
+                            val parts = matchStr.split("|")
+                            if (parts.size < 4) continue
+
+                            val title = parts[1]
+                            val username = parts[2]
+                            val password = parts[3]
+
+                            val datasetBuilder = Dataset.Builder()
+                            
+                            // improved presentation
+                            val displayTitle = if (title.isNotEmpty()) title else "CipherMesh"
+                            val subTitle = if (username.isNotEmpty()) username else "Tap to fill"
+                            val presentation = getRemoteViews("$displayTitle\n$subTitle")
+                            
+                            // Inline Presentation Support (Temporarily disabled due to build issues)
+                            /*
+                            var inlinePresentation: InlinePresentation? = null
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                try {
+                                    val inlineRequest = request.inlineSuggestionsRequest
+                                    if (inlineRequest != null && inlineRequest.inlinePresentationSpecs.isNotEmpty()) {
+                                        val spec = inlineRequest.inlinePresentationSpecs[0]
+                                        inlinePresentation = createInlinePresentation(username, "CipherMesh", spec)
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("AutoFill", "Failed to create inline presentation", e)
+                                }
+                            }
+                            */
+
+                            var valid = false
+                            if (parser.usernameFields.isNotEmpty()) {
+                                /* if (inlinePresentation != null) {
+                                    datasetBuilder.setValue(parser.usernameFields[0], AutofillValue.forText(username), presentation, inlinePresentation)
+                                } else { */
+                                    datasetBuilder.setValue(parser.usernameFields[0], AutofillValue.forText(username), presentation)
+                                // }
+                                valid = true
+                            }
+                            if (parser.passwordFields.isNotEmpty()) {
+                                /* if (inlinePresentation != null) {
+                                     datasetBuilder.setValue(parser.passwordFields[0], AutofillValue.forText(password), presentation, inlinePresentation)
+                                } else { */
+                                     datasetBuilder.setValue(parser.passwordFields[0], AutofillValue.forText(password), presentation)
+                                // }
+                                valid = true
+                            } 
+                            
+                            if (valid) {
+                                responseBuilder.addDataset(datasetBuilder.build())
+                            }
+                        } catch (e: Exception) {
+                            Log.e("AutoFill", "Error adding dataset: ${e.message}")
+                        }
+                    }
+                } else {
+                    Log.d("AutoFill", "No matches found for $targetDomain, but offering Save support")
+                }
+            }
+            
+            // 4. Always Add SaveInfo if we detected fields
+            // This ensures onSaveRequest is called even if we didn't fill anything
+            if (parser.usernameFields.isNotEmpty() || parser.passwordFields.isNotEmpty()) {
+                Log.d("AutoFill", "Adding SaveInfo")
+                val saveInfoBuilder = SaveInfo.Builder(
+                    SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD,
+                    (parser.usernameFields + parser.passwordFields).toTypedArray()
+                )
+                // Aggressive save flags to ensure prompt appears
+                saveInfoBuilder.setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE)
+                
+                responseBuilder.setSaveInfo(saveInfoBuilder.build())
+                
+                // Allow system to show "Save" prompt even if we didn't autofill
+                callback.onSuccess(responseBuilder.build())
+            } else {
+                // No fields relevant to us
+                Log.d("AutoFill", "No relevant fields found, returning null")
                 callback.onSuccess(null)
             }
-            return
+        } catch (e: Exception) {
+            Log.e("AutoFill", "CRASH in onFillRequest: ${e.message}")
+            e.printStackTrace()
+            callback.onFailure(e.message)
         }
-
-        val matches = vault.findEntriesByLocation(targetDomain)
-        
-        if (matches == null || matches.isEmpty()) {
-            Log.d("AutoFill", "No matches found for $targetDomain")
-            callback.onSuccess(null)
-            return
-        }
-
-        val responseBuilder = FillResponse.Builder()
-
-        for (matchStr in matches) {
-            val parts = matchStr.split("|")
-            if (parts.size < 4) continue
-
-            val title = parts[1]
-            val username = parts[2]
-            val password = parts[3]
-
-            val datasetBuilder = Dataset.Builder()
-            val presentation = getRemoteViews("$title\n$username")
-            
-            var valid = false
-            if (parser.usernameFields.isNotEmpty()) {
-                datasetBuilder.setValue(parser.usernameFields[0], AutofillValue.forText(username), presentation)
-                valid = true
-            }
-            if (parser.passwordFields.isNotEmpty()) {
-                datasetBuilder.setValue(parser.passwordFields[0], AutofillValue.forText(password), presentation)
-                valid = true
-            } 
-            
-            if (valid) {
-                responseBuilder.addDataset(datasetBuilder.build())
-            }
-        }
-        
-        // Add SaveInfo to trigger onSaveRequest when form is submitted
-        if (parser.usernameFields.isNotEmpty() || parser.passwordFields.isNotEmpty()) {
-            val saveInfoBuilder = SaveInfo.Builder(
-                SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD,
-                (parser.usernameFields + parser.passwordFields).toTypedArray()
-            )
-            responseBuilder.setSaveInfo(saveInfoBuilder.build())
-        }
-
-        callback.onSuccess(responseBuilder.build())
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
@@ -152,15 +204,33 @@ class CipherMeshAutofillService : AutofillService() {
     }
 
     private fun getRemoteViews(text: String): RemoteViews {
-        val pkg = packageName ?: "com.ciphermesh.mobile" // Safety fallback
+        val pkg = packageName ?: "com.ciphermesh.mobile"
         val presentation = RemoteViews(pkg, android.R.layout.simple_list_item_1)
         presentation.setTextViewText(android.R.id.text1, text)
         return presentation
     }
 
     private fun getAuthIntent(): android.content.IntentSender {
-        val intent = Intent(this, MainActivity::class.java)
-        // Ensure FLAG_IMMUTABLE is used for Android 12+
+        // [FIX] Use specialized AutofillAuthActivity for seamless unlocking
+        val intent = Intent(this, AutofillAuthActivity::class.java)
         return PendingIntent.getActivity(this, 1001, intent, PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE).intentSender
     }
+
+    /*
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun createInlinePresentation(
+        title: String,
+        subtitle: String,
+        spec: InlinePresentationSpec
+    ): InlinePresentation {
+        val content = InlineSuggestionUi.newContent(
+            InlineSuggestionUi.Content.Builder(
+                InlineSuggestionUi.Title.Builder(title).build()
+            )
+            .setSubtitle(subtitle)
+            .build()
+        )
+        return InlinePresentation(content.slice, spec, false)
+    }
+    */
 }

@@ -604,11 +604,30 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 originalPassword = parts[2]
                 notesInput.setText(parts[3])
                 
-                // TODO: Parse and load existing locations from entry
-                // For now, if URL exists at index 8, add it to currentLocations
-                if (parts.size >= 9 && parts[8].isNotEmpty()) {
+                // Parse full locations list from JSON (index 9)
+                if (parts.size >= 10 && parts[9].isNotEmpty()) {
+                    try {
+                        val jsonArray = org.json.JSONArray(parts[9])
+                        for (i in 0 until jsonArray.length()) {
+                            val obj = jsonArray.getJSONObject(i)
+                            val type = obj.getString("type")
+                            val value = obj.getString("value")
+                            currentLocations.add(LocationData(type, value))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        // Fallback: use legacy URL field if JSON parsing fails
+                        if (parts.size >= 9 && parts[8].isNotEmpty()) {
+                            currentLocations.add(LocationData("URL", parts[8]))
+                        }
+                    }
+                } else if (parts.size >= 9 && parts[8].isNotEmpty()) {
+                    // Fallback for old version / entry without locations JSON
                     currentLocations.add(LocationData("URL", parts[8]))
-                    btnEditLocations.text = "📍 Locations (1)"
+                }
+                
+                if (currentLocations.isNotEmpty()) {
+                    btnEditLocations.text = "📍 Locations (${currentLocations.size})"
                 }
             }
         }
@@ -720,11 +739,31 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
         when(item.itemId) {
             R.id.nav_groups -> loadGroups()
+            R.id.nav_recent_entries -> startActivity(Intent(this, RecentEntriesActivity::class.java))
+            R.id.nav_add_group -> showCreateGroupDialog()
+            R.id.nav_theme -> showThemeDialog()
             R.id.nav_settings -> startActivity(Intent(this, SettingsActivity::class.java))
             R.id.nav_lock -> finish()
         }
         drawerLayout.closeDrawer(GravityCompat.START)
         return true
+    }
+    
+    private fun showThemeDialog() {
+        val themes = arrayOf("Professional (Dark)", "Modern Light", "Ocean", "Warm", "Vibrant")
+        val themeStyles = listOf(R.style.Theme_CipherMesh_Professional, R.style.Theme_CipherMesh_ModernLight, R.style.Theme_CipherMesh_Ocean, R.style.Theme_CipherMesh_Warm, R.style.Theme_CipherMesh_Vibrant)
+        
+        val currentIdx = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getInt("theme_index", 0)
+        
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Choose Theme")
+            .setSingleChoiceItems(themes, currentIdx) { dialog, which ->
+                getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit().putInt("theme_index", which).apply()
+                dialog.dismiss()
+                recreate() // Restart activity to apply theme
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
     
     private fun applySavedTheme() {

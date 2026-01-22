@@ -74,6 +74,9 @@ dependencies {
     
     // [NEW] Biometric authentication
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
+    
+    // [NEW] Inline Autofill
+    implementation("androidx.autofill:autofill:1.1.0")
 }
 
 // Fix for the schema warning (Optional but cleaner)
