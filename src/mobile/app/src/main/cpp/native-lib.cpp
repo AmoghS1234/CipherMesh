@@ -142,17 +142,30 @@ void showToastFromNative(const std::string& message) {
 
 void triggerJavaRefresh() {
     std::lock_guard<std::mutex> lock(g_jniMutex);
-    if (!g_jvm || !g_context) return;
+    if (!g_jvm || !g_context) {
+        LOGW("triggerJavaRefresh: JVM or Context is null, skipping refresh");
+        return;
+    }
     JNIEnv* env;
     bool attached = false;
     int status = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
     if (status == JNI_EDETACHED) {
-        g_jvm->AttachCurrentThread(&env, nullptr);
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != 0) {
+            LOGE("triggerJavaRefresh: Failed to attach thread");
+            return;
+        }
         attached = true;
     }
+    
     jclass cls = env->GetObjectClass(g_context);
     jmethodID mid = env->GetMethodID(cls, "refreshUI", "()V");
-    if (mid) env->CallVoidMethod(g_context, mid);
+    if (mid) {
+        env->CallVoidMethod(g_context, mid);
+    } else {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        LOGE("triggerJavaRefresh: Could not find refreshUI method");
+    }
+    
     if (attached) g_jvm->DetachCurrentThread();
 }
 
@@ -197,6 +210,13 @@ Java_com_ciphermesh_mobile_core_Vault_unlock(JNIEnv* env, jobject thiz, jstring 
     const char* pwd = env->GetStringUTFChars(password, 0);
     bool result = g_vault->unlock(pwd);
     env->ReleaseStringUTFChars(password, pwd);
+    
+    // [FIX] Process any pending sync jobs that accumulated while offline
+    if (result && g_vault && !g_vault->isLocked()) {
+        __android_log_print(ANDROID_LOG_DEBUG, "CipherMesh_JNI", "[MOBILE] Processing pending sync jobs after unlock");
+        g_vault->processAllPendingSync();
+    }
+    
     return result;
 }
 
@@ -391,7 +411,19 @@ Java_com_ciphermesh_mobile_core_Vault_getEntries(JNIEnv* env, jobject thiz) {
     jclass strClass = env->FindClass("java/lang/String");
     jobjectArray result = env->NewObjectArray(entries.size(), strClass, env->NewStringUTF(""));
     for (size_t i = 0; i < entries.size(); i++) {
-        std::string s = std::to_string(entries[i].id) + "|" + entries[i].title + "|" + entries[i].username + "|" + entries[i].notes + "|" + entries[i].entryType;
+        // Serialize locations as JSON array
+        std::ostringstream locationsJson;
+        locationsJson << "[";
+        for (size_t j = 0; j < entries[i].locations.size(); j++) {
+            locationsJson << "{\"type\":\"" << entries[i].locations[j].type << "\","
+                         << "\"value\":\"" << entries[i].locations[j].value << "\"}";
+            if (j < entries[i].locations.size() - 1) locationsJson << ",";
+        }
+        locationsJson << "]";
+        
+        std::string s = std::to_string(entries[i].id) + "|" + entries[i].title + "|" + 
+                       entries[i].username + "|" + entries[i].notes + "|" + 
+                       entries[i].entryType + "|" + entries[i].url + "|" + locationsJson.str();
         jstring jStr = env->NewStringUTF(s.c_str());
         env->SetObjectArrayElement(result, i, jStr);
         env->DeleteLocalRef(jStr);
@@ -420,21 +452,7 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         }
     });
 
-    // [FIX] Updated lambda signature to match DataCallback (sender, message)
-    g_p2p->onSyncMessage = [](std::string sender, std::string message) {
-        std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
-        if (g_vault && !g_vault->isLocked()) {
-            if (!sender.empty()) {
-                g_vault->handleIncomingSync(sender, message);
-            } else {
-                // Fallback: extract from JSON if sender arg is empty
-                std::string extractedSender = extractJsonValueJNI(message, "sender");
-                if (!extractedSender.empty()) {
-                    g_vault->handleIncomingSync(extractedSender, message);
-                }
-            }
-        }
-    };
+
 
     g_p2p->onPeerOnline = [](std::string userId) {
         std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
@@ -489,7 +507,7 @@ Java_com_ciphermesh_mobile_core_Vault_addEntryNative(JNIEnv* env, jobject thiz, 
     const char* p = env->GetStringUTFChars(pass, 0); e.password = p;
     const char* l = env->GetStringUTFChars(url, 0); 
     e.url = l; // [FIX] Set main URL field
-    e.locations.push_back(CipherMesh::Core::Location(-1, "url", l));
+    e.locations.push_back(CipherMesh::Core::Location(-1, "URL", l)); // Changed from "url" to "URL"
     const char* n = env->GetStringUTFChars(notes, 0); e.notes = n;
     try { g_vault->addEntry(e, e.password); } JNI_CATCH_VOID
     env->ReleaseStringUTFChars(title, t); env->ReleaseStringUTFChars(user, u);
@@ -549,8 +567,14 @@ Java_com_ciphermesh_mobile_core_Vault_sendP2PInvite(JNIEnv* env, jobject thiz, j
         if (dataLoaded) {
             std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
             if (g_p2p) {
-                g_p2p->queueInvite(sGroup, sTarget, key, entries);
-                showToastFromNative("Handshake started with " + sTarget);
+                if (key.empty()) {
+                    LOGE("sendP2PInvite: Key for group %s is EMPTY! Handshake will likely fail.", sGroup.c_str());
+                    showToastFromNative("Error: Group Key not found!");
+                } else {
+                    LOGI("sendP2PInvite: Queueing invite for %s with key size %zu, entries %zu", sGroup.c_str(), key.size(), entries.size());
+                    g_p2p->queueInvite(sGroup, sTarget, key, entries);
+                    showToastFromNative("Handshake started with " + sTarget);
+                }
             }
         }
     }).detach();

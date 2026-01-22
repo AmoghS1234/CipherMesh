@@ -90,6 +90,7 @@ public:
     void handleIncomingSync(const std::string& senderId, const std::string& payload);
     void processOutboxForUser(const std::string& userId);
     void onPeerOnline(const std::string& userId);
+    void processAllPendingSync(); // Process all pending sync jobs for all group members
     void queueSyncForMember(const std::string& groupName, const std::string& memberId, const std::string& op, const std::string& payload);
     void broadcastSync(const std::string& groupName); 
 

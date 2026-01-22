@@ -857,6 +857,10 @@ void MainWindow::postUnlockInit()
     qDebug() << "[MAIN] restoring invites";
     restoreOutgoingInvites(); 
     
+    // [FIX] Process any pending sync jobs that accumulated while offline
+    qDebug() << "[MAIN] processing pending sync jobs";
+    m_vault->processAllPendingSync(); 
+    
     if (m_groupListWidget->count() > 0) m_groupListWidget->setCurrentRow(0);
     resetAutoLockTimer();
     updateRecentMenu();

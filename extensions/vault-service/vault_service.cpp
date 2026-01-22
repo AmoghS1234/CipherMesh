@@ -298,7 +298,8 @@ json VaultService::handleSaveCredentials(const json& request) {
         entry.title = title;
         entry.username = username;
         entry.notes = "Saved from browser extension";
-        entry.locations.push_back(Location(-1, "Website", url));
+        entry.url = url;
+        entry.locations.push_back(Location(-1, "url", url));
         
         if (!m_vault->addEntry(entry, password)) {
             response["status"] = "error";

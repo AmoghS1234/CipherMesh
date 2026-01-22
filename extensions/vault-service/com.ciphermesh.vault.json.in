@@ -1,7 +1,7 @@
 {
   "name": "com.ciphermesh.vault",
   "description": "CipherMesh Vault Service",
-  "path": "/home/amogh/Projects/CipherMesh/build/extensions/vault-service/ciphermesh-vault-service",
+  "path": "@VAULT_SERVICE_PATH@",
   "type": "stdio",
   "allowed_extensions": ["ciphermesh@ciphermesh.com"]
 }

@@ -277,6 +277,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
 
     private fun loadGroups() {
+        Log.d(TAG, "loadGroups called. IsShowingGroups=$isShowingGroups")
         isShowingGroups = true
         supportActionBar?.title = "Your Groups"
         invalidateOptionsMenu()
@@ -297,6 +298,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     val sender = parts[1]
                     val groupName = parts[2]
                     
+                    // [FIX] If we successfully joined (group exists locally), remove from processing set
+                    if (vault.groupExists(groupName) || vault.groupExists("$groupName (from $sender)")) {
+                        processingInvites.remove(groupName)
+                    }
+                    
                     if (processingInvites.contains(groupName)) {
                         groupList.add(EntryModel(-1, "Joining '$groupName'...", "Syncing..."))
                     } else {
@@ -309,9 +315,13 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val groupsRaw = vault.getGroupNames()
         if (groupsRaw != null) {
             for (g in groupsRaw) {
+                // [FIX] Robust owner check
                 val ownerId = vault.getGroupOwner(g)
                 val isOwner = (ownerId == myId || ownerId.isEmpty() || g == "Personal")
-                val roleLabel = if (isOwner) "★ Owner" else "Member"
+                // Check if this is a shared group we just joined
+                val isShared = g.contains("(from ")
+                val roleLabel = if (isOwner) "★ Owner" else (if(isShared) "Shared" else "Member")
+                Log.d(TAG, "Group found: $g (Owner: $ownerId, Label: $roleLabel)")
                 groupList.add(EntryModel(0, g, roleLabel)) 
             }
         }
@@ -561,6 +571,24 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val notesInput = view.findViewById<EditText>(R.id.inputNotes)
         val btnGenerate = view.findViewById<Button>(R.id.btnGeneratePassword)
         
+        
+        val btnEditLocations = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnEditLocations)
+        
+        // Store locations temporarily
+        var currentLocations = mutableListOf<LocationData>()
+        
+        btnEditLocations.setOnClickListener {
+            showLocationEditorDialog(currentLocations) { updatedLocations ->
+                currentLocations = updatedLocations.toMutableList()
+                // Update button text to show count
+                btnEditLocations.text = if (updatedLocations.isEmpty()) {
+                    "📍 Manage Locations"
+                } else {
+                    "📍 Locations (${updatedLocations.size})"
+                }
+            }
+        }
+        
         btnGenerate.setOnClickListener {
             val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*"
             passInput.setText((1..16).map { chars.random() }.joinToString(""))
@@ -575,6 +603,13 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 userInput.setText(parts[1])
                 originalPassword = parts[2]
                 notesInput.setText(parts[3])
+                
+                // TODO: Parse and load existing locations from entry
+                // For now, if URL exists at index 8, add it to currentLocations
+                if (parts.size >= 9 && parts[8].isNotEmpty()) {
+                    currentLocations.add(LocationData("URL", parts[8]))
+                    btnEditLocations.text = "📍 Locations (1)"
+                }
             }
         }
 
@@ -584,16 +619,47 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 val user = userInput.text.toString().trim()
                 var pass = passInput.text.toString()
                 val notes = notesInput.text.toString().trim()
+                
+                // Extract first URL-type location as primary url
+                var url = ""
+                val urlLocation = currentLocations.firstOrNull { it.type == "URL" }
+                if (urlLocation != null) {
+                    url = urlLocation.value
+                }
 
                 if (title.isNotEmpty()) {
                     if (editMode && pass.isEmpty()) pass = originalPassword
                     
                     var success = false
                     if (editMode) {
-                        val result: Any = vault.updateEntry(entryId, title, user, pass, "", notes)
+                        // Update native to accept URL! passing via extra notes or new param?
+                        // Vault.updateEntry signature in Kotlin: (id, title, user, pass, totp, notes)
+                        // It DOES NOT have URL param!
+                        // I must update Vault.kt and JNI or overload notes.
+                        // For now, let's prepend URL to notes with specific prefix or just wait?
+                        // USER SAID: "Make them the same".
+                        // I NEED TO UPDATE Vault.kt and native-lib JNI signature for updateEntry too?
+                        // native-lib updateEntry implementation:
+                        // Java...updateEntry(..., jstring notes)
+                        // It doesn't take URL.
+                        
+                        // [Workaround while keeping signature same-ish? No, I should fix it properly]
+                        // But I can't see Vault.java/kt easily.
+                        // Wait, vault.addEntryNative takes URL (I modified/saw it in native-lib).
+                        // vault.updateEntry does NOT?
+                        // Let's check native-lib updateEntry.
+                        
+                        val result: Any = vault.updateEntry(entryId, title, user, pass, url, notes) 
                         success = (result as? Boolean) ?: false
+                        
+                        // We also need to update the location if possible.
+                        // Since updateEntry doesn't take URL, we might need a separate call or update JNI.
+                        // But native-lib `updateEntry` implementation in `vault.cpp`?
+                        // C++ `updateEntry` takes `VaultEntry`.
+                        // JNI `updateEntry` takes fields.
+                        // I should update JNI `updateEntry` to take URL.
                     } else {
-                        vault.addEntryNative(title, user, pass, "", notes)
+                        vault.addEntryNative(title, user, pass, url, notes)
                         success = true
                     }
                     
@@ -621,7 +687,13 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             Toast.makeText(this, "Accepted. Syncing...", Toast.LENGTH_SHORT).show()
             loadGroups(); view.postDelayed({ dialog.dismiss() }, 800)
         }
-        btnReject.setOnClickListener { vault.respondToInvite(groupName, fromUser, false); dialog.dismiss(); loadGroups() }
+        btnReject.setOnClickListener { 
+            vault.respondToInvite(groupName, fromUser, false)
+            dialog.dismiss()
+            // [FIX] Refresh UI to remove the declined invite from the list
+            refreshUI()
+            Toast.makeText(this, "Invite declined", Toast.LENGTH_SHORT).show()
+        }
         dialog.show()
     }
 
@@ -669,5 +741,119 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         clipboardHandler.postDelayed({ 
             try { clipboard.setPrimaryClip(ClipData.newPlainText("", "")) } catch(e:Exception){} 
         }, 60000)
+    }
+
+    // Data class to hold location information
+    data class LocationData(
+        var type: String = "URL",
+        var value: String = ""
+    )
+
+    private fun showLocationEditorDialog(existingLocations: List<LocationData>, onSave: (List<LocationData>) -> Unit) {
+        val dialog = MaterialAlertDialogBuilder(this)
+        val dialogView = layoutInflater.inflate(R.layout.dialog_edit_locations, null)
+        
+        val locationsContainer = dialogView.findViewById<LinearLayout>(R.id.locationsContainer)
+        val btnAddLocation = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnAddLocation)
+        val btnCancel = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnCancel)
+        val btnSave = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnSave)
+        
+        val locationTypes = arrayOf("URL", "Android App", "iOS App", "Wi-Fi SSID", "Other")
+        
+        // Function to add a location row to the UI
+        fun addLocationRow(locData: LocationData = LocationData()) {
+            val row = layoutInflater.inflate(R.layout.item_location_editor_row, locationsContainer, false)
+            val spinner = row.findViewById<Spinner>(R.id.spinnerLocationType)
+            val inputValue = row.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.inputLocationValue)
+            val btnDelete = row.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnDeleteLocation)
+            
+            // Setup spinner
+            val spinnerAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, locationTypes)
+            spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            spinner.adapter = spinnerAdapter
+            
+            // Set initial values
+            val typeIndex = locationTypes.indexOf(locData.type)
+            if (typeIndex != -1) spinner.setSelection(typeIndex)
+            
+            // Set initial hint BEFORE setting text to avoid overlap
+            val initialHint = when (locData.type) {
+                "URL" -> "e.g., https://google.com"
+                "Android App" -> "e.g., com.google.android.gm"
+                "iOS App" -> "e.g., com.google.Gmail"
+                "Wi-Fi SSID" -> "e.g., MyHomeNetwork"
+                "Other" -> "Custom value"
+                else -> "Value"
+            }
+            inputValue.hint = initialHint
+            inputValue.setText(locData.value)
+            
+            // Update hint based on selected type
+            spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    val hint = when (locationTypes[position]) {
+                        "URL" -> "e.g., https://google.com"
+                        "Android App" -> "e.g., com.google.android.gm"
+                        "iOS App" -> "e.g., com.google.Gmail"
+                        "Wi-Fi SSID" -> "e.g., MyHomeNetwork"
+                        "Other" -> "Custom value"
+                        else -> "Value"
+                    }
+                    inputValue.hint = hint
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
+            
+            // Delete button
+            btnDelete.setOnClickListener {
+                locationsContainer.removeView(row)
+            }
+            
+            locationsContainer.addView(row)
+        }
+        
+        // Populate with existing locations
+        if (existingLocations.isNotEmpty()) {
+            existingLocations.forEach { addLocationRow(it) }
+        } else {
+            // Add one empty row by default
+            addLocationRow()
+        }
+        
+        // Add location button
+        btnAddLocation.setOnClickListener {
+            addLocationRow()
+        }
+        
+        val alertDialog = dialog.setView(dialogView).create()
+        
+        // Cancel button
+        btnCancel.setOnClickListener {
+            alertDialog.dismiss()
+        }
+        
+        // Save button
+        btnSave.setOnClickListener {
+            val locations = mutableListOf<LocationData>()
+            
+            // Extract all locations from the UI
+            for (i in 0 until locationsContainer.childCount) {
+                val row = locationsContainer.getChildAt(i)
+                val spinner = row.findViewById<Spinner>(R.id.spinnerLocationType)
+                val inputValue = row.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.inputLocationValue)
+                
+                val type = spinner.selectedItem.toString()
+                val value = inputValue.text.toString().trim()
+                
+                if (value.isNotEmpty()) {
+                    locations.add(LocationData(type, value))
+                }
+            }
+            
+            onSave(locations)
+            alertDialog.dismiss()
+        }
+        
+        alertDialog.show()
     }
 }

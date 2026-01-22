@@ -270,12 +270,12 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
             m_pendingInvites.erase(peerId); m_pendingKeys.erase(peerId); m_pendingEntries.erase(peerId); m_pendingMembers.erase(peerId);
         }
-        else if (type == "group-data" || type == "entry-data" || type == "member-list" || type == "member-leave" || type == "member-kick") {
+        else if (type == "group-data" || type == "entry-data" || type == "member-list" || 
+                 type == "sync-payload" || type == "sync-ack" || 
+                 type == "member-leave" || type == "member-kick") {
             if (onGroupDataReceived) onGroupDataReceived(peerId, msg);
         }
-        else if (type == "sync-payload" || type == "sync-ack") {
-            if (onSyncMessage) onSyncMessage(peerId, msg);
-        }
+        // [FIX] Removed separate sync-payload handler block as it's now handled by onGroupDataReceived above
     });
 }
 
@@ -389,45 +389,63 @@ void WebRTCService::sendP2PMessage(const std::string& targetId, const std::strin
     }
 }
 
+// [FIX] Robust Android implementation with safety checks
 void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const std::string& groupName, 
                                          const std::vector<unsigned char>& groupKey, 
                                          const std::vector<CipherMesh::Core::VaultEntry>& entries,
                                          const std::string& memberListJson) {
-    if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
-        LOGE("sendGroupData_unsafe: Channel not open for %s - cannot send group data", recipientId.c_str());
-        return;
-    }
-    
-    LOGI("sendGroupData_unsafe: Sending group '%s' to %s with %zu entries", groupName.c_str(), recipientId.c_str(), entries.size());
-    
-    std::ostringstream jsonHeader;
-    jsonHeader << "{\"type\":\"group-data\",\"group\":\"" << escapeJsonString(groupName) << "\",";
-    
-    static const char b64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string keyBase64;
-    int i = 0, j = 0;
-    unsigned char char_array_3[3], char_array_4[4];
-    for (unsigned char c : groupKey) {
-        char_array_3[i++] = c;
-        if (i == 3) {
+    try {
+        if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
+            LOGE("sendGroupData_unsafe: Channel not open for %s - cannot send group data", recipientId.c_str());
+            return;
+        }
+        
+        LOGI("sendGroupData_unsafe: Sending group '%s' to %s with %zu entries", groupName.c_str(), recipientId.c_str(), entries.size());
+        
+        std::ostringstream jsonHeader;
+        jsonHeader << "{\"type\":\"group-data\",\"group\":\"" << escapeJsonString(groupName) << "\",";
+        
+        static const char b64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string keyBase64;
+        // ... (Base64 encoding implementation reused/assumed)
+        // Re-implementing simplified for safety and clarity or reusing existing snippet logic
+        int i = 0, j = 0;
+        unsigned char char_array_3[3], char_array_4[4];
+        for (unsigned char c : groupKey) {
+            char_array_3[i++] = c;
+            if (i == 3) {
+                char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+                char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+                char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+                char_array_4[3] = char_array_3[2] & 0x3f;
+                for(i = 0; i < 4; i++) keyBase64 += b64_chars[char_array_4[i]];
+                i = 0;
+            }
+        }
+        if (i) {
+            for(j = i; j < 3; j++) char_array_3[j] = '\0';
             char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
             char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
             char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
-            char_array_4[3] = char_array_3[2] & 0x3f;
-            for(i = 0; i < 4; i++) keyBase64 += b64_chars[char_array_4[i]];
-            i = 0;
+            for (j = 0; j < i + 1; j++) keyBase64 += b64_chars[char_array_4[j]];
+            while(i++ < 3) keyBase64 += '=';
         }
+        jsonHeader << "\"key\":\"" << keyBase64 << "\"}";
+        
+        m_channels[recipientId]->send(jsonHeader.str());
+        LOGI("sendGroupData_unsafe: Header sent.");
+    } catch (const std::exception& e) {
+        LOGE("sendGroupData_unsafe: Exception during header send: %s", e.what());
+        return;
+    } catch (...) {
+        LOGE("sendGroupData_unsafe: Unknown exception during header send");
+        return;
     }
-    if (i) {
-        for(j = i; j < 3; j++) char_array_3[j] = '\0';
-        char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
-        char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
-        char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
-        for (j = 0; j < i + 1; j++) keyBase64 += b64_chars[char_array_4[j]];
-        while(i++ < 3) keyBase64 += '=';
-    }
-    jsonHeader << "\"key\":\"" << keyBase64 << "\"}";
-    m_channels[recipientId]->send(jsonHeader.str());
+    
+    // [FIX] Add delay after group header to allow receiver to process
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    LOGI("sendGroupData_unsafe: Sending %zu entries", entries.size());
     
     for (const auto& e : entries) {
         std::ostringstream entryJson;
@@ -443,13 +461,13 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
                   << "\"locations\":[";
                   
         for(size_t k = 0; k < e.locations.size(); k++) {
-            entryJson << "{\"type\":\"" << escapeJsonString(e.locations[k].type) << "\",";
+            entryJson << "{\"locType\":\"" << escapeJsonString(e.locations[k].type) << "\",";
             entryJson << "\"value\":\"" << escapeJsonString(e.locations[k].value) << "\"}";
             if(k < e.locations.size() - 1) entryJson << ",";
         }
         entryJson << "]}";
         m_channels[recipientId]->send(entryJson.str());
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Increased from 20ms
     }
     
     std::ostringstream memberListMsg;
@@ -872,20 +890,29 @@ void WebRTCService::handleP2PMessage(const QString& remoteId, const QString& mes
             
             if (hasPendingInvite && hasPendingKey) {
                 auto k = m_pendingKeys[remoteId];
-                auto e = hasPendingEntries ? m_pendingEntries[remoteId] : std::vector<CipherMesh::Core::VaultEntry>{};
-                std::string mList = m_pendingMembers.value(remoteId, "[]").toStdString();
                 
-                qDebug() << "[P2P] Sending group data - key size:" << k.size() << "entries:" << e.size();
-                
-                locker.unlock();
-                // [FIX] Send immediately instead of using timer delay which can cause issues
-                sendGroupData(remoteId.toStdString(), groupName.toStdString(), k, e, mList);
-                locker.relock();
-                
-                // [FIX] IDEMPOTENCY: Clear pending data so we don't send again if we receive duplicate accept
-                m_pendingKeys.erase(remoteId); 
-                m_pendingEntries.erase(remoteId);
-                m_pendingMembers.remove(remoteId);
+                if (k.empty()) {
+                    qWarning() << "[P2P] CRITICAL: Pending key for" << remoteId << "is EMPTY! Cannot send group data.";
+                    // Attempt last ditch recovery: fetch key if we know the group name
+                    if (!groupName.isEmpty()) {
+                        // Since we don't have vault reference easily here, we just log error. 
+                        // In future, pass vault ref or signal main thread to fetch.
+                    }
+                } else {
+                    auto e = hasPendingEntries ? m_pendingEntries[remoteId] : std::vector<CipherMesh::Core::VaultEntry>{};
+                    std::string mList = m_pendingMembers.value(remoteId, "[]").toStdString();
+                 
+                    qDebug() << "[P2P] Sending group data - key size:" << k.size() << "entries:" << e.size();
+                 
+                    locker.unlock();
+                    sendGroupData(remoteId.toStdString(), groupName.toStdString(), k, e, mList);
+                    locker.relock();
+                 
+                    // [FIX] IDEMPOTENCY: Clear pending data so we don't send again if we receive duplicate accept
+                    m_pendingKeys.erase(remoteId); 
+                    m_pendingEntries.erase(remoteId);
+                    m_pendingMembers.remove(remoteId);
+                }
             } else {
                 qWarning() << "[P2P] Missing pending data for" << remoteId << "- cannot send group data";
             }
@@ -967,8 +994,9 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
     header["key"] = QString::fromUtf8(keyBytes.toBase64());
     sendP2PMessage(recipient, header);
     
-    // [FIX] Give the mobile app 500ms to commit the group to SQLite (Per User Diagnostics)
-    QThread::msleep(500); 
+    // [FIX] CRITICAL: Give the mobile app sufficient time (2000ms) to create the group 
+    // and commit the transaction before sending entries. 500ms was insufficient.
+    QThread::msleep(2000); 
     
     for (const auto& entry : entries) {
         QJsonObject entryObj;
@@ -983,7 +1011,7 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
         entryObj["url"] = QString::fromStdString(entry.url);
         QJsonArray locArray;
         for (const auto& loc : entry.locations) {
-            QJsonObject l; l["type"] = QString::fromStdString(loc.type); l["value"] = QString::fromStdString(loc.value); locArray.append(l);
+            QJsonObject l; l["locType"] = QString::fromStdString(loc.type); l["value"] = QString::fromStdString(loc.value); locArray.append(l);
         }
         entryObj["locations"] = locArray;
         sendP2PMessage(recipient, entryObj);

@@ -16,9 +16,11 @@
 #ifdef __ANDROID__
     #include <android/log.h>
     #define LOG_DEBUG(msg) __android_log_print(ANDROID_LOG_DEBUG, "CipherMesh_Core", "%s", std::string(msg).c_str())
+    #define LOG_INFO(msg) __android_log_print(ANDROID_LOG_INFO, "CipherMesh_Core", "%s", std::string(msg).c_str())
     #define LOGW(msg) __android_log_print(ANDROID_LOG_WARN, "CipherMesh_Core", "%s", std::string(msg).c_str())
 #else
     #define LOG_DEBUG(msg) std::cout << "[CORE_DEBUG] " << msg << std::endl
+    #define LOG_INFO(msg) std::cout << "[CORE_INFO] " << msg << std::endl
     #define LOGW(msg) std::cerr << "[CORE_WARN] " << msg << std::endl
 #endif
 
@@ -332,13 +334,22 @@ std::string Vault::serializeEntry(const VaultEntry& e, const std::string& passwo
          << "\"url\":\"" << escapeJson(e.url) << "\","
          << "\"notes\":\"" << escapeJson(e.notes) << "\","
          << "\"type\":\"" << escapeJson(e.entryType) << "\","
-         << "\"updatedAt\":" << std::chrono::system_clock::to_time_t(std::chrono::system_clock::now())
-         << "}";
+         << "\"totpSecret\":\"" << escapeJson(e.totpSecret) << "\","
+         << "\"updatedAt\":" << std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count()
+         << ", \"locations\":[";
+
+    for(size_t i = 0; i < e.locations.size(); ++i) {
+        json << "{\"locType\":\"" << escapeJson(e.locations[i].type) << "\", \"value\":\"" << escapeJson(e.locations[i].value) << "\"}";
+        if(i < e.locations.size() - 1) json << ",";
+    }
+    json << "]}";
     return json.str();
 }
 
 void Vault::queueSyncForGroup(const std::string& groupName, const std::string& operation, const std::string& payload) {
-    if (groupName == "Personal") return;
+    // [FIX] Removed special case for "Personal" to allow syncing if shared. 
+    // Logic handles empty member list (private group) naturally.
     int gid = m_db->getGroupId(groupName);
     if (gid == -1) return;
     std::vector<GroupMember> members = m_db->getGroupMembers(gid);
@@ -351,7 +362,7 @@ void Vault::queueSyncForGroup(const std::string& groupName, const std::string& o
 }
 
 void Vault::queueSyncForMember(const std::string& groupName, const std::string& memberId, const std::string& operation, const std::string& payload) {
-    if (groupName == "Personal") return;
+    // [FIX] Removed special case for "Personal"
     m_db->storeSyncJob(memberId, groupName, operation, payload);
     processOutboxForUser(memberId);
 }
@@ -378,36 +389,93 @@ void Vault::onPeerOnline(const std::string& userId) {
     notifySync("peer-online", userId);
 }
 
+void Vault::processAllPendingSync() {
+    if (!m_db) return;
+    
+    LOG_DEBUG("processAllPendingSync: Processing pending sync jobs for all groups");
+    
+    try {
+        auto groups = m_db->getAllGroupNames();
+        int totalProcessed = 0;
+        
+        for (const auto& groupName : groups) {
+            int gid = m_db->getGroupId(groupName);
+            if (gid == -1) continue;
+            
+            auto members = m_db->getGroupMembers(gid);
+            for (const auto& member : members) {
+                if (member.userId != getUserId()) {
+                    auto jobs = m_db->getSyncJobsForUser(member.userId);
+                    if (!jobs.empty()) {
+                        LOG_DEBUG("processAllPendingSync: Processing " + std::to_string(jobs.size()) + " jobs for " + member.userId);
+                        processOutboxForUser(member.userId);
+                        totalProcessed += jobs.size();
+                    }
+                }
+            }
+        }
+        
+        LOG_INFO("processAllPendingSync: Processed " + std::to_string(totalProcessed) + " pending sync jobs");
+    } catch (const std::exception& e) {
+        LOGW("processAllPendingSync: Error - " + std::string(e.what()));
+    }
+}
+
+
 void Vault::handleSyncAck(int jobId) {
     try { m_db->deleteSyncJob(jobId); } catch(...) {}
 }
 
 int Vault::findGroupIdForSync(const std::string& remoteGroupName, const std::string& senderId) {
-    LOG_DEBUG("findGroupIdForSync: looking for group '" + remoteGroupName + "' from sender '" + senderId + "'");
+    LOG_DEBUG("findGroupIdForSync: looking for group matching '" + remoteGroupName + "' from sender '" + senderId + "'");
     
+    // Normalize senderId for comparison
+    std::string senderLower = senderId;
+    std::transform(senderLower.begin(), senderLower.end(), senderLower.begin(), ::tolower);
+
+    // 1. Try exact name match
     int gid = m_db->getGroupId(remoteGroupName);
     if (gid != -1) {
         auto members = m_db->getGroupMembers(gid);
         for (const auto& m : members) { 
-            if (m.userId == senderId) {
+            std::string mId = m.userId;
+            std::transform(mId.begin(), mId.end(), mId.begin(), ::tolower);
+            if (mId == senderLower) {
                 LOG_DEBUG("findGroupIdForSync: found exact match group id " + std::to_string(gid));
                 return gid; 
             }
         }
     }
+    
+    // 2. Try explicit derived name match "Name (from Sender)"
+    // This is the most likely candidate for split groups
+    std::string derivedName = remoteGroupName + " (from " + senderId + ")";
+    int derivedId = m_db->getGroupId(derivedName);
+    if (derivedId != -1) {
+         LOG_DEBUG("findGroupIdForSync: found explicit derived match '" + derivedName + "' id " + std::to_string(derivedId));
+         return derivedId;
+    }
+
+    // 3. Try generic prefix match (fallback for renamed split groups)
     std::vector<std::string> allGroups = m_db->getAllGroupNames();
     for (const auto& localName : allGroups) {
+        // [FIX] Ensure we match the "base" name correctly
         if (localName.find(remoteGroupName) == 0) {
             int candidateId = m_db->getGroupId(localName);
             auto members = m_db->getGroupMembers(candidateId);
             for (const auto& m : members) { 
-                if (m.userId == senderId) {
+                std::string mId = m.userId;
+                std::transform(mId.begin(), mId.end(), mId.begin(), ::tolower);
+                if (mId == senderLower) {
                     LOG_DEBUG("findGroupIdForSync: found prefixed match '" + localName + "' id " + std::to_string(candidateId));
                     return candidateId; 
                 }
             }
         }
     }
+    
+    // [FIX] If we still can't find it, and we just created a group... 
+    // Maybe we should check if we possess a group where the sender is Owner?
     
     int fallbackId = m_db->getGroupId(remoteGroupName);
     LOG_DEBUG("findGroupIdForSync: fallback to exact name match, id " + std::to_string(fallbackId));
@@ -428,79 +496,143 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         LOG_DEBUG("handleIncomingSync: type='" + msgType + "' from sender='" + senderId + "'");
         
         // Handle initial group transfer types (from P2P sharing)
-        if (msgType == "group-data") {
-            std::string groupName = getJsonString(payload, "group");
-            std::string keyBase64 = getJsonString(payload, "key");
-            
-            LOG_DEBUG("group-data: groupName='" + groupName + "' keyLength=" + std::to_string(keyBase64.length()));
-            
-            // [FIX] Handle collisions (e.g. "Personal") by renaming
-            std::string localGroup = groupName;
-            
-            // First, check if we already have this group from this sender
-            int existingId = findGroupIdForSync(groupName, senderId);
-            if (existingId != -1) {
-                // We already have a group from this sender - skip creating a new one
-                LOG_DEBUG("Already have group from sender " + senderId + " (id=" + std::to_string(existingId) + "), skipping creation");
+            if (msgType == "group-data") {
+                std::string groupName = getJsonString(payload, "group");
+                std::string keyBase64 = getJsonString(payload, "key");
+                
+                LOG_DEBUG("handleIncomingSync: Processing group-data for '" + groupName + "'");
+                
+                if (keyBase64.empty()) {
+                    LOGW("handleIncomingSync: Received group-data with EMPTY KEY for '" + groupName + "'. Aborting creation.");
+                    return;
+                }
+                
+                std::string localGroup = groupName;
+                
+                // [FIX] Strict Sender Check: Do NOT use findGroupIdForSync here as it might callback to local groups.
+                // explicitly search for a group that this sender is ALREADY a part of.
+                int existingId = -1;
+                std::vector<std::string> allGroups = m_db->getAllGroupNames();
+                
+                // Normalize senderId for comparison
+                std::string senderLower = senderId;
+                std::transform(senderLower.begin(), senderLower.end(), senderLower.begin(), ::tolower);
+                
+                for (const auto& gName : allGroups) {
+                    // Check if name matches or is a "derivative" (e.g. "Personal (from X)")
+                    // For now, simpliest is to check if we have a group with this exact internal name 
+                    // OR if we decided to rename it previously.
+                    // But actually, we just need to find if we have ANY group related to this sender/name combo.
+                    
+                    int gid = m_db->getGroupId(gName);
+                    auto members = m_db->getGroupMembers(gid);
+                    bool senderInGroup = false;
+                    for (const auto& m : members) { 
+                        std::string mId = m.userId;
+                        std::transform(mId.begin(), mId.end(), mId.begin(), ::tolower);
+                        if (mId == senderLower) { senderInGroup = true; break; } 
+                    }
+                    
+                    if (senderInGroup) {
+                         // Check name similarity
+                         if (gName == groupName || gName.find(groupName + " (from ") == 0) {
+                             existingId = gid;
+                             localGroup = gName; // Use the actual local name
+                             break;
+                         }
+                    }
+                }
+
+                if (existingId != -1) {
+                    LOG_DEBUG("handleIncomingSync: Found existing group '" + localGroup + "' (id=" + std::to_string(existingId) + ") for sender " + senderId);
+                    // Update key if needed, or just return. 
+                    // For safety, let's treat this as an update. But we need to be careful not to overwrite valid keys with bad ones.
+                    return; 
+                }
+                
+                // If we get here, it's a NEW group (or re-share where we lost context).
+                // Check for name collision with ANY existing group (regardless of sender)
+                if (groupExists(localGroup)) {
+                    LOG_DEBUG("handleIncomingSync: Group '" + localGroup + "' name collision. creating unique name.");
+                    // Check if the EXISTING group actually belongs to the sender (redundant check but safe)
+                    // If it belongs to SELF (Personal), we MUST rename.
+                    
+                    std::string uniqueName = localGroup + " (from " + senderId + ")";
+                    int counter = 1;
+                    std::string baseName = uniqueName;
+                    while (groupExists(uniqueName)) {
+                        uniqueName = baseName + " " + std::to_string(counter++);
+                    }
+                    localGroup = uniqueName;
+                    LOG_DEBUG("handleIncomingSync: Resolved unique name: '" + localGroup + "'");
+                }
+    
+                std::vector<unsigned char> key = base64DecodeInternal(keyBase64);
+                LOG_DEBUG("handleIncomingSync: Creating group '" + localGroup + "' with key size " + std::to_string(key.size()));
+                
+                if (addGroup(localGroup, key, senderId)) {
+                    // [FIX] Ensure we add the sender as a member immediately so future lookups work
+                    // addGroup adds the owner (senderId) as owner, but let's be explicit about our own internal state
+                    int gid = getGroupId(localGroup);
+                    if (gid != -1) {
+                        // Add SELF as member if not already (addGroup adds owner, but we are the one accepting)
+                        std::string myId = getUserId();
+                        if (myId != senderId) {
+                            addGroupMember(localGroup, myId, "member", "accepted");
+                        }
+                    }
+                    
+                    LOG_DEBUG("handleIncomingSync: Group created successfully.");
+                    notifySync("groups-updated", localGroup);
+                } else {
+                    LOGW("handleIncomingSync: Failed to create group '" + localGroup + "' - DB error?");
+                }
                 return;
             }
-            
-            // If a group with the same name exists but isn't from this sender, create a unique name
-            if (groupExists(localGroup)) {
-                LOG_DEBUG("Group '" + localGroup + "' already exists, creating unique name");
-                std::string uniqueName = localGroup + " (from " + senderId + ")";
-                int counter = 1;
-                std::string baseName = uniqueName;
-                while (groupExists(uniqueName)) {
-                    uniqueName = baseName + " " + std::to_string(counter++);
-                }
-                localGroup = uniqueName;
-                LOG_DEBUG("Will create group with unique name: '" + localGroup + "'");
-            }
-
-            if (!keyBase64.empty()) {
-                std::vector<unsigned char> key = base64DecodeInternal(keyBase64);
-                LOG_DEBUG("Adding group '" + localGroup + "' with key size " + std::to_string(key.size()));
-                addGroup(localGroup, key, senderId); // Set sender as owner
-                
-                // [FIX] Add sender as MEMBER so findGroupIdForSync can find this group later for entries
-                addGroupMember(localGroup, senderId, "owner", "accepted");
-                addGroupMember(localGroup, getUserId(), "member", "accepted");
-                
-                LOG_DEBUG("Group created successfully with members added");
-                notifySync("groups-updated", localGroup);
-            } else {
-                LOG_DEBUG("Skipping group creation - keyEmpty:" + std::to_string(keyBase64.empty()));
-            }
-            return;
-        }
         else if (msgType == "entry-data") {
             std::string remoteGroupName = getJsonString(payload, "group");
             
             LOG_DEBUG("Received entry-data for group '" + remoteGroupName + "' from sender '" + senderId + "'");
             
-            // [FIX] Resolve local group name using sender ID
-            std::string groupName = remoteGroupName;
-            int gid = findGroupIdForSync(remoteGroupName, senderId);
+            // [FIX] CRITICAL: Do NOT use findGroupIdForSync for entry-data from initial transfer!
+            // Initial transfer entries should ONLY go to groups created by THIS sender.
+            // Use strict sender-based lookup to prevent cross-contamination.
+            
+            int gid = -1;
+            std::string groupName;
+            
+            // 1. Try explicit derived name first (most common for received groups)
+            std::string derivedName = remoteGroupName + " (from " + senderId + ")";
+            gid = m_db->getGroupId(derivedName);
             if (gid != -1) {
-                // Find name from ID
-                auto names = m_db->getAllGroupNames();
-                for(const auto& n : names) {
-                    if (m_db->getGroupId(n) == gid) { groupName = n; break; }
-                }
-                LOG_DEBUG("Resolved to local group '" + groupName + "' with id " + std::to_string(gid));
+                groupName = derivedName;
+                LOG_DEBUG("Found derived group name: " + groupName);
             } else {
-                LOG_DEBUG("Could not find group via sender lookup, checking exact name");
-                if (!groupExists(groupName)) {
-                    LOG_DEBUG("Group '" + groupName + "' does not exist, skipping entry");
-                    return;
+                // 2. Search for ANY group where sender is owner
+                std::vector<std::string> allGroups = m_db->getAllGroupNames();
+                for (const auto& gName : allGroups) {
+                    int candidateId = m_db->getGroupId(gName);
+                    std::string owner = m_db->getGroupOwner(candidateId);
+                    
+                    // [FIX] Only accept groups where sender is the OWNER
+                    if (owner == senderId) {
+                        // Also check if base name matches (or matches derived pattern)
+                        if (gName == remoteGroupName || gName.find(remoteGroupName + " (from ") == 0) {
+                            gid = candidateId;
+                            groupName = gName;
+                            LOG_DEBUG("Found group by owner: " + groupName);
+                            break;
+                        }
+                    }
                 }
             }
             
-            if (!groupExists(groupName)) {
-                LOG_DEBUG("Group '" + groupName + "' still does not exist after lookup, skipping entry");
+            if (gid == -1 || groupName.empty()) {
+                LOG_DEBUG("No group found for entry-data from " + senderId + " - group '" + remoteGroupName + "' doesn't exist locally");
                 return;
             }
+            
+            LOG_DEBUG("Resolved to local group '" + groupName + "' with id " + std::to_string(gid));
             
             VaultEntry e;
             e.uuid = getJsonString(payload, "uuid");
@@ -515,6 +647,7 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
             LOG_DEBUG("Entry details - uuid:" + e.uuid + " title:" + e.title + " password length:" + std::to_string(encPass.length()));
             
             // Parse locations array from JSON
+            LOG_DEBUG("Parsing locations from payload...");
             size_t locPos = payload.find("\"locations\"");
             if (locPos != std::string::npos) {
                 size_t arrStart = payload.find('[', locPos);
@@ -524,7 +657,7 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                         size_t objEnd = payload.find('}', objStart);
                         if (objEnd == std::string::npos || objEnd > payload.find(']', arrStart)) break;
                         std::string locObj = payload.substr(objStart, objEnd - objStart + 1);
-                        std::string locType = getJsonString(locObj, "type");
+                        std::string locType = getJsonString(locObj, "locType");
                         std::string locValue = getJsonString(locObj, "value");
                         if (!locType.empty() && !locValue.empty()) {
                             e.locations.push_back(Location(-1, locType, locValue));
@@ -534,9 +667,14 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                 }
             }
             
+            LOG_DEBUG("Parsed " + std::to_string(e.locations.size()) + " locations for entry " + e.title);
+            if(!e.locations.empty()) {
+                LOG_DEBUG("First location: type='" + e.locations[0].type + "' value='" + e.locations[0].value + "'");
+            }
+            
             // Fallback: add url as location if no locations parsed
             if (e.locations.empty() && !e.url.empty()) {
-                e.locations.push_back(Location(-1, "url", e.url));
+                e.locations.push_back(Location(-1, "URL", e.url)); // Use "URL" not "url"
             }
             
             // [FIX] Save and restore the current active group context to avoid side effects
@@ -571,6 +709,16 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
 
         op = getJsonString(payload, "op");
         group = getJsonString(payload, "group");
+        
+        LOG_DEBUG("handleIncomingSync: Extracted operation='" + op + "' group='" + group + "'");
+        
+        if (op.empty()) {
+            LOGW("handleIncomingSync: Operation is EMPTY for sync-payload from " + senderId);
+            // Try to infer operation type from message structure as fallback
+            if (payload.find("\"data\"") != std::string::npos) {
+                LOGW("handleIncomingSync: Found data object, but operation is missing. Check sender serialization.");
+            }
+        }
 
         // 2. Robust JSON Object Extraction
         size_t dpos = payload.find("\"data\"");
@@ -592,6 +740,14 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
             notifySync("invites-updated", "");
             goto SEND_ACK; // Always ACK invites
         }
+        
+        if (op == "INVITE_ACCEPT") {
+            // [FIX] Desktop sends INVITE_ACCEPT after sharing group with Mobile
+            // This is just a notification that the user accepted - we don't need to do anything
+            // The group and entries have already been received via group-data/entry-data messages
+            LOG_DEBUG("handleIncomingSync: Received INVITE_ACCEPT from " + senderId + " for group " + group);
+            goto SEND_ACK; // ACK and skip further processing
+        }
 
         gid = findGroupIdForSync(group, senderId);
         if (gid == -1) goto SEND_ACK; // Not found locally, but ACK to stop retries
@@ -608,7 +764,11 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
             for (auto& l : locals) {
                 if (l.uuid == e.uuid) {
                     // IDEMPOTENCY: If local is newer or same, ignore but still ACK
-                    if (l.updatedAt >= e.updatedAt) goto SEND_ACK;
+                    LOG_DEBUG("UPSERT: Found existing entry with uuid " + e.uuid + ", local updatedAt=" + std::to_string(l.updatedAt) + ", remote updatedAt=" + std::to_string(e.updatedAt));
+                    if (l.updatedAt >= e.updatedAt) {
+                        LOG_DEBUG("UPSERT: Skipping update - local is newer or same");
+                        goto SEND_ACK;
+                    }
                     e.id = l.id;
                     found = true;
                     break;
@@ -621,7 +781,63 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
             e.notes = getJsonString(dataJson, "notes");
             e.entryType = getJsonString(dataJson, "type");
             
+            // [FIX] Parse locations array from UPSERT payload (critical for Desktop→Mobile sync)
+            e.locations.clear();
+            size_t locPos = dataJson.find("\"locations\"");
+            if (locPos != std::string::npos) {
+                size_t arrStart = dataJson.find('[', locPos);
+                if (arrStart != std::string::npos) {
+                    size_t arrEnd = dataJson.find(']', arrStart);
+                    if (arrEnd != std::string::npos) {
+                        std::string locArray = dataJson.substr(arrStart + 1, arrEnd - arrStart - 1);
+                        size_t pos = 0;
+                        while (pos < locArray.size()) {
+                            size_t objStart = locArray.find('{', pos);
+                            if (objStart == std::string::npos) break;
+                            size_t objEnd = locArray.find('}', objStart);
+                            if (objEnd == std::string::npos) break;
+                            
+                            std::string locBlock = locArray.substr(objStart, objEnd - objStart + 1);
+                            
+                            // Extract locType and value
+                            size_t typePos = locBlock.find("\"locType\"");
+                            size_t valPos = locBlock.find("\"value\"");
+                            
+                            if (typePos != std::string::npos && valPos != std::string::npos) {
+                                // Extract type
+                                size_t typeStart = locBlock.find(":", typePos) + 1;
+                                while (typeStart < locBlock.size() && (locBlock[typeStart] == ' ' || locBlock[typeStart] == '\"')) typeStart++;
+                                size_t typeEnd = locBlock.find_first_of(",}\"", typeStart);
+                                std::string locType = locBlock.substr(typeStart, typeEnd - typeStart);
+                                
+                                // Extract value  
+                                size_t valueStart = locBlock.find(":", valPos) + 1;
+                                while (valueStart < locBlock.size() && (locBlock[valueStart] == ' ' || locBlock[valueStart] == '\"')) valueStart++;
+                                size_t valueEnd = locBlock.find_first_of("}\"", valueStart);
+                                std::string locValue = locBlock.substr(valueStart, valueEnd - valueStart);
+                                
+                                // Normalize legacy "url" to "URL"
+                                if (locType == "url") locType = "URL";
+                                
+                                if (!locType.empty() && !locValue.empty()) {
+                                    Location loc;
+                                    loc.id = -1;
+                                    loc.type = locType;
+                                    loc.value = locValue;
+                                    e.locations.push_back(loc);
+                                }
+                            }
+                            
+                            pos = objEnd + 1;
+                        }
+                    }
+                }
+            }
+            LOG_DEBUG("UPSERT: Parsed " + std::to_string(e.locations.size()) + " locations for entry '" + e.title + "'");
+            
+            
             auto encPass = base64DecodeInternal(getJsonString(dataJson, "password"));
+            LOG_DEBUG("UPSERT: " + std::string(found ? "Updating" : "Creating") + " entry '" + e.title + "' with password length " + std::to_string(encPass.size()));
             if (found) m_db->updateEntry(e, &encPass);
             else m_db->storeEntry(gid, e, encPass);
 
@@ -636,6 +852,44 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                     notifySync("entry-deleted", group);
                     break;
                 }
+            }
+        }
+        else if (op == "MEMBER_KICK") {
+            // [FIX] Handle being kicked from a group
+            LOG_DEBUG("handleIncomingSync: Received MEMBER_KICK for group '" + group + "'");
+            std::string reason = getJsonString(dataJson, "reason");
+            
+            // Remove the group locally
+            int gid = m_db->getGroupId(group);
+            if (gid != -1) {
+                m_db->deleteGroup(group);
+                notifySync("group-deleted", group);
+                notifySync("kicked-from-group", group + "|" + reason);
+            }
+        }
+        else if (op == "MEMBER_REMOVE") {
+            // [FIX] Handle notification that a member was removed  
+            LOG_DEBUG("handleIncomingSync: Received MEMBER_REMOVE for group '" + group + "'");
+            std::string userId = getJsonString(dataJson, "userId");
+            
+            // Update local member list
+            int gid = m_db->getGroupId(group);
+            if (gid != -1) {
+                m_db->removeGroupMember(gid, userId);
+                notifySync("members-updated", group);
+            }
+        }
+        else if (op == "GROUP_SPLIT") {
+            // [FIX] Handle group deletion by owner
+            LOG_DEBUG("handleIncomingSync: Received GROUP_SPLIT for group '" + group + "'");
+            std::string reason = getJsonString(dataJson, "reason");
+            
+            // Remove the group locally
+            int gid = m_db->getGroupId(group);
+            if (gid != -1) {
+                m_db->deleteGroup(group);
+                notifySync("group-deleted", group);
+                notifySync("group-disbanded", group + "|" + reason);
             }
         }
 
@@ -667,10 +921,9 @@ bool Vault::addEntry(const VaultEntry& entry, const std::string& password) {
     std::vector<unsigned char> encPass = m_crypto->encrypt(password, m_activeGroupKey_RAM);
     m_db->storeEntry(m_activeGroupId, e, encPass);
 
-    if (m_activeGroupName != "Personal") {
-        std::string payload = serializeEntry(e, password, m_activeGroupKey_RAM);
-        queueSyncForGroup(m_activeGroupName, "UPSERT", payload);
-    }
+    // [FIX] Always queue sync, regardless of group name (if it has other members, it will sync)
+    std::string payload = serializeEntry(e, password, m_activeGroupKey_RAM);
+    queueSyncForGroup(m_activeGroupName, "UPSERT", payload);
     return true;
 }
 
@@ -691,7 +944,8 @@ bool Vault::updateEntry(const VaultEntry& entry, const std::string& newPassword)
     updated.uuid = original.uuid; 
     updated.entryType = original.entryType;
     updated.totpSecret = original.totpSecret;
-    updated.updatedAt = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    updated.updatedAt = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 
     std::vector<unsigned char> encryptionKey;
     std::string groupName;
@@ -708,7 +962,8 @@ bool Vault::updateEntry(const VaultEntry& entry, const std::string& newPassword)
     std::vector<unsigned char> encPass = m_crypto->encrypt(newPassword, encryptionKey);
     m_db->updateEntry(updated, &encPass);
 
-    if (groupName != "Personal" && !groupName.empty()) {
+    // [FIX] Always queue sync
+    if (!groupName.empty()) {
         std::string payload = serializeEntry(updated, newPassword, encryptionKey);
         queueSyncForGroup(groupName, "UPSERT", payload);
     }
@@ -733,7 +988,8 @@ bool Vault::deleteEntry(int entryId) {
         auto names = m_db->getAllGroupNames();
         for(const auto& n : names) if(m_db->getGroupId(n) == groupId) { groupName = n; break; }
 
-        if (!groupName.empty() && groupName != "Personal") { 
+        // [FIX] Always queue sync
+        if (!groupName.empty()) { 
             std::string payload = "{\"uuid\":\"" + escapeJson(uuid) + "\"}";
             queueSyncForGroup(groupName, "DELETE", payload);
         }
@@ -765,7 +1021,7 @@ std::string Vault::getEntryFullDetails(int entryId) {
     for(const auto& en : entries) if(en.id == entryId) { e = en; break; }
     std::ostringstream ss;
     ss << e.title << "|" << e.username << "|" << getDecryptedPassword(entryId) << "|" << e.notes 
-       << "|" << e.totpSecret << "|" << e.createdAt << "|" << e.updatedAt << "|" << e.lastAccessed;
+       << "|" << e.totpSecret << "|" << e.createdAt << "|" << e.updatedAt << "|" << e.lastAccessed << "|" << e.url;
     return ss.str();
 }
 
@@ -921,7 +1177,8 @@ void Vault::removeGroupMember(const std::string& groupName, const std::string& u
 
 bool Vault::canUserEdit(const std::string& groupName) {
     if (isLocked()) return false;
-    if (groupName == "Personal") return true;
+    // [FIX] Remove hardcoded Personal permission, rely on proper owner role check below
+
     try {
         int gid = m_db->getGroupId(groupName);
         std::string myId = getUserId();
@@ -1082,20 +1339,45 @@ void Vault::respondToInvite(const std::string& groupName, const std::string& sen
     if (gid == -1) return;
     std::string myId = getUserId();
 
+    // [FIX] Delete pending invite FIRST, BEFORE sending response
+    // This prevents the invite from persisting if Desktop sends INVITE_ACCEPT afterwards
+    auto invites = m_db->getPendingInvites();
+    
+    // Normalize senderId for comparison
+    std::string senderLower = senderId;
+    // Trim
+    senderLower.erase(0, senderLower.find_first_not_of(" \t\n\r\f\v"));
+    senderLower.erase(senderLower.find_last_not_of(" \t\n\r\f\v") + 1);
+    std::transform(senderLower.begin(), senderLower.end(), senderLower.begin(), ::tolower);
+    
+    LOG_DEBUG("respondToInvite: Cleaning up for group '" + groupName + "' sender '" + senderId + "' (norm: " + senderLower + ")");
+
+    int deletedCount = 0;
+    for (const auto& i : invites) {
+        std::string iSender = i.senderId;
+        std::transform(iSender.begin(), iSender.end(), iSender.begin(), ::tolower);
+        
+        // Check group name and sender
+        if (i.groupName == groupName && iSender == senderLower) {
+            LOG_DEBUG("respondToInvite: Deleting pending invite ID " + std::to_string(i.id));
+            m_db->deletePendingInvite(i.id);
+            deletedCount++;
+        } else {
+             LOG_DEBUG("respondToInvite: Skipping ID " + std::to_string(i.id) + " - Group: " + i.groupName + " Sender: " + i.senderId);
+        }
+    }
+    LOG_INFO("respondToInvite: Deleted " + std::to_string(deletedCount) + " pending invites.");
+    
+    // NOW send acceptance response (if accepting)
     if (accept) {
         m_db->addGroupMember(gid, myId, "member", "accepted");
         std::ostringstream payload;
-        payload << "{\"userId\":\"" << escapeJson(myId) << "\"}";
+        payload << "{\"userId\":\"" << escapeJson(myId) << "\"}" ;
         m_db->storeSyncJob(senderId, groupName, "INVITE_ACCEPT", payload.str());
         processOutboxForUser(senderId);
     }
 
-    auto invites = m_db->getPendingInvites();
-    for (const auto& i : invites) {
-        if (i.groupName == groupName && i.senderId == senderId) {
-            m_db->deletePendingInvite(i.id);
-        }
-    }
+    // Always notify UI that invites changed
     notifySync("invites-updated", "");
 }
 
@@ -1104,6 +1386,40 @@ void Vault::sendP2PInvite(const std::string& groupName, const std::string& targe
     int gid = m_db->getGroupId(groupName);
     if (gid == -1) return;
     if (!isGroupOwner(groupName)) return;
+    
+    // [FIX] Delete any existing pending invites from this sender for this group to the target user
+    // This prevents duplicate invites when re-inviting removed members
+    auto existingInvites = m_db->getPendingInvites();
+    for (const auto& inv : existingInvites) {
+        std::string invSenderLower = inv.senderId;
+        std::string myIdLower = getUserId();
+        std::transform(invSenderLower.begin(), invSenderLower.end(), invSenderLower.begin(), ::tolower);
+        std::transform(myIdLower.begin(), myIdLower.end(), myIdLower.begin(), ::tolower);
+        
+        if (inv.groupName == groupName && invSenderLower == myIdLower) {
+            LOG_DEBUG("sendP2PInvite: Deleting old local invite record ID " + std::to_string(inv.id));
+            m_db->deletePendingInvite(inv.id);
+        }
+    }
+    
+    // [FIX] If user was previously a member (e.g., removed and now being re-invited),
+    // remove their old membership record so they start fresh with "pending" status
+    auto members = m_db->getGroupMembers(gid);
+    for (const auto& m : members) {
+        std::string mIdLower = m.userId;
+        std::string targetLower = targetUser;
+        std::transform(mIdLower.begin(), mIdLower.end(), mIdLower.begin(), ::tolower);
+        std::transform(targetLower.begin(), targetLower.end(), targetLower.begin(), ::tolower);
+        
+        if (mIdLower == targetLower) {
+            LOG_DEBUG("sendP2PInvite: Removing old membership for " + targetUser + " before re-invite");
+            m_db->removeGroupMember(gid, targetUser);
+            break;
+        }
+    }
+    
+    // Add as pending member
+    m_db->addGroupMember(gid, targetUser, "member", "pending");
 
     std::ostringstream payload;
     payload << "{\"group\":\"" << escapeJson(groupName) << "\","
