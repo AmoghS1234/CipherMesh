@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="?android:attr/colorBackground"
+    android:paddingBottom="16dp">
+
+    <View
+        android:layout_width="40dp"
+        android:layout_height="4dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="12dp"
+        android:layout_gravity="center_horizontal"
+        android:background="?android:attr/listDivider" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:id="@+id/sheetEntryTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Entry Title"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="?android:attr/textColorPrimary" />
+
+        <TextView
+            android:id="@+id/sheetEntrySubtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="username@example.com"
+            android:textSize="14sp"
+            android:textColor="?android:attr/textColorSecondary"
+            android:layout_marginTop="4dp"/>
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="?android:attr/listDivider"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:id="@+id/actionCopyPassword"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Copy Password"
+        android:drawableStart="@android:drawable/ic_menu_edit"
+        android:drawablePadding="16dp"
+        android:gravity="center_vertical"
+        android:padding="16dp"
+        android:textSize="16sp"
+        android:background="?android:attr/selectableItemBackground"
+        android:textColor="?android:attr/textColorPrimary"/>
+
+    <TextView
+        android:id="@+id/actionCopyTOTP"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Copy 2FA Code"
+        android:drawableStart="@android:drawable/ic_menu_rotate"
+        android:drawablePadding="16dp"
+        android:gravity="center_vertical"
+        android:padding="16dp"
+        android:textSize="16sp"
+        android:background="?android:attr/selectableItemBackground"
+        android:textColor="?android:attr/textColorPrimary"/>
+
+    <TextView
+        android:id="@+id/actionEdit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Edit Entry"
+        android:drawableStart="@android:drawable/ic_menu_preferences"
+        android:drawablePadding="16dp"
+        android:gravity="center_vertical"
+        android:padding="16dp"
+        android:textSize="16sp"
+        android:background="?android:attr/selectableItemBackground"
+        android:textColor="?android:attr/textColorPrimary"/>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="?android:attr/listDivider"
+        android:layout_marginVertical="8dp"/>
+
+    <TextView
+        android:id="@+id/actionDelete"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Delete Entry"
+        android:drawableStart="@android:drawable/ic_menu_delete"
+        android:drawablePadding="16dp"
+        android:drawableTint="?attr/colorError"
+        android:gravity="center_vertical"
+        android:padding="16dp"
+        android:textSize="16sp"
+        android:textColor="?attr/colorError"
+        android:textStyle="bold"
+        android:background="?android:attr/selectableItemBackground"/>
+
+</LinearLayout>

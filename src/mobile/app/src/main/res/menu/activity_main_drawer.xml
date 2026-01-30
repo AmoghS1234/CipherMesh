@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:showIn="navigation_view">
+
+    <group android:checkableBehavior="single">
+        <item
+            android:id="@+id/nav_groups"
+            android:icon="@android:drawable/ic_menu_my_calendar"
+            android:title="My Groups" />
+        
+        <item
+            android:id="@+id/nav_recent_entries"
+            android:icon="@android:drawable/ic_menu_recent_history"
+            android:title="@string/menu_recent_entries" />
+        
+        <item
+            android:id="@+id/nav_add_group"
+            android:icon="@android:drawable/ic_input_add"
+            android:title="Create Group" />
+            
+        <item
+            android:id="@+id/nav_theme"
+            android:icon="@android:drawable/ic_menu_gallery"
+            android:title="Change Theme" />
+        
+        <item
+            android:id="@+id/nav_settings"
+            android:icon="@android:drawable/ic_menu_preferences"
+            android:title="Settings" />
+    </group>
+
+    <item android:title="Account">
+        <menu>
+            <item
+                android:id="@+id/nav_lock"
+                android:icon="@android:drawable/ic_lock_power_off"
+                android:title="Lock Vault" />
+        </menu>
+    </item>
+</menu>

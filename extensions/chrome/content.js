@@ -1200,23 +1200,7 @@
         }
     }
     
-    // Scan on page load
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', scanForPasswordFields);
-    } else {
-        scanForPasswordFields();
-    }
-    
-    // Watch for dynamically added password fields
-    const observer = new MutationObserver(() => {
-        if (isConnected) {
-            scanForPasswordFields();
-        }
-    });
-    
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
+    // Note: MutationObserver is set up in setupMutationObserver() called from initialize()
+    // No additional observer needed here
     
 })();

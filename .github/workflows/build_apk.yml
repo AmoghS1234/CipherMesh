@@ -1,7 +1,8 @@
 name: Build Android APK
 
+# Workflow disabled - build using Android Studio instead
+# See BUILD_ANDROID_STUDIO.md for instructions
 on: 
-  push:
   workflow_dispatch: 
 
 jobs:
@@ -30,6 +31,11 @@ jobs:
       - name: Export ANDROID_NDK_ROOT
         run: |
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> $GITHUB_ENV
+
+      - name: Install Qt Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libglu1-mesa-dev
 
       - name: Install Qt (Android + Desktop)
         run: |

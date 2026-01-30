@@ -10,10 +10,8 @@
 #include "settingsdialog.hpp"
 #include "passwordhistorydialog.hpp"
 #include "toast.hpp"
-// --- IMPORTANT: Include full definitions for casting ---
 #include "../p2p_webrtc/webrtcservice.hpp" 
 #include "../p2p/ip2pservice.hpp"
-// -------------------------------------------------------
 #include "themes.hpp"
 #include "totp.hpp"
 #include "breach_checker.hpp"
@@ -43,7 +41,7 @@
 #include <string>
 #include <vector>
 #include <QMetaObject> 
-
+#include <QDebug>
 #include <QPushButton>
 #include <QLineEdit>
 #include <QSplitter>
@@ -62,7 +60,7 @@
 #include <QFile>
 #include <QDir>
 
-// --- ICON DEFINITIONS ---
+// --- ICON DEFINITIONS (SVGs) ---
 const QByteArray g_folderIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>)";
 const QByteArray g_keyIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 15c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z"/></svg>)";
 const QByteArray g_plusIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>)";
@@ -73,18 +71,17 @@ const QByteArray g_copyIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" view
 const QByteArray g_cogIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.22-.08-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>)";
 const QByteArray g_lockIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>)";
 const QByteArray g_eyeIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>)";
-const QByteArray g_eyeOffIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>)";
+const QByteArray g_eyeOffIconSvg = R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.2-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>)";
 
 // Constants for UI strings
 const QString INVITE_SUFFIX = " (Invite)";
 const QString COPY_SUFFIX = " (Copy)";
 
-MainWindow::MainWindow(const QString& userId, QWidget *parent)
+MainWindow::MainWindow(CipherMesh::Core::Vault* vault, QWidget *parent)
     : QMainWindow(parent),
-      m_vault(nullptr),
+      m_vault(vault),
       m_p2pService(nullptr), 
       m_isPasswordVisible(false),
-      m_currentUserId(userId),
       m_actionIconColor("#ffffff"),
       m_uiIconColor("#e0e0e0"),
       m_autoLockTimer(nullptr),
@@ -92,22 +89,33 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
       m_totpRefreshTimer(nullptr),
       m_breachChecker(nullptr)
 {
+    qDebug() << "[MAIN] Constructor Started";
+    if (!m_vault) {
+        qCritical() << "[MAIN] FATAL: Vault pointer is NULL!";
+    } else {
+        qDebug() << "[MAIN] Vault pointer valid.";
+        m_currentUserId = QString::fromStdString(m_vault->getUserId());
+    }
+
     setWindowTitle("CipherMesh - (Locked) - " + m_currentUserId);
     
     // Initialize breach checker
+    qDebug() << "[MAIN] Init BreachChecker";
     m_breachChecker = new BreachChecker(this);
     
-    // Set a more reasonable default size and make it resizable
     resize(1000, 650);
     setMinimumSize(800, 500);
     
     // Setup auto-lock timer
+    qDebug() << "[MAIN] Setup AutoLock";
     setupAutoLockTimer();
     
+    qDebug() << "[MAIN] Starting P2P Thread";
     m_p2pThread = new QThread(this);
     m_p2pThread->setObjectName("P2PWorkerThread");
     
     // Render.com URL
+    qDebug() << "[MAIN] Creating WebRTC Service";
     WebRTCService* p2pWorker = new WebRTCService("wss://ciphermesh-signal-server.onrender.com", m_currentUserId.toStdString(), nullptr); 
 
     p2pWorker->onIncomingInvite = [this](const std::string& senderId, const std::string& groupName) {
@@ -122,20 +130,52 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
         }, Qt::QueuedConnection);
     };
     
-    // --- P2P HANDLER FIXED FOR ENCRYPTION ---
-    p2pWorker->onGroupDataReceived = [this](const std::string& senderId,
-                                            const std::string& groupName, 
-                                            const std::vector<unsigned char>& key, 
-                                            const std::vector<CipherMesh::Core::VaultEntry>& entries) 
-    {
-        QMetaObject::invokeMethod(this, [this, senderId, groupName, key, entries]() {
-            handleGroupData(QString::fromStdString(senderId), QString::fromStdString(groupName), key, entries);
+    p2pWorker->onGroupDataReceived = [this](const std::string& senderId, const std::string& json) {
+        // [FIX] Forward to Vault directly via handleIncomingSync
+        QMetaObject::invokeMethod(this, [this, senderId, json]() {
+             if(m_vault) {
+                 m_vault->handleIncomingSync(senderId, json);
+                 // Refresh UI incase of updates
+                 loadGroups();
+                 if (m_groupListWidget->currentItem()) {
+                     onGroupSelected(m_groupListWidget->currentItem());
+                 }
+             }
         }, Qt::QueuedConnection);
     };
+    
+    // [FIX] Enable incremental sync by connecting Vault output to P2P service
+    if (m_vault) {
+        m_vault->setP2PSendCallback([p2pWorker](const std::string& userId, const std::string& msg) {
+            QMetaObject::invokeMethod(p2pWorker, [p2pWorker, userId, msg]() {
+                QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(msg));
+                if (!doc.isNull() && doc.isObject()) {
+                    p2pWorker->sendP2PMessage(QString::fromStdString(userId), doc.object());
+                } else {
+                    qWarning() << "Invalid JSON in sync message to" << QString::fromStdString(userId);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
     
     p2pWorker->onPeerOnline = [this](const std::string& userId) {
         QMetaObject::invokeMethod(this, [this, userId]() {
             handlePeerOnline(QString::fromStdString(userId));
+        }, Qt::QueuedConnection);
+    };
+
+    p2pWorker->onSyncMessage = [this](const std::string& sender, const std::string& message) {
+        QMetaObject::invokeMethod(this, [this, sender, message]() {
+            if (!m_vault) return;
+            try {
+                m_vault->handleIncomingSync(sender, message);
+                // We could selectively refresh, but for now reload active view
+                if (m_groupListWidget->currentItem()) {
+                    onGroupSelected(m_groupListWidget->currentItem());
+                }
+            } catch (const std::exception& e) {
+                qWarning() << "Error handling sync message:" << e.what();
+            }
         }, Qt::QueuedConnection);
     };
 
@@ -160,26 +200,44 @@ MainWindow::MainWindow(const QString& userId, QWidget *parent)
     p2pWorker->moveToThread(m_p2pThread);
     connect(m_p2pThread, &QThread::started, p2pWorker, &WebRTCService::startSignaling);
     
+    qDebug() << "[MAIN] Starting P2P";
     m_p2pThread->start();
-    m_p2pService = p2pWorker;
+    
+    m_p2pService = p2pWorker; // Works due to inheritance
 
     connect(m_p2pThread, &QThread::finished, p2pWorker, &QObject::deleteLater);
     connect(this, &QObject::destroyed, m_p2pThread, &QThread::quit);
     connect(m_p2pThread, &QThread::finished, m_p2pThread, &QObject::deleteLater);
 
+    qDebug() << "[MAIN] Call setupUi";
     setupUi();
+    
+    qDebug() << "[MAIN] Call setupKeyboardShortcuts";
     setupKeyboardShortcuts();
+    
+    qDebug() << "[MAIN] Call updateIcons";
     updateIcons();
+    
     updateWindowTitle();
     m_detailsStack->setCurrentIndex(0);
     
-    // Setup TOTP refresh timer (refresh every second)
+    // Setup TOTP refresh timer
     m_totpRefreshTimer = new QTimer(this);
     connect(m_totpRefreshTimer, &QTimer::timeout, this, &MainWindow::refreshTOTPCode);
-    m_totpRefreshTimer->start(1000); // Refresh every second
+    m_totpRefreshTimer->start(1000); 
     
-    // Install event filter to detect user activity
     qApp->installEventFilter(this);
+
+    if (m_vault && !m_vault->isLocked()) {
+        qDebug() << "[MAIN] Call postUnlockInit";
+        postUnlockInit(); 
+    } else {
+        if (!m_vault) {
+             qCritical() << "[MAIN] Vault is null during init check";
+             QMessageBox::critical(this, "Error", "Failed to receive unlocked vault.");
+        }
+    }
+    qDebug() << "[MAIN] Constructor Finished";
 }
 
 MainWindow::~MainWindow()
@@ -192,7 +250,6 @@ MainWindow::~MainWindow()
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
-    // Reset auto-lock timer on user activity (mouse or keyboard)
     if (event->type() == QEvent::MouseButtonPress ||
         event->type() == QEvent::KeyPress ||
         event->type() == QEvent::MouseMove) {
@@ -201,54 +258,36 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
     return QMainWindow::eventFilter(obj, event);
 }
 
-void MainWindow::setVault(CipherMesh::Core::Vault* vault)
-{
-    m_vault = vault;
-    if (m_vault && !m_vault->isLocked()) {
-        postUnlockInit(); 
-    } else {
-        QMessageBox::critical(this, "Error", "Failed to receive unlocked vault.");
-    }
-}
-
 void MainWindow::onSettingsButtonClicked()
 {
     SettingsDialog dialog(m_currentUserId, m_vault, this);
-    
     connect(&dialog, &SettingsDialog::themeChanged, this, [this](const QString& themeId) {
         setTheme(themeId, CipherMesh::Themes::getById(themeId).styleSheet);
     });
-    
     connect(&dialog, &SettingsDialog::autoLockTimeoutChanged, this, &MainWindow::onAutoLockTimeoutChanged);
-    
     dialog.exec();
-    
-    // Reset timer after settings dialog closes in case timeout changed
     resetAutoLockTimer();
 }
 
 void MainWindow::setTheme(const QString& themeId, const QString& styleSheet) {
     qApp->setStyleSheet(styleSheet);
-    
     auto themeDef = CipherMesh::Themes::getById(themeId);
     m_actionIconColor = themeDef.actionIconColor;
     m_uiIconColor = themeDef.uiIconColor;
-    
     updateIcons();
-
-    if (m_vault) {
-        m_vault->setThemeId(themeId.toStdString());
-    }
+    if (m_vault) m_vault->setThemeId(themeId.toStdString());
 }
 
 void MainWindow::updateIcons() {
+    qDebug() << "[UI] updateIcons started";
+    if (!m_newGroupButton) { qCritical() << "m_newGroupButton is null!"; return; }
+    
     m_newGroupButton->setIcon(loadSvgIcon(g_plusIconSvg, m_actionIconColor));
     m_newEntryButton->setIcon(loadSvgIcon(g_plusIconSvg, m_actionIconColor));
     m_editEntryButton->setIcon(loadSvgIcon(g_pencilIconSvg, m_actionIconColor));
     m_deleteEntryButton->setIcon(loadSvgIcon(g_trashIconSvg, m_actionIconColor));
     m_settingsButton->setIcon(loadSvgIcon(g_cogIconSvg, m_uiIconColor));
     
-    // Update show/hide password button icon
     if (m_showPasswordButton->isChecked()) {
         m_showPasswordButton->setIcon(loadSvgIcon(g_eyeOffIconSvg, m_actionIconColor));
     } else {
@@ -258,6 +297,7 @@ void MainWindow::updateIcons() {
     if(m_vault && !m_vault->isLocked()) {
         loadGroups(); 
     }
+    qDebug() << "[UI] updateIcons finished";
 }
 
 void MainWindow::handleIncomingInvite(const QString& senderId, const QString& groupName)
@@ -266,7 +306,6 @@ void MainWindow::handleIncomingInvite(const QString& senderId, const QString& gr
     auto existing = m_vault->getPendingInvites();
     for(const auto& inv : existing) {
         if(inv.senderId == senderId.toStdString() && inv.groupName == groupName.toStdString()) {
-            // If we already accepted this invite, request the data now that sender is online
             if (inv.status == "accepted") {
                 qDebug() << "DEBUG: Received invite-request for already-accepted invite. Requesting data...";
                 m_p2pService->requestData(senderId.toStdString(), groupName.toStdString());
@@ -306,109 +345,32 @@ void MainWindow::handleInviteCancelled(const QString& senderId) {
 
 void MainWindow::handlePeerOnline(const QString& userId) {
     if (!m_vault || !m_p2pService) return;
-    
     qDebug() << "DEBUG: Peer came online:" << userId;
     
-    // Check if we have any accepted invites from this user
+    // [FIX] Process outbox for this user (send pending sync jobs)
+    m_vault->processOutboxForUser(userId.toStdString());
+    
     auto invites = m_vault->getPendingInvites();
     for (const auto& invite : invites) {
         if (invite.senderId == userId.toStdString() && invite.status == "accepted") {
             qDebug() << "DEBUG: Found accepted invite from" << userId << "- requesting data";
-            
-            // Request the data since sender is now online
             m_p2pService->requestData(invite.senderId, invite.groupName);
-            
-            // Update UI if we're viewing this invite
             if (m_currentSelectedInviteId == invite.id) {
                 m_inviteInfoLabel->setText("<b>Sender is online!</b><br>Requesting data transfer...");
             }
-            
-            break; // Handle one invite at a time
+            break; 
         }
     }
 }
 
-// --- FIXED GROUP DATA HANDLER ---
+// NOTE: This logic is now mostly handled by Vault::handleIncomingSync
+// but kept for legacy invite flow if needed.
 void MainWindow::handleGroupData(const QString& senderId,
                                  const QString& groupName, 
                                  const std::vector<unsigned char>& encryptedKeyData, 
                                  const std::vector<CipherMesh::Core::VaultEntry>& entries)
 {
-    if (!m_vault) return;
-
-    std::vector<unsigned char> finalKey;
-
-    // 1. Check if it's already a raw key (Local Desktop-to-Desktop Test)
-    if (encryptedKeyData.size() == 32) {
-        finalKey = encryptedKeyData;
-    } 
-    // 2. Otherwise assume it's encrypted (Android-to-Desktop or Production)
-    else {
-        try {
-            // ⚠️ FIX: DO NOT RE-ENCODE.
-            // The encryptedKeyData vector already contains the ASCII characters of the Base64 string.
-            // Just convert the vector directly to a string.
-            std::string base64Ciphertext(encryptedKeyData.begin(), encryptedKeyData.end());
-            
-            // Now decrypt (Crypto class will handle the Base64 decode internally)
-            std::string decryptedKeyStr = m_vault->decryptIncomingKey(base64Ciphertext);
-            finalKey.assign(decryptedKeyStr.begin(), decryptedKeyStr.end());
-            qDebug() << "Successfully decrypted group key. Size:" << finalKey.size();
-        } 
-        catch (const std::exception& e) {
-            QMessageBox::critical(this, "Import Failed", 
-                "Could not decrypt the group key from " + senderId + ".\nError: " + e.what());
-            return;
-        }
-    }
-
-    // ... (The rest of the function remains exactly the same) ...
-    
-    // Logic to handle invite cleanup
-    int inviteIdToDelete = -1;
-    auto invites = m_vault->getPendingInvites();
-    for(const auto& inv : invites) {
-        if (inv.senderId == senderId.toStdString() && inv.groupName == groupName.toStdString()) {
-            inviteIdToDelete = inv.id;
-            break;
-        }
-    }
-
-    // Handle duplicate names
-    std::string finalName = groupName.toStdString();
-    int counter = 1;
-    while (m_vault->groupExists(finalName)) {
-        finalName = groupName.toStdString() + " (Shared " + std::to_string(counter++) + ")";
-    }
-
-    // Import using the correct key
-    if (m_vault->addGroup(finalName, finalKey)) {
-        m_vault->importGroupEntries(finalName, entries);
-        
-        if (inviteIdToDelete != -1) {
-            m_vault->deletePendingInvite(inviteIdToDelete);
-            if (m_currentSelectedInviteId == inviteIdToDelete) {
-                m_currentSelectedInviteId = -1;
-                m_detailsStack->setCurrentIndex(0); 
-            }
-        }
-        
-        loadGroups();
-        
-        for (int i=0; i<m_groupListWidget->count(); i++) {
-            if (m_groupListWidget->item(i)->text() == QString::fromStdString(finalName)) {
-                m_groupListWidget->setCurrentRow(i);
-                break;
-            }
-        }
-
-        QMessageBox::information(this, "Transfer Complete", 
-            QString("Group <b>%1</b> has been imported successfully with %2 entries.")
-            .arg(QString::fromStdString(finalName))
-            .arg(entries.size()));
-    } else {
-        QMessageBox::critical(this, "Import Failed", "Could not create group. Data transfer failed.");
-    }
+   // Stub - handled by Core in new architecture
 }
 
 void MainWindow::onAcceptInviteClicked() {
@@ -421,10 +383,11 @@ void MainWindow::onAcceptInviteClicked() {
     
     if (!found) return;
 
-    // Update the invite status in the database so we can request data when sender comes online
     m_vault->updatePendingInviteStatus(m_currentSelectedInviteId, "accepted");
-    
     m_p2pService->respondToInvite(target.senderId, true);
+    
+    // [FIX] Cleanup UI: Delete pending invite so it disappears from the list
+    m_vault->deletePendingInvite(m_currentSelectedInviteId);
     
     m_inviteInfoLabel->setText("<b>Acceptance Sent!</b><br>Waiting for sender to transfer data...<br>(They must be online)");
     m_acceptInviteButton->setEnabled(false);
@@ -433,16 +396,13 @@ void MainWindow::onAcceptInviteClicked() {
 
 void MainWindow::onRejectInviteClicked() {
     if (m_currentSelectedInviteId != -1 && m_vault && m_p2pService) {
-        // Get the invite details before deleting it
         auto invites = m_vault->getPendingInvites();
         for (const auto& inv : invites) {
             if (inv.id == m_currentSelectedInviteId) {
-                // Send rejection to the sender
                 m_p2pService->respondToInvite(inv.senderId, false);
                 break;
             }
         }
-        
         m_vault->deletePendingInvite(m_currentSelectedInviteId);
         m_currentSelectedInviteId = -1;
         loadGroups();
@@ -454,10 +414,8 @@ void MainWindow::onLocationDoubleClicked(QListWidgetItem* item) {
     QString text = item->text();
     int splitIndex = text.indexOf("] ");
     if (splitIndex == -1) return;
-    
     QString type = text.mid(1, splitIndex - 1);
     QString value = text.mid(splitIndex + 2);
-    
     if (type == "URL") {
         if (!value.startsWith("http")) value = "https://" + value;
         QDesktopServices::openUrl(QUrl(value));
@@ -469,12 +427,11 @@ void MainWindow::onLocationDoubleClicked(QListWidgetItem* item) {
 
 void MainWindow::setupUi()
 {
-    // --- Menu Bar (create first for proper layout) ---
+    qDebug() << "[UI] setupUi Started";
     QMenuBar* menuBar = new QMenuBar(this);
     setMenuBar(menuBar);
     
     QMenu* fileMenu = menuBar->addMenu("&File");
-    
     QAction* lockAction = fileMenu->addAction(loadSvgIcon(g_lockIconSvg, m_uiIconColor), "Lock Vault");
     lockAction->setShortcut(QKeySequence("Ctrl+L"));
     connect(lockAction, &QAction::triggered, this, &MainWindow::onLockVault);
@@ -496,11 +453,9 @@ void MainWindow::setupUi()
     newEntryAction->setShortcut(QKeySequence("Ctrl+N"));
     connect(newEntryAction, &QAction::triggered, this, &MainWindow::onNewEntryClicked);
     
-    // --- Recently Accessed Menu ---
     m_recentMenu = menuBar->addMenu("&Recent");
-    updateRecentMenu();
     
-    // --- Group Pane ---
+    // Group Pane
     QWidget* groupPaneWidget = new QWidget(this);
     QVBoxLayout* groupLayout = new QVBoxLayout(groupPaneWidget);
     groupLayout->setContentsMargins(8, 8, 8, 8);
@@ -520,7 +475,6 @@ void MainWindow::setupUi()
     m_settingsButton->setToolTip("Settings");
     m_settingsButton->setFixedSize(32, 32);
     
-    // Connection status indicator
     m_connectionStatusLabel = new QLabel("● Connecting...");
     m_connectionStatusLabel->setObjectName("StatusLabel");
     m_connectionStatusLabel->setToolTip("Connection status to signaling server");
@@ -536,7 +490,7 @@ void MainWindow::setupUi()
     groupLayout->addWidget(m_groupListWidget, 1); 
     groupLayout->addLayout(groupButtonLayout); 
 
-    // --- Entry Pane ---
+    // Entry Pane
     QWidget* entryPaneWidget = new QWidget(this);
     QVBoxLayout* entryLayout = new QVBoxLayout(entryPaneWidget);
     entryLayout->setContentsMargins(8, 8, 8, 8);
@@ -571,7 +525,7 @@ void MainWindow::setupUi()
     entryLayout->addWidget(m_entryListWidget, 1); 
     entryLayout->addLayout(entryButtonLayout); 
 
-    // --- Details Pane ---
+    // Details Pane
     QWidget* placeholderWidget = new QWidget(this);
     QVBoxLayout* placeholderLayout = new QVBoxLayout(placeholderWidget);
     QLabel* placeholderLabel = new QLabel("Select an entry to view details.", this);
@@ -624,14 +578,13 @@ void MainWindow::setupUi()
     passLayout->addWidget(m_showPasswordButton);
     detailsLayout->addRow("Password:", passLayout);
     
-    // TOTP Code display with timer
+    // TOTP Code
     m_totpCodeLabel = new QLabel("------", this);
     m_totpCodeLabel->setObjectName("TOTPCodeLabel");
     m_totpCodeLabel->setFont(QFont("Monospace", 14, QFont::Bold));
     m_totpCodeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_totpCodeLabel->setStyleSheet("color: #2196f3; padding: 4px;");
     
-    // TOTP Timer Progress Bar
     m_totpTimerBar = new QProgressBar(this);
     m_totpTimerBar->setMaximum(30);
     m_totpTimerBar->setValue(30);
@@ -679,18 +632,16 @@ void MainWindow::setupUi()
     m_notesEdit->setMaximumHeight(120);
     detailsLayout->addRow("Notes:", m_notesEdit);
     
-    // Timestamp label
     m_timestampLabel = new QLabel(this);
     m_timestampLabel->setObjectName("PlaceholderLabel");
     m_timestampLabel->setWordWrap(true);
     detailsLayout->addRow("", m_timestampLabel);
     
-    // Breach check status label
     m_breachStatusLabel = new QLabel("", this);
     m_breachStatusLabel->setWordWrap(true);
     m_breachStatusLabel->setTextFormat(Qt::RichText);
     m_breachStatusLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
-    m_breachStatusLabel->setMaximumWidth(600); // Ensure it doesn't exceed reasonable width
+    m_breachStatusLabel->setMaximumWidth(600);
     m_breachStatusLabel->hide();
     detailsLayout->addRow("", m_breachStatusLabel);
     
@@ -700,23 +651,19 @@ void MainWindow::setupUi()
     m_editEntryButton->setObjectName("NewButton"); 
     m_editEntryButton->setEnabled(false); 
     m_editEntryButton->setMinimumWidth(70);
-    m_editEntryButton->setToolTip("Edit this entry (Ctrl+E)");
     
     m_checkBreachButton = new QPushButton("Breach?");
     m_checkBreachButton->setEnabled(false);
     m_checkBreachButton->setMinimumWidth(70);
-    m_checkBreachButton->setToolTip("Check if this password has been compromised in data breaches");
     
     m_viewHistoryButton = new QPushButton("History");
     m_viewHistoryButton->setEnabled(false); 
     m_viewHistoryButton->setMinimumWidth(70);
-    m_viewHistoryButton->setToolTip("View password history for this entry");
     
     m_deleteEntryButton = new QPushButton("Delete");
     m_deleteEntryButton->setObjectName("DeleteButton"); 
     m_deleteEntryButton->setEnabled(false); 
     m_deleteEntryButton->setMinimumWidth(70);
-    m_deleteEntryButton->setToolTip("Delete this entry (Delete key)");
 
     QHBoxLayout* detailButtonLayout = new QHBoxLayout();
     detailButtonLayout->setContentsMargins(0, 12, 0, 0); 
@@ -731,7 +678,7 @@ void MainWindow::setupUi()
 
     detailPageLayout->addLayout(detailButtonLayout); 
     
-    // --- Invite View Widget ---
+    // Invite View
     m_inviteViewWidget = new QWidget(this);
     QVBoxLayout* inviteLayout = new QVBoxLayout(m_inviteViewWidget);
     inviteLayout->setContentsMargins(20, 20, 20, 20);
@@ -771,21 +718,15 @@ void MainWindow::setupUi()
     m_detailsStack->addWidget(m_detailViewWidget); 
     m_detailsStack->addWidget(m_inviteViewWidget); 
 
-    // --- Main Splitter with flexible sizing ---
     m_mainSplitter = new QSplitter(Qt::Horizontal, this);
     m_mainSplitter->addWidget(groupPaneWidget);
     m_mainSplitter->addWidget(entryPaneWidget);
     m_mainSplitter->addWidget(m_detailsStack);
     
-    // Set flexible size constraints
-    m_mainSplitter->setStretchFactor(0, 1);  // Groups pane
-    m_mainSplitter->setStretchFactor(1, 1);  // Entries pane
-    m_mainSplitter->setStretchFactor(2, 2);  // Details pane (larger)
-    
-    // Set reasonable initial sizes
+    m_mainSplitter->setStretchFactor(0, 1); 
+    m_mainSplitter->setStretchFactor(1, 1); 
+    m_mainSplitter->setStretchFactor(2, 2); 
     m_mainSplitter->setSizes({250, 250, 400});
-    
-    // Allow collapsing but prevent too small sizes
     m_mainSplitter->setCollapsible(0, false);
     m_mainSplitter->setCollapsible(1, false);
     m_mainSplitter->setCollapsible(2, false);
@@ -809,30 +750,27 @@ void MainWindow::setupUi()
     
     connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged); 
     connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onSettingsButtonClicked); 
+    
+    qDebug() << "[UI] setupUi Finished";
 }
 
 void MainWindow::setupKeyboardShortcuts()
 {
-    // Ctrl+F for search
     QShortcut* searchShortcut = new QShortcut(QKeySequence("Ctrl+F"), this);
     connect(searchShortcut, &QShortcut::activated, this, [this]() {
         m_searchEdit->setFocus();
         m_searchEdit->selectAll();
     });
     
-    // Ctrl+N for new entry
     QShortcut* newEntryShortcut = new QShortcut(QKeySequence("Ctrl+N"), this);
     connect(newEntryShortcut, &QShortcut::activated, this, &MainWindow::onNewEntryClicked);
     
-    // Ctrl+G for new group
     QShortcut* newGroupShortcut = new QShortcut(QKeySequence("Ctrl+G"), this);
     connect(newGroupShortcut, &QShortcut::activated, this, &MainWindow::onNewGroupClicked);
     
-    // Ctrl+E to edit selected entry
     QShortcut* editEntryShortcut = new QShortcut(QKeySequence("Ctrl+E"), this);
     connect(editEntryShortcut, &QShortcut::activated, this, &MainWindow::onEditEntryClicked);
     
-    // Delete key to delete selected entry
     QShortcut* deleteEntryShortcut = new QShortcut(QKeySequence(Qt::Key_Delete), this);
     connect(deleteEntryShortcut, &QShortcut::activated, this, [this]() {
         if (m_deleteEntryButton->isEnabled()) {
@@ -840,7 +778,6 @@ void MainWindow::setupKeyboardShortcuts()
         }
     });
     
-    // Ctrl+L to lock vault
     QShortcut* lockShortcut = new QShortcut(QKeySequence("Ctrl+L"), this);
     connect(lockShortcut, &QShortcut::activated, this, &MainWindow::onLockVault);
 }
@@ -851,26 +788,83 @@ void MainWindow::updateWindowTitle()
     setWindowTitle(QString("CipherMesh - %1 - %2").arg(lockStatus, m_currentUserId));
 }
 
-// --- UPDATED POST-UNLOCK INIT (Sends Public Key) ---
+void MainWindow::onVaultSyncEvent(const QString& type, const QString& payload) {
+    qDebug() << "[UI] Sync Event Received:" << type;
+
+    if (type == "invites-updated") {
+        loadGroups();
+    } 
+    else if (type == "groups-updated" || type == "group-split" || type == "group-deleted" || type == "members-updated") {
+        QString current = getSelectedGroupName();
+        loadGroups();
+        
+        for(int i=0; i<m_groupListWidget->count(); ++i) {
+            if(m_groupListWidget->item(i)->data(Qt::UserRole).toString() == current) {
+                m_groupListWidget->setCurrentRow(i);
+                break;
+            }
+        }
+    }
+    else if (type == "entry-updated" || type == "entry-deleted") {
+        QString currentGroup = getSelectedGroupName();
+        if (payload.isEmpty() || payload == currentGroup) {
+            onGroupSelected(m_groupListWidget->currentItem());
+        }
+    }
+    else if (type == "invite-sent") {
+        loadGroups();
+    }
+}
+
 void MainWindow::postUnlockInit()
 {
+    qDebug() << "[MAIN] postUnlockInit started";
     updateWindowTitle();
     
-    // Inject Public Key into Service
+    // 1. Setup P2P
     if (m_p2pService) {
-        // dynamic_cast requires complete type (webrtcservice.hpp included)
         WebRTCService* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
         if (webrtcService && m_vault) {
             std::string myPubKey = m_vault->getIdentityPublicKey();
             webrtcService->setIdentityPublicKey(myPubKey);
             QMetaObject::invokeMethod(webrtcService, "setAuthenticated", Qt::QueuedConnection, Q_ARG(bool, true));
+            
+            m_vault->setP2PSendCallback([this, webrtcService](const std::string& targetUser, const std::string& message) {
+                if (!webrtcService) return;
+                QJsonDocument doc = QJsonDocument::fromJson(QString::fromStdString(message).toUtf8());
+                if (!doc.isNull() && doc.isObject()) {
+                    QJsonObject obj = doc.object();
+                    QMetaObject::invokeMethod(webrtcService, [webrtcService, targetUser, obj]() {
+                        webrtcService->sendP2PMessage(QString::fromStdString(targetUser), obj);
+                    }, Qt::QueuedConnection);
+                }
+            });
         }
     }
+
+    // 2. Wire up the Sync Callback
+    if (m_vault) {
+        m_vault->setSyncCallback([this](const std::string& type, const std::string& payload) {
+            QMetaObject::invokeMethod(this, "onVaultSyncEvent", Qt::QueuedConnection,
+                                      Q_ARG(QString, QString::fromStdString(type)),
+                                      Q_ARG(QString, QString::fromStdString(payload)));
+        });
+    }
     
+    qDebug() << "[MAIN] loading Groups";
     loadGroups();
+    
+    qDebug() << "[MAIN] restoring invites";
     restoreOutgoingInvites(); 
+    
+    // [FIX] Process any pending sync jobs that accumulated while offline
+    qDebug() << "[MAIN] processing pending sync jobs";
+    m_vault->processAllPendingSync(); 
+    
     if (m_groupListWidget->count() > 0) m_groupListWidget->setCurrentRow(0);
     resetAutoLockTimer();
+    updateRecentMenu();
+    qDebug() << "[MAIN] postUnlockInit finished";
 }
 
 void MainWindow::loadGroups()
@@ -889,17 +883,47 @@ void MainWindow::loadGroups()
 
         auto invites = m_vault->getPendingInvites();
         for (const auto& invite : invites) {
-            QString text = QString("%1 (Invite)").arg(QString::fromStdString(invite.groupName));
+            QString rawName = QString::fromStdString(invite.groupName);
+            QString text = QString("%1 (Invite)").arg(rawName);
             QListWidgetItem* item = new QListWidgetItem(inviteIcon, text);
             item->setForeground(QColor("#ff5555")); 
+            item->setData(Qt::UserRole, rawName);
             m_groupListWidget->addItem(item);
             m_pendingInviteMap[item] = invite.id; 
         }
 
         std::vector<std::string> groups = m_vault->getGroupNames();
         for (const std::string& groupName : groups) {
-            QString displayName = QString::fromStdString(groupName);
+            QString roleLabel;
+            
+            try {
+                int groupId = m_vault->getGroupId(groupName);
+                std::string myId = m_vault->getUserId();
+                auto members = m_vault->getGroupMembers(groupName);
+                
+                bool found = false;
+                for (const auto& member : members) {
+                    if (member.userId == myId) {
+                        if (member.role == "owner") roleLabel = " (Owner)";
+                        else if (member.role == "admin") roleLabel = " (Admin)";
+                        else roleLabel = " (Member)";
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    std::string ownerId = m_vault->getGroupOwner(groupName);
+                    if (ownerId.empty() || ownerId == myId) roleLabel = " (Owner)";
+                    else roleLabel = " (Member)";
+                }
+            } catch (...) {
+                roleLabel = "";
+            }
+            
+            QString displayName = QString::fromStdString(groupName) + roleLabel;
             QListWidgetItem* item = new QListWidgetItem(groupIcon, displayName);
+            item->setData(Qt::UserRole, QString::fromStdString(groupName));
             m_groupListWidget->addItem(item);
         }
     } catch (const std::exception& e) {
@@ -929,7 +953,7 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
                                                    "User <b>%1</b> wants to share the group<br>"
                                                    "<b>'%2'</b> with you.<br><br>"
                                                    "Click Accept to add this group to your vault.")
-                                                   .arg(QString::fromStdString(inv.senderId))
+                                                   .arg(QString::fromStdString(inv.senderId)) 
                                                    .arg(QString::fromStdString(inv.groupName)));
                 break;
             }
@@ -939,15 +963,26 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
         return;
     }
 
-    // Get the actual group name from text, removing invite suffix if present
-    QString groupNameQStr = current->text();
-    if (groupNameQStr.endsWith(INVITE_SUFFIX)) {
-        groupNameQStr = groupNameQStr.left(groupNameQStr.length() - INVITE_SUFFIX.length());
+    QString groupNameQStr = current->data(Qt::UserRole).toString();
+    if (groupNameQStr.isEmpty()) {
+        groupNameQStr = current->text(); 
     }
+    
     std::string groupName = groupNameQStr.toStdString();
-    bool canEdit = m_vault->canUserEdit(groupName);
-    m_newEntryButton->setEnabled(canEdit);
 
+    std::string myId = m_vault->getUserId();
+    std::string ownerId;
+    if (groupName == "Personal") {
+        ownerId = myId;
+    } else {
+        ownerId = m_vault->getGroupOwner(groupName);
+    }
+    
+    bool isPersonal = (groupName == "Personal");
+    bool isOwner = (ownerId == myId);
+    bool canEdit = isPersonal || isOwner || m_vault->canUserEdit(groupName);
+
+    m_newEntryButton->setEnabled(canEdit);
     m_detailsStack->setCurrentIndex(0); 
     
     try {
@@ -959,9 +994,9 @@ void MainWindow::onGroupSelected(QListWidgetItem* current)
                 m_entryListWidget->addItem(item);
                 m_entryMap[item] = entry;
             }
-            
-            // Update recent menu when group changes
             updateRecentMenu();
+        } else {
+            qWarning() << "Failed to set active group: " << groupNameQStr;
         }
     } catch (const std::exception& e) {
         qWarning() << "Failed to load group entries:" << e.what();
@@ -973,19 +1008,87 @@ void MainWindow::onGroupContextMenuRequested(const QPoint &pos)
     QListWidgetItem* item = m_groupListWidget->itemAt(pos);
     if (!item) return; 
     
+    // Ignore pending invites
     if (m_pendingInviteMap.contains(item)) return;
 
     m_groupListWidget->setCurrentItem(item);
+    QString groupName = item->data(Qt::UserRole).toString();
+    
+    bool isOwner = false;
+    
+    if (groupName == "Personal") {
+        isOwner = true;
+    } else {
+        try {
+            std::string myId = m_vault->getUserId();
+            auto members = m_vault->getGroupMembers(groupName.toStdString());
+            for (const auto& member : members) {
+                if (member.userId == myId) {
+                    isOwner = (member.role == "owner");
+                    break;
+                }
+            }
+        } catch (...) {
+            isOwner = false;
+        }
+    }
     
     QMenu contextMenu(this);
-    QAction* shareAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "Share Group...");
-    QAction* deleteAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Delete Group...");
+    
+    if (isOwner) {
+        QAction* renameAction = contextMenu.addAction(loadSvgIcon(g_pencilIconSvg, m_uiIconColor), "Rename Group...");
+        connect(renameAction, &QAction::triggered, this, [this, groupName]() {
+            bool ok;
+            QString newName = QInputDialog::getText(this, "Rename Group",
+                                                  "New Name for '" + groupName + "':", QLineEdit::Normal,
+                                                  groupName, &ok);
+            if (ok && !newName.isEmpty() && newName != groupName) {
+                if (m_vault->groupExists(newName.toStdString())) {
+                    QMessageBox::warning(this, "Error", "A group with this name already exists.");
+                    return;
+                }
+                
+                if (m_vault->renameGroup(groupName.toStdString(), newName.toStdString())) {
+                    loadGroups(); 
+                    for(int i=0; i<m_groupListWidget->count(); ++i) {
+                        if(m_groupListWidget->item(i)->data(Qt::UserRole).toString() == newName) {
+                            m_groupListWidget->setCurrentRow(i);
+                            break;
+                        }
+                    }
+                } else {
+                    QMessageBox::warning(this, "Error", "Failed to rename group.");
+                }
+            }
+        });
 
-    connect(shareAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
-    connect(deleteAction, &QAction::triggered, this, &MainWindow::onDeleteGroupClicked);
-
-    if (m_groupListWidget->count() <= 1 || item->text() == "Personal") {
-        deleteAction->setEnabled(false);
+        QAction* shareAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "Manage Group (Invite/Remove)...");
+        connect(shareAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
+        
+        QAction* deleteAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Delete Group...");
+        connect(deleteAction, &QAction::triggered, this, &MainWindow::onDeleteGroupClicked);
+        
+        if (m_groupListWidget->count() <= 1 || groupName == "Personal") {
+            deleteAction->setEnabled(false);
+        }
+        
+    } else {
+        QAction* viewMembersAction = contextMenu.addAction(loadSvgIcon(g_shareIconSvg, m_uiIconColor), "View Members...");
+        connect(viewMembersAction, &QAction::triggered, this, &MainWindow::onShareGroupClicked);
+        
+        if (groupName != "Personal") {
+            contextMenu.addSeparator();
+            QAction* leaveAction = contextMenu.addAction(loadSvgIcon(g_trashIconSvg, m_uiIconColor), "Leave Group");
+            connect(leaveAction, &QAction::triggered, this, [this, groupName]() {
+                QMessageBox::StandardButton reply = QMessageBox::question(this, "Leave Group", 
+                    "Are you sure you want to leave '" + groupName + "'?\nYou will lose access to these passwords.",
+                    QMessageBox::Yes | QMessageBox::No);
+                
+                if (reply == QMessageBox::Yes) {
+                    m_vault->leaveGroup(groupName.toStdString());
+                }
+            });
+        }
     }
 
     contextMenu.exec(m_groupListWidget->mapToGlobal(pos));
@@ -1043,17 +1146,16 @@ void MainWindow::onEntrySelected(QListWidgetItem* current)
     m_deleteEntryButton->setEnabled(true);
     m_viewHistoryButton->setEnabled(true);
     m_checkBreachButton->setEnabled(true);
-    m_breachStatusLabel->hide(); // Hide previous breach status when selecting new entry
+    m_breachStatusLabel->hide(); 
 
     auto it = m_entryMap.find(current);
     if (it == m_entryMap.end()) return; 
 
     const CipherMesh::Core::VaultEntry& entry = it.value();
     
-    // Track entry access time
     try {
         m_vault->updateEntryAccessTime(entry.id);
-        updateRecentMenu(); // Update recently accessed menu
+        updateRecentMenu(); 
     } catch (const std::exception& e) {
         qWarning() << "Failed to update entry access time:" << e.what();
     }
@@ -1078,14 +1180,13 @@ void MainWindow::onEntrySelected(QListWidgetItem* current)
     m_showPasswordButton->setIcon(loadSvgIcon(g_eyeIconSvg, m_actionIconColor));
     m_showPasswordButton->setToolTip("Show Password");
     
-    // Display timestamps in a more compact format to avoid cutoff
     QStringList timestampLines;
     if (entry.createdAt > 0) {
         QDateTime created = QDateTime::fromSecsSinceEpoch(entry.createdAt);
         timestampLines << QString("Created: %1").arg(created.toString("MMM dd, yyyy hh:mm"));
     }
-    if (entry.lastModified > 0) {
-        QDateTime modified = QDateTime::fromSecsSinceEpoch(entry.lastModified);
+    if (entry.updatedAt > 0) {
+        QDateTime modified = QDateTime::fromSecsSinceEpoch(entry.updatedAt);
         timestampLines << QString("Modified: %1").arg(modified.toString("MMM dd, yyyy hh:mm"));
     }
     if (entry.lastAccessed > 0) {
@@ -1108,11 +1209,10 @@ void MainWindow::loadEntries(const std::vector<CipherMesh::Core::VaultEntry>& en
     for (const auto& entry : entries) {
         QString displayText = QString::fromStdString(entry.title);
         
-        // Add visual indicator for entry type
-        if (entry.entry_type == "secure_note") {
+        if (entry.entryType == "secure_note") {
             displayText = "📝 " + displayText;
-        } else if (!entry.totp_secret.empty()) {
-            displayText = "🔐 " + displayText; // Show lock with key for 2FA-enabled passwords
+        } else if (!entry.totpSecret.empty()) {
+            displayText = "🔐 " + displayText; 
         } else {
             displayText = "🔑 " + displayText;
         }
@@ -1122,10 +1222,9 @@ void MainWindow::loadEntries(const std::vector<CipherMesh::Core::VaultEntry>& en
         m_entryMap[item] = entry;
     }
     
-    // Add empty state message if no entries exist
     if (m_entryListWidget->count() == 0) {
         QListWidgetItem* emptyItem = new QListWidgetItem("No entries yet - click 'New Entry' or press Ctrl+N to add one");
-        emptyItem->setFlags(Qt::NoItemFlags); // Make it non-selectable
+        emptyItem->setFlags(Qt::NoItemFlags); 
         emptyItem->setForeground(QColor("#888888"));
         m_entryListWidget->addItem(emptyItem);
     }
@@ -1168,14 +1267,12 @@ QString MainWindow::getSelectedGroupName()
 {
     QListWidgetItem* currentItem = m_groupListWidget->currentItem();
     if (!currentItem) return "";
-    return currentItem->text();
+    return currentItem->data(Qt::UserRole).toString();
 }
 
 void MainWindow::onCopyUsername()
 {
     QApplication::clipboard()->setText(m_usernameLabel->text());
-    
-    // Show toast notification
     using namespace CipherMesh::GUI;
     Toast* toast = new Toast("Username copied to clipboard", ToastType::Success, this);
     toast->show();
@@ -1193,7 +1290,6 @@ void MainWindow::onCopyPassword()
         clipboard->setText(QString::fromStdString(password));
         CipherMesh::Core::Crypto::secureWipe(password);
         
-        // Show toast notification
         using namespace CipherMesh::GUI;
         Toast* toast = new Toast("Password copied (will clear in 30s)", ToastType::Success, this);
         toast->show();
@@ -1211,16 +1307,11 @@ void MainWindow::onCopyPassword()
 void MainWindow::onCopyTOTPCode()
 {
     QString code = m_totpCodeLabel->text();
-    
-    // Don't copy if no valid code is displayed
     if (code == "------" || code == "INVALID" || code == "ERROR") {
         return;
     }
-    
     QClipboard* clipboard = QApplication::clipboard();
     clipboard->setText(code);
-    
-    // Show toast notification
     using namespace CipherMesh::GUI;
     Toast* toast = new Toast("2FA code copied to clipboard", ToastType::Success, this);
     toast->show();
@@ -1232,7 +1323,6 @@ void MainWindow::onCheckPasswordBreach()
     int entryId = getSelectedEntryId();
     if (entryId == -1) return;
     
-    // Disable button while checking
     m_checkBreachButton->setEnabled(false);
     m_checkBreachButton->setText("...");
     m_breachStatusLabel->setText("🔍 Checking password against breach database...");
@@ -1247,22 +1337,17 @@ void MainWindow::onCheckPasswordBreach()
             m_checkBreachButton->setText("Breach?");
             
             if (count < 0) {
-                // API error occurred
                 m_breachStatusLabel->setText("<b>⚠️ Unable to check.</b> Try again.");
                 m_breachStatusLabel->setStyleSheet("color: #f57c00; font-weight: bold;");
             } else if (isCompromised) {
                 m_breachStatusLabel->setText(QString("<b>⚠️ BREACHED:</b> Seen %1 times in breaches!").arg(QString::number(count)));
                 m_breachStatusLabel->setStyleSheet("color: #d32f2f; font-weight: bold;");
-                
-                // Show toast notification
                 using namespace CipherMesh::GUI;
                 Toast* toast = new Toast("Password compromised! Consider changing it.", ToastType::Error, this);
                 toast->show();
             } else {
                 m_breachStatusLabel->setText("<b>✓ Safe:</b> Not found in known breaches.");
                 m_breachStatusLabel->setStyleSheet("color: #388e3c; font-weight: bold;");
-                
-                // Show toast notification
                 using namespace CipherMesh::GUI;
                 Toast* toast = new Toast("Password is safe!", ToastType::Success, this);
                 toast->show();
@@ -1270,7 +1355,6 @@ void MainWindow::onCheckPasswordBreach()
             m_breachStatusLabel->show();
         });
         
-        // Securely wipe the password from memory
         CipherMesh::Core::Crypto::secureWipe(password);
     } catch (const std::exception& e) {
         m_checkBreachButton->setEnabled(true);
@@ -1323,7 +1407,7 @@ void MainWindow::onNewGroupClicked()
                 if (m_vault->addGroup(groupName.toStdString())) {
                     loadGroups();
                     for (int i = 0; i < m_groupListWidget->count(); ++i) {
-                        if (m_groupListWidget->item(i)->text() == groupName) {
+                        if (m_groupListWidget->item(i)->data(Qt::UserRole).toString() == groupName) {
                             m_groupListWidget->setCurrentRow(i);
                             break;
                         }
@@ -1346,7 +1430,6 @@ void MainWindow::onNewEntryClicked()
          QMessageBox::warning(this, "Error", "Please select a group first.");
          return;
     }
-    // Updated constructor usage:
     NewEntryDialog dialog(m_vault, this); 
     if (dialog.exec() == QDialog::Accepted) {
         try {
@@ -1374,13 +1457,65 @@ void MainWindow::onDeleteGroupClicked()
         QMessageBox::warning(this, "Error", "Cannot delete the 'Personal' group or the last remaining group.");
         return;
     }
+    
+    bool isOwner = false;
+    try {
+        int groupId = m_vault->getGroupId(groupName.toStdString());
+        std::string myId = m_vault->getUserId();
+        auto members = m_vault->getGroupMembers(groupName.toStdString());
+        
+        for (const auto& member : members) {
+            if (member.userId == myId) {
+                isOwner = (member.role == "owner");
+                break;
+            }
+        }
+    } catch (...) {
+        isOwner = false;
+    }
+    
+    if (!isOwner) {
+        QMessageBox::warning(this, "Error", "Only the group owner can delete the group.");
+        return;
+    }
+    
     QMessageBox::StandardButton reply = QMessageBox::question(this, "Delete Group",
-                                                      QString("Are you sure you want to permanently delete the group '%1' and all its entries?").arg(groupName),
-                                                      QMessageBox::Yes | QMessageBox::No);
+                                                              QString("Are you sure you want to permanently delete the group '%1'?\n\nEach member will receive their own copy of the group data.").arg(groupName),
+                                                              QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         try {
+            // [NEW] Before deleting, send individual copies to each member
+            auto members = m_vault->getGroupMembers(groupName.toStdString());
+            std::string myId = m_vault->getUserId();
+            
+            for (const auto& member : members) {
+                if (member.userId != myId && member.status == "accepted") {
+                    // Send GROUP_SPLIT message to each member
+                    if (m_p2pService) {
+                        try {
+                            auto* webrtcService = dynamic_cast<WebRTCService*>(m_p2pService);
+                            if (webrtcService) {
+                                std::ostringstream splitMsg;
+                                splitMsg << "{\"type\":\"sync-payload\",\"sender\":\"" << myId << "\","
+                                         << "\"group\":\"" << groupName.toStdString() << "\","
+                                         << "\"op\":\"GROUP_SPLIT\",\"jobId\":0,"
+                                         << "\"data\":{}}";
+                                webrtcService->sendP2PMessage(QString::fromStdString(member.userId), 
+                                    QJsonDocument::fromJson(QString::fromStdString(splitMsg.str()).toUtf8()).object());
+                                
+                                qDebug() << "Sent GROUP_SPLIT notification to" << QString::fromStdString(member.userId);
+                            }
+                        } catch (...) {
+                            qWarning() << "Failed to send split notification to" << QString::fromStdString(member.userId);
+                        }
+                    }
+                }
+            }
+            
             if (m_vault->deleteGroup(groupName.toStdString())) {
-                loadGroups(); 
+                loadGroups();
+                QMessageBox::information(this, "Group Deleted", 
+                    "Group deleted successfully. Each member has been notified and will receive their own copy.");
             } else {
                 QMessageBox::warning(this, "Error", "Could not delete the group.");
             }
@@ -1411,8 +1546,8 @@ void MainWindow::onDeleteEntryClicked()
     }
     QString entryTitle = m_entryListWidget->currentItem()->text();
     QMessageBox::StandardButton reply = QMessageBox::question(this, "Delete Entry",
-                                                      QString("Are you sure you want to permanently delete the entry '%1'?").arg(entryTitle),
-                                                      QMessageBox::Yes | QMessageBox::No);
+                                                              QString("Are you sure you want to permanently delete the entry '%1'?").arg(entryTitle),
+                                                              QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
         try {
             if (m_vault->deleteEntry(entryId)) {
@@ -1440,7 +1575,6 @@ void MainWindow::onEditEntryClicked()
         return;
     }
     const CipherMesh::Core::VaultEntry& entry = m_entryMap[m_entryListWidget->currentItem()];
-    // Updated constructor usage:
     NewEntryDialog dialog(m_vault, entry, this); 
     if (dialog.exec() == QDialog::Accepted) {
         try {
@@ -1473,19 +1607,15 @@ void MainWindow::onDuplicateEntryClicked()
     try {
         const CipherMesh::Core::VaultEntry& originalEntry = m_entryMap[m_entryListWidget->currentItem()];
         
-        // Create a copy with modified title
         CipherMesh::Core::VaultEntry duplicateEntry = originalEntry;
         duplicateEntry.id = -1; // New entry
         duplicateEntry.title += COPY_SUFFIX.toStdString();
         
-        // Get the password
         std::string password = m_vault->getDecryptedPassword(entryId);
         
-        // Add the duplicate entry
         if (m_vault->addEntry(duplicateEntry, password)) {
             CipherMesh::Core::Crypto::secureWipe(password);
             
-            // Refresh the list
             QString searchText = m_searchEdit->text();
             if (searchText.isEmpty()) {
                 onGroupSelected(m_groupListWidget->currentItem());
@@ -1493,7 +1623,6 @@ void MainWindow::onDuplicateEntryClicked()
                 onSearchTextChanged(searchText);
             }
             
-            // Show success message
             auto* toast = new CipherMesh::GUI::Toast("Entry duplicated successfully!", CipherMesh::GUI::ToastType::Success, this);
             toast->show();
         } else {
@@ -1527,13 +1656,12 @@ void MainWindow::onLockVault()
         
         m_vault->lock();
         this->hide();
-        QApplication::quit(); 
+        this->close(); 
     }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    QApplication::quit();
     event->accept();
 }
 
@@ -1557,14 +1685,11 @@ QIcon MainWindow::loadSvgIcon(const QByteArray& svgData, const QColor& color)
     return QIcon(pixmap);
 }
 
-// Handle data request from receiver (Alice's logic)
-// --- SECURE SENDER LOGIC ---
 void MainWindow::handleDataRequested(const QString& requesterId, const QString& groupName, const QString& requesterPubKey) {
     if (!m_vault || !m_p2pService) return;
 
     qDebug() << "Processing data request from" << requesterId << "for group" << groupName;
 
-    // 1. Validation
     if (!m_vault->groupExists(groupName.toStdString())) {
         qWarning() << "Requested group not found:" << groupName;
         return;
@@ -1576,22 +1701,17 @@ void MainWindow::handleDataRequested(const QString& requesterId, const QString& 
     }
 
     try {
-        // 2. Get the RAW Group Key (AES)
         std::vector<unsigned char> rawGroupKey = m_vault->getGroupKey(groupName.toStdString());
-        
-        // 3. ENCRYPT the Key using the Requester's Public Key
-        // This ensures only the specific user who requested it can read the key.
         std::vector<unsigned char> encryptedKey = m_vault->encryptForUser(requesterPubKey.toStdString(), rawGroupKey);
-        
-        // 4. Export Entries
         std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(groupName.toStdString());
         
-        // 5. Send the ENCRYPTED key
-        m_p2pService->sendGroupData(requesterId.toStdString(), groupName.toStdString(), encryptedKey, entries);
+        // [FIX] Fetch Members from Vault
+        std::string members = m_vault->exportGroupMembers(groupName.toStdString());
         
-        // 6. Cleanup
+        // [FIX] Pass 5 arguments (members included)
+        m_p2pService->sendGroupData(requesterId.toStdString(), groupName.toStdString(), encryptedKey, entries, members);
+        
         CipherMesh::Core::Crypto::secureWipe(rawGroupKey);
-        
         qDebug() << "Successfully sent ENCRYPTED group data to" << requesterId;
     } catch (const std::exception& e) {
         qWarning() << "Error exporting data:" << e.what();
@@ -1601,7 +1721,6 @@ void MainWindow::handleDataRequested(const QString& requesterId, const QString& 
 void MainWindow::restoreOutgoingInvites() {
     if (!m_vault || !m_p2pService) return;
     
-    // Updated cast
     auto* p2p = dynamic_cast<WebRTCService*>(m_p2pService);
     if (!p2p) return;
 
@@ -1639,6 +1758,7 @@ void MainWindow::handleInviteResponse(const QString& userId, const QString& grou
         }
         loadGroups();
         qDebug() << "DEBUG: Updated member status for" << userId << "in group" << groupName;
+        emit groupMembersUpdated(groupName);
     } catch (const std::exception& e) {
         qWarning() << "ERROR: Failed to update member status:" << e.what();
     }
@@ -1654,7 +1774,6 @@ void MainWindow::handleConnectionStatusChanged(bool connected) {
     }
 }
 
-// --- AUTO-LOCK TIMER IMPLEMENTATION ---
 void MainWindow::setupAutoLockTimer() {
     m_autoLockTimer = new QTimer(this);
     m_autoLockTimer->setSingleShot(true);
@@ -1701,13 +1820,11 @@ void MainWindow::onViewPasswordHistoryClicked() {
     
     const CipherMesh::Core::VaultEntry& entry = it.value();
     
-    // Update access time
     if (m_vault) {
         m_vault->updateEntryAccessTime(entry.id);
         updateRecentMenu(); 
     }
     
-    // Open password history dialog
     CipherMesh::GUI::PasswordHistoryDialog dialog(m_vault, entry.id, entry.title, this);
     dialog.exec();
 }
@@ -1727,7 +1844,8 @@ void MainWindow::updateRecentMenu() {
     }
     
     try {
-        auto recentEntries = m_vault->getRecentlyAccessedEntries(10);
+        int groupId = m_vault->getGroupId(currentGroup.toStdString());
+        auto recentEntries = m_vault->getRecentlyAccessedEntries(groupId, 10);
         
         if (recentEntries.empty()) {
             QAction* emptyAction = m_recentMenu->addAction("No recently accessed entries in this group");
@@ -1754,7 +1872,6 @@ void MainWindow::onRecentEntrySelected() {
     
     int entryId = action->data().toInt();
     
-    // Find and select the entry in the current list
     for (int j = 0; j < m_entryListWidget->count(); ++j) {
         QListWidgetItem* item = m_entryListWidget->item(j);
         auto it = m_entryMap.find(item);
@@ -1766,7 +1883,6 @@ void MainWindow::onRecentEntrySelected() {
 }
 
 void MainWindow::refreshTOTPCode() {
-    // Get the currently selected entry
     QListWidgetItem* currentItem = m_entryListWidget->currentItem();
     if (!currentItem || !m_vault) {
         m_totpCodeLabel->setText("------");
@@ -1785,8 +1901,7 @@ void MainWindow::refreshTOTPCode() {
     
     const CipherMesh::Core::VaultEntry& entry = it.value();
     
-    // Check if entry has a TOTP secret
-    if (entry.totp_secret.empty()) {
+    if (entry.totpSecret.empty()) {
         m_totpCodeLabel->setText("------");
         m_totpCodeLabel->setStyleSheet("color: #666; padding: 4px;");
         m_totpTimerBar->hide();
@@ -1794,11 +1909,9 @@ void MainWindow::refreshTOTPCode() {
         return;
     }
     
-    // Generate TOTP code
     try {
-        std::string code = CipherMesh::Utils::TOTP::generateCode(entry.totp_secret);
+        std::string code = CipherMesh::Utils::TOTP::generateCode(entry.totpSecret);
         
-        // Check if code generation failed
         if (code.empty()) {
             m_totpCodeLabel->setText("INVALID");
             m_totpCodeLabel->setStyleSheet("color: #d32f2f; padding: 4px;");
@@ -1810,7 +1923,6 @@ void MainWindow::refreshTOTPCode() {
         m_totpCodeLabel->setText(QString::fromStdString(code));
         m_totpCodeLabel->setStyleSheet("color: #2196f3; padding: 4px;");
         
-        // Calculate time remaining in current 30s window
         long long currentTime = std::time(nullptr);
         int timeRemaining = 30 - (currentTime % 30);
         

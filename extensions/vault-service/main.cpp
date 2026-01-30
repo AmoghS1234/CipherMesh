@@ -48,7 +48,12 @@ void writeNativeMessage(const std::string& message) {
     std::cout.flush();
 }
 
-int main() {
+#include <QCoreApplication>
+
+int main(int argc, char *argv[]) {
+    // Initialize Qt Core Application for QSqlDatabase support
+    QCoreApplication app(argc, argv);
+
     // Disable buffering for immediate I/O
     std::cin.sync_with_stdio(false);
     std::cout.sync_with_stdio(false);

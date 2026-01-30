@@ -1,0 +1,1048 @@
+#include <jni.h>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <android/log.h>
+#include <thread>
+#include <mutex>
+#include <memory>
+#include <map>
+#include <algorithm> 
+#include <sodium.h> 
+#include "vault.hpp"
+#include "webrtcservice.hpp" 
+#include "totp.hpp"
+
+#define TAG "CipherMesh-Native"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+#define JNI_CATCH_RETURN(retval) \
+    catch (const std::exception& e) { \
+        LOGE("JNI Exception: %s", e.what()); \
+        return retval; \
+    } catch (...) { \
+        LOGE("JNI Unknown Exception"); \
+        return retval; \
+    }
+
+#define JNI_CATCH_VOID \
+    catch (const std::exception& e) { \
+        LOGE("JNI Exception: %s", e.what()); \
+    } catch (...) { \
+        LOGE("JNI Unknown Exception"); \
+    }
+
+std::unique_ptr<CipherMesh::Core::Vault> g_vault;
+std::unique_ptr<WebRTCService> g_p2p; 
+
+// Key: SenderID + "|" + RemoteGroupName, Value: LocalGroupName
+std::map<std::string, std::string> g_groupMappings;
+
+std::recursive_mutex g_vaultMutex;  
+std::mutex g_p2pMutex;    
+std::mutex g_jniMutex;    
+
+JavaVM* g_jvm = nullptr;
+jobject g_context = nullptr;
+jobject g_signalingCallback = nullptr; 
+
+// --- Helpers ---
+std::string extractJsonValueJNI(const std::string& json, const std::string& key) {
+    std::string keyPattern = "\"" + key + "\"";
+    size_t keyPos = json.find(keyPattern);
+    if (keyPos == std::string::npos) return "";
+    size_t colonPos = json.find(":", keyPos + keyPattern.length());
+    if (colonPos == std::string::npos) return "";
+    size_t valStart = colonPos + 1;
+    while (valStart < json.length() && (json[valStart] == ' ' || json[valStart] == '\t' || json[valStart] == '\n')) valStart++;
+    if (valStart >= json.length()) return "";
+    if (json[valStart] == '"') {
+        size_t start = valStart + 1;
+        size_t end = start;
+        while (end < json.length()) {
+            if (json[end] == '"' && json[end-1] != '\\') break;
+            end++;
+        }
+        if (end >= json.length()) return "";
+        return json.substr(start, end - start);
+    } else {
+        size_t end = json.find_first_of(",}", valStart);
+        return json.substr(valStart, end - valStart);
+    }
+}
+
+// Escape special characters for JSON strings
+std::string escapeJsonString(const std::string& input) {
+    std::ostringstream out;
+    for (char c : input) {
+        switch (c) {
+            case '"':  out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\b': out << "\\b"; break;
+            case '\f': out << "\\f"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            default:
+                if ((unsigned char)c < 0x20) {
+                    // Control characters - encode as unicode escape
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+                    out << buf;
+                } else {
+                    out << c;
+                }
+        }
+    }
+    return out.str();
+}
+
+std::vector<unsigned char> decodeBase64(const std::string& in) {
+    std::vector<unsigned char> out;
+    std::vector<int> T(256, -1);
+    static const std::string b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (int i=0; i<64; i++) T[b64[i]] = i; 
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        if (T[c] == -1) continue;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) { out.push_back(char((val >> valb) & 0xFF)); valb -= 8; }
+    }
+    return out;
+}
+
+void sendSignalingToKotlin(const std::string& target, const std::string& type, const std::string& payload) {
+    if (!g_jvm) return;
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    int envStat = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (envStat == JNI_EDETACHED) {
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != 0) return;
+        attached = true;
+    }
+    std::lock_guard<std::mutex> lock(g_jniMutex);
+    if (g_signalingCallback && env) {
+        jclass cbClass = env->GetObjectClass(g_signalingCallback);
+        jmethodID mid = env->GetMethodID(cbClass, "sendSignalingMessage", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+        if (mid) {
+            jstring jTarget = env->NewStringUTF(target.c_str());
+            jstring jType = env->NewStringUTF(type.c_str());
+            jstring jPayload = env->NewStringUTF(payload.c_str());
+            env->CallVoidMethod(g_signalingCallback, mid, jTarget, jType, jPayload);
+            env->DeleteLocalRef(jTarget); env->DeleteLocalRef(jType); env->DeleteLocalRef(jPayload);
+        }
+    }
+    if (attached) g_jvm->DetachCurrentThread();
+}
+
+void showToastFromNative(const std::string& message) {
+    std::lock_guard<std::mutex> lock(g_jniMutex);
+    if (!g_jvm || !g_context) return;
+    
+    JNIEnv* env;
+    bool attached = false;
+    int status = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != 0) return;
+        attached = true;
+    }
+
+    jclass contextClass = env->GetObjectClass(g_context);
+    jmethodID mid = env->GetMethodID(contextClass, "showToast", "(Ljava/lang/String;)V");
+    
+    // [FIX] Check for and CLEAR any pending exception (NoSuchMethodError)
+    // This prevents the app from crashing if the method is missing/renamed.
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear(); 
+        LOGE("Could not find showToast method in Activity");
+    } else if (mid) {
+        jstring jMsg = env->NewStringUTF(message.c_str());
+        env->CallVoidMethod(g_context, mid, jMsg);
+        env->DeleteLocalRef(jMsg);
+    }
+
+    if (attached) g_jvm->DetachCurrentThread();
+}
+
+void triggerJavaRefresh() {
+    std::lock_guard<std::mutex> lock(g_jniMutex);
+    if (!g_jvm || !g_context) {
+        LOGW("triggerJavaRefresh: JVM or Context is null, skipping refresh");
+        return;
+    }
+    JNIEnv* env;
+    bool attached = false;
+    int status = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != 0) {
+            LOGE("triggerJavaRefresh: Failed to attach thread");
+            return;
+        }
+        attached = true;
+    }
+    
+    jclass cls = env->GetObjectClass(g_context);
+    jmethodID mid = env->GetMethodID(cls, "refreshUI", "()V");
+    if (mid) {
+        env->CallVoidMethod(g_context, mid);
+    } else {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        LOGE("triggerJavaRefresh: Could not find refreshUI method");
+    }
+    
+    if (attached) g_jvm->DetachCurrentThread();
+}
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    g_jvm = vm;
+    return JNI_VERSION_1_6;
+}
+
+// =============================================================
+// JNI METHODS
+// =============================================================
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_init(JNIEnv* env, jobject thiz, jstring jPath) {
+    std::lock_guard<std::recursive_mutex> vaultLock(g_vaultMutex);
+    if (!g_vault) g_vault = std::make_unique<CipherMesh::Core::Vault>();
+    const char* path = env->GetStringUTFChars(jPath, nullptr);
+    if (path) {
+        g_vault->connect(std::string(path));
+        env->ReleaseStringUTFChars(jPath, path);
+    }
+    g_vault->setP2PSendCallback([](const std::string& target, const std::string& message) {
+        std::thread([target, message]() {
+            std::lock_guard<std::mutex> lock(g_p2pMutex);
+            if (g_p2p) g_p2p->sendP2PMessage(target, message);
+        }).detach();
+    });
+    g_vault->setSyncCallback([](const std::string& type, const std::string& payload) { triggerJavaRefresh(); });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_setActivityContext(JNIEnv* env, jobject thiz, jobject activity) {
+    std::lock_guard<std::mutex> lock(g_jniMutex);
+    if (g_context) env->DeleteGlobalRef(g_context);
+    if (activity) g_context = env->NewGlobalRef(activity);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_unlock(JNIEnv* env, jobject thiz, jstring password) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return false;
+    const char* pwd = env->GetStringUTFChars(password, 0);
+    bool result = g_vault->unlock(pwd);
+    env->ReleaseStringUTFChars(password, pwd);
+    
+    // [FIX] Process any pending sync jobs that accumulated while offline
+    if (result && g_vault && !g_vault->isLocked()) {
+        __android_log_print(ANDROID_LOG_DEBUG, "CipherMesh_JNI", "[MOBILE] Processing pending sync jobs after unlock");
+        g_vault->processAllPendingSync();
+    }
+    
+    return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_isLocked(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    return !g_vault || g_vault->isLocked();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_lock(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (g_vault) g_vault->lock();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_createAccount(JNIEnv* env, jobject thiz, jstring db_path, jstring username, jstring master_pass) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    const char* path = env->GetStringUTFChars(db_path, 0);
+    const char* user = env->GetStringUTFChars(username, 0);
+    const char* pwd = env->GetStringUTFChars(master_pass, 0);
+    if (!path || !user || !pwd) { return false; }
+    
+    g_vault = std::make_unique<CipherMesh::Core::Vault>();
+    bool result = g_vault->createNewVault(path, pwd, user);
+    if(result) {
+        g_vault->connect(path);
+        g_vault->unlock(pwd);
+        g_vault->setActiveGroup("Personal"); 
+    }
+    
+    env->ReleaseStringUTFChars(db_path, path);
+    env->ReleaseStringUTFChars(username, user);
+    env->ReleaseStringUTFChars(master_pass, pwd);
+    return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_hasUsers(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    return g_vault && g_vault->hasUsers();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getUserId(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if(!g_vault) return env->NewStringUTF("");
+    return env->NewStringUTF(g_vault->getUserId().c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_generateTOTP(JNIEnv* env, jobject thiz, jstring secret) {
+    const char* sec = env->GetStringUTFChars(secret, 0);
+    std::string code = CipherMesh::Utils::TOTP::generateCode(std::string(sec));
+    env->ReleaseStringUTFChars(secret, sec);
+    return env->NewStringUTF(code.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_registerSignalingCallback(JNIEnv* env, jobject thiz, jobject callback) {
+    std::lock_guard<std::mutex> lock(g_jniMutex);
+    if (g_signalingCallback != nullptr) { env->DeleteGlobalRef(g_signalingCallback); g_signalingCallback = nullptr; }
+    if (callback != nullptr) { g_signalingCallback = env->NewGlobalRef(callback); }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_onPeerOnline(JNIEnv* env, jobject thiz, jstring jUserId) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    const char* uid = env->GetStringUTFChars(jUserId, nullptr);
+    g_vault->processOutboxForUser(std::string(uid));
+    env->ReleaseStringUTFChars(jUserId, uid);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_handleSyncMessage(JNIEnv* env, jobject thiz, jstring jSender, jstring jPayload) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    const char* sender = env->GetStringUTFChars(jSender, nullptr);
+    const char* payload = env->GetStringUTFChars(jPayload, nullptr);
+    try { g_vault->handleIncomingSync(std::string(sender), std::string(payload)); } catch(...) {}
+    env->ReleaseStringUTFChars(jSender, sender);
+    env->ReleaseStringUTFChars(jPayload, payload);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_broadcastSync(JNIEnv* env, jobject thiz, jstring groupName) { 
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    const char* grp = env->GetStringUTFChars(groupName, nullptr);
+    g_vault->broadcastSync(grp);
+    env->ReleaseStringUTFChars(groupName, grp);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_receiveSignalingMessage(JNIEnv* env, jobject, jstring message) {
+    if (!message) return;
+    const char* msg = env->GetStringUTFChars(message, nullptr);
+    WebRTCService* p2p = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_p2pMutex);
+        p2p = g_p2p.get();
+    }
+    if (p2p) p2p->receiveSignalingMessage(msg);
+    env->ReleaseStringUTFChars(message, msg);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_respondToInvite(JNIEnv* env, jobject, jstring groupName, jstring senderId, jboolean accept) {
+    if (!groupName || !senderId) return;
+    const char* grp = env->GetStringUTFChars(groupName, nullptr);
+    const char* snd = env->GetStringUTFChars(senderId, nullptr);
+    std::string group(grp);
+    std::string sender(snd);
+    bool accepted = (accept == JNI_TRUE);
+    env->ReleaseStringUTFChars(groupName, grp);
+    env->ReleaseStringUTFChars(senderId, snd);
+
+    {
+        std::lock_guard<std::recursive_mutex> vaultLock(g_vaultMutex);
+        if (g_vault && accepted) g_vault->respondToInvite(group, sender, true);
+        else if (g_vault && !accepted) g_vault->respondToInvite(group, sender, false);
+    }
+    {
+        std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
+        if (g_p2p) {
+            // [FIX] Only send one invite-accept message with the group name included
+            // Don't call respondToInvite since we're manually constructing the message with group name
+            std::string msg;
+            if (accepted) {
+                msg = "{\"type\":\"invite-accept\",\"group\":\"" + group + "\"}";
+            } else {
+                msg = "{\"type\":\"invite-reject\",\"group\":\"" + group + "\"}";
+            }
+            g_p2p->sendP2PMessage(sender, msg);
+            LOGI("Sent %s to %s for group %s", accepted ? "invite-accept" : "invite-reject", sender.c_str(), group.c_str());
+        }
+    }
+    triggerJavaRefresh();
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getPendingInvites(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewObjectArray(0, env->FindClass("java/lang/String"), env->NewStringUTF(""));
+    std::vector<CipherMesh::Core::PendingInvite> invites = g_vault->getPendingInvites();
+    jclass cls = env->FindClass("java/lang/String");
+    jobjectArray res = env->NewObjectArray(invites.size(), cls, env->NewStringUTF(""));
+    for (size_t i = 0; i < invites.size(); i++) {
+        std::string s = std::to_string(invites[i].id) + "|" + invites[i].senderId + "|" + invites[i].groupName;
+        jstring js = env->NewStringUTF(s.c_str());
+        env->SetObjectArrayElement(res, i, js);
+        env->DeleteLocalRef(js);
+    }
+    return res;
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getGroupNames(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || g_vault->isLocked()) return env->NewObjectArray(0, env->FindClass("java/lang/String"), env->NewStringUTF(""));
+    std::vector<std::string> groups = g_vault->getGroupNames();
+    jclass cls = env->FindClass("java/lang/String");
+    jobjectArray res = env->NewObjectArray(groups.size(), cls, env->NewStringUTF(""));
+    for (size_t i = 0; i < groups.size(); i++) {
+        jstring s = env->NewStringUTF(groups[i].c_str());
+        env->SetObjectArrayElement(res, i, s);
+        env->DeleteLocalRef(s);
+    }
+    return res;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_addGroup(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return false;
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    bool res = g_vault->addGroup(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    return res;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_setActiveGroup(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex); 
+    if (!g_vault) return false;
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    bool result = g_vault->setActiveGroup(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    return result;
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getEntries(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || g_vault->isLocked()) return env->NewObjectArray(0, env->FindClass("java/lang/String"), env->NewStringUTF(""));
+    std::vector<CipherMesh::Core::VaultEntry> entries = g_vault->getEntries();
+    jclass strClass = env->FindClass("java/lang/String");
+    jobjectArray result = env->NewObjectArray(entries.size(), strClass, env->NewStringUTF(""));
+    for (size_t i = 0; i < entries.size(); i++) {
+        // Serialize locations as JSON array
+        std::ostringstream locationsJson;
+        locationsJson << "[";
+        for (size_t j = 0; j < entries[i].locations.size(); j++) {
+            locationsJson << "{\"type\":\"" << entries[i].locations[j].type << "\","
+                         << "\"value\":\"" << entries[i].locations[j].value << "\"}";
+            if (j < entries[i].locations.size() - 1) locationsJson << ",";
+        }
+        locationsJson << "]";
+        
+        std::string s = std::to_string(entries[i].id) + "|" + entries[i].title + "|" + 
+                       entries[i].username + "|" + entries[i].notes + "|" + 
+                       entries[i].entryType + "|" + entries[i].url + "|" + locationsJson.str();
+        jstring jStr = env->NewStringUTF(s.c_str());
+        env->SetObjectArrayElement(result, i, jStr);
+        env->DeleteLocalRef(jStr);
+    }
+    return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring signaling_url) {
+    std::lock_guard<std::recursive_mutex> vaultLock(g_vaultMutex);
+    std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
+    
+    if (!g_vault || g_p2p) return;
+    
+    g_p2p = std::make_unique<WebRTCService>("", g_vault->getUserId(), nullptr);
+
+    g_p2p->onSignalingMessage = [](std::string target, std::string type, std::string payload) {
+        sendSignalingToKotlin(target, type, payload);
+    };
+
+    // [FIX] Enable incremental sync
+    g_vault->setP2PSendCallback([](const std::string& userId, const std::string& msg) {
+        std::lock_guard<std::mutex> pLock(g_p2pMutex);
+        if (g_p2p) {
+            g_p2p->sendP2PMessage(userId, msg);
+        }
+    });
+
+
+
+    g_p2p->onPeerOnline = [](std::string userId) {
+        std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
+        if (g_vault) g_vault->onPeerOnline(userId);
+    };
+    
+    g_p2p->onIncomingInvite = [](std::string sender, std::string groupName) {
+        {
+            std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
+            if (g_vault) {
+                std::string payload = "{ \"group\": \"" + groupName + "\", \"owner\": \"" + sender + "\" }";
+                g_vault->storePendingInvite(sender, groupName, payload);
+            }
+        }
+        showToastFromNative("Invite from " + sender);
+        triggerJavaRefresh();
+    };
+
+    // [FIX] Route all group data through the core handleIncomingSync function
+    // This ensures consistent behavior between Android and Desktop, and proper
+    // active group context management
+    g_p2p->onGroupDataReceived = [](std::string senderId, std::string json) {
+        std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
+        if (!g_vault || g_vault->isLocked()) {
+            LOGW("Vault is null or locked, cannot process group data");
+            return;
+        }
+
+        LOGI("onGroupDataReceived from %s: %s", senderId.c_str(), json.substr(0, 100).c_str());
+        
+        // Use the core vault's handleIncomingSync for consistent behavior
+        try {
+            g_vault->handleIncomingSync(senderId, json);
+            LOGI("handleIncomingSync completed successfully");
+        } catch (const std::exception& ex) {
+            LOGE("Error handling group data: %s", ex.what());
+        } catch (...) {
+            LOGE("Unknown error handling group data");
+        }
+        
+        triggerJavaRefresh();
+    };
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_addEntryNative(JNIEnv* env, jobject thiz, jstring title, jstring user, jstring pass, jstring url, jstring notes) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    CipherMesh::Core::VaultEntry e;
+    const char* t = env->GetStringUTFChars(title, 0); e.title = t;
+    const char* u = env->GetStringUTFChars(user, 0); e.username = u;
+    const char* p = env->GetStringUTFChars(pass, 0); e.password = p;
+    const char* l = env->GetStringUTFChars(url, 0); 
+    e.url = l; // [FIX] Set main URL field
+    e.locations.push_back(CipherMesh::Core::Location(-1, "URL", l)); // Changed from "url" to "URL"
+    const char* n = env->GetStringUTFChars(notes, 0); e.notes = n;
+    try { g_vault->addEntry(e, e.password); } JNI_CATCH_VOID
+    env->ReleaseStringUTFChars(title, t); env->ReleaseStringUTFChars(user, u);
+    env->ReleaseStringUTFChars(pass, p); env->ReleaseStringUTFChars(url, l);
+    env->ReleaseStringUTFChars(notes, n);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getDecryptedPassword(JNIEnv* env, jobject thiz, jint index) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewStringUTF("");
+    try { return env->NewStringUTF(g_vault->getDecryptedPassword(index).c_str()); } JNI_CATCH_RETURN(env->NewStringUTF("Error"))
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getGroupMembers(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return nullptr;
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    std::vector<CipherMesh::Core::GroupMember> members = g_vault->getGroupMembers(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    jclass cls = env->FindClass("java/lang/String");
+    jobjectArray res = env->NewObjectArray(members.size(), cls, env->NewStringUTF(""));
+    for (size_t i = 0; i < members.size(); i++) {
+        std::string s = members[i].userId + "|" + members[i].role + "|" + members[i].status;
+        jstring jMember = env->NewStringUTF(s.c_str());
+        env->SetObjectArrayElement(res, i, jMember);
+        env->DeleteLocalRef(jMember); 
+    }
+    return res;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_sendP2PInvite(JNIEnv* env, jobject thiz, jstring groupName, jstring targetUser) {
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    const char* tgt = env->GetStringUTFChars(targetUser, 0);
+    std::string sGroup(grp);
+    std::string sTarget(tgt);
+    env->ReleaseStringUTFChars(groupName, grp); 
+    env->ReleaseStringUTFChars(targetUser, tgt);
+
+    std::thread([sGroup, sTarget]() {
+        std::vector<unsigned char> key;
+        std::vector<CipherMesh::Core::VaultEntry> entries;
+        bool dataLoaded = false;
+        {
+            std::lock_guard<std::recursive_mutex> vaultLock(g_vaultMutex);
+            if (g_vault) {
+                try {
+                    g_vault->addGroupMember(sGroup, sTarget, "member", "pending");
+                    key = g_vault->getGroupKey(sGroup);
+                    entries = g_vault->exportGroupEntries(sGroup);
+                    dataLoaded = true;
+                } catch (...) {}
+            }
+        } 
+        if (dataLoaded) {
+            std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
+            if (g_p2p) {
+                if (key.empty()) {
+                    LOGE("sendP2PInvite: Key for group %s is EMPTY! Handshake will likely fail.", sGroup.c_str());
+                    showToastFromNative("Error: Group Key not found!");
+                } else {
+                    LOGI("sendP2PInvite: Queueing invite for %s with key size %zu, entries %zu", sGroup.c_str(), key.size(), entries.size());
+                    g_p2p->queueInvite(sGroup, sTarget, key, entries);
+                    showToastFromNative("Handshake started with " + sTarget);
+                }
+            }
+        }
+    }).detach();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_queueGroupSplitSync(JNIEnv* env, jobject thiz, jstring groupName, jstring targetUser) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    const char* tgt = env->GetStringUTFChars(targetUser, 0);
+    try { g_vault->queueSyncForMember(grp, tgt, "GROUP_SPLIT", "{}"); } JNI_CATCH_VOID
+    env->ReleaseStringUTFChars(groupName, grp); env->ReleaseStringUTFChars(targetUser, tgt);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_isGroupOwner(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if(!g_vault) return false;
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    bool isOwner = g_vault->isGroupOwner(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    return isOwner;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_removeUser(JNIEnv* env, jobject thiz, jstring groupName, jstring targetUser) {
+     std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+     if(!g_vault) return;
+     const char* grp = env->GetStringUTFChars(groupName, 0);
+     const char* tgt = env->GetStringUTFChars(targetUser, 0);
+     try { g_vault->removeUser(std::string(grp), std::string(tgt)); } JNI_CATCH_VOID
+     env->ReleaseStringUTFChars(groupName, grp); env->ReleaseStringUTFChars(targetUser, tgt);
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_searchEntries(JNIEnv* env, jobject thiz, jstring searchTerm) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !searchTerm) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
+    const char* term = env->GetStringUTFChars(searchTerm, 0);
+    std::vector<CipherMesh::Core::VaultEntry> entries = g_vault->searchEntries(term);
+    env->ReleaseStringUTFChars(searchTerm, term);
+    jobjectArray result = env->NewObjectArray(entries.size(), env->FindClass("java/lang/String"), nullptr);
+    for (size_t i = 0; i < entries.size(); i++) {
+        std::string formatted = std::to_string(entries[i].id) + ":" + entries[i].title + ":" + entries[i].username;
+        jstring jstr = env->NewStringUTF(formatted.c_str());
+        env->SetObjectArrayElement(result, i, jstr);
+        env->DeleteLocalRef(jstr);
+    }
+    return result;
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getRecentlyAccessedEntries(JNIEnv* env, jobject thiz, jint limit) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
+    auto entries = g_vault->getRecentlyAccessedEntries(limit);
+    jobjectArray result = env->NewObjectArray(entries.size(), env->FindClass("java/lang/String"), nullptr);
+    for (size_t i = 0; i < entries.size(); i++) {
+        std::string formatted = std::to_string(entries[i].id) + ":" + entries[i].title + ":" + entries[i].username;
+        jstring jstr = env->NewStringUTF(formatted.c_str());
+        env->SetObjectArrayElement(result, i, jstr);
+        env->DeleteLocalRef(jstr);
+    }
+    return result;
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getPasswordHistory(JNIEnv* env, jobject thiz, jint entryId) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewObjectArray(0, env->FindClass("java/lang/String"), nullptr);
+    std::vector<CipherMesh::Core::PasswordHistoryEntry> history = g_vault->getPasswordHistory(entryId);
+    jobjectArray result = env->NewObjectArray(history.size(), env->FindClass("java/lang/String"), nullptr);
+    for (size_t i = 0; i < history.size(); i++) {
+        std::string formatted = std::to_string(history[i].id) + "|" + history[i].encryptedPassword + "|" + std::to_string(history[i].changedAt);
+        jstring jstr = env->NewStringUTF(formatted.c_str());
+        env->SetObjectArrayElement(result, i, jstr);
+        env->DeleteLocalRef(jstr);
+    }
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_decryptPasswordFromHistory(JNIEnv* env, jobject thiz, jstring encryptedPassword) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !encryptedPassword) return env->NewStringUTF("");
+    const char* encrypted = env->GetStringUTFChars(encryptedPassword, 0);
+    std::string decrypted;
+    try { decrypted = g_vault->decryptPasswordFromHistory(encrypted); } JNI_CATCH_RETURN(env->NewStringUTF("Error"))
+    env->ReleaseStringUTFChars(encryptedPassword, encrypted);
+    return env->NewStringUTF(decrypted.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_updateEntryAccessTime(JNIEnv* env, jobject thiz, jint entryId) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    try { g_vault->updateEntryAccessTime(entryId); } JNI_CATCH_VOID
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getEntryFullDetails(JNIEnv* env, jobject thiz, jint entryId) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewStringUTF("");
+    try {
+        return env->NewStringUTF(g_vault->getEntryFullDetails(entryId).c_str());
+    } JNI_CATCH_RETURN(env->NewStringUTF("Error|Decryption Failed|||"))
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_verifyMasterPassword(JNIEnv* env, jobject thiz, jstring password) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !password) return false;
+    const char* pwd = env->GetStringUTFChars(password, 0);
+    bool result = g_vault->verifyMasterPassword(pwd);
+    env->ReleaseStringUTFChars(password, pwd);
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getDisplayUsername(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return env->NewStringUTF("");
+    return env->NewStringUTF(g_vault->getDisplayUsername().c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_deleteGroup(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !groupName) return false;
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    bool result = g_vault->deleteGroup(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_getGroupOwner(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !groupName) return env->NewStringUTF("");
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    std::string owner = g_vault->getGroupOwner(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    return env->NewStringUTF(owner.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_updatePendingInviteStatus(JNIEnv* env, jobject thiz, jint inviteId, jstring status) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    const char* s = env->GetStringUTFChars(status, 0);
+    g_vault->updatePendingInviteStatus(inviteId, s);
+    env->ReleaseStringUTFChars(status, s);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_groupExists(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return false;
+    const char* name = env->GetStringUTFChars(groupName, 0);
+    bool result = g_vault->groupExists(name);
+    env->ReleaseStringUTFChars(groupName, name);
+    return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_deleteEntry(JNIEnv* env, jobject, jint id) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    try { return g_vault && g_vault->deleteEntry(id); } JNI_CATCH_RETURN(false)
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_updateEntry(JNIEnv* env, jobject thiz, jint id, jstring title, jstring user, jstring pass, jstring url, jstring notes) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return false;
+    
+    CipherMesh::Core::VaultEntry e;
+    e.id = id;
+    const char* t = env->GetStringUTFChars(title, 0); e.title = t;
+    const char* u = env->GetStringUTFChars(user, 0); e.username = u;
+    const char* n = env->GetStringUTFChars(notes, 0); e.notes = n;
+    const char* p = env->GetStringUTFChars(pass, 0); 
+    const char* l = env->GetStringUTFChars(url, 0); 
+    
+    e.url = l; 
+    if (e.url.length() > 0) {
+        e.locations.push_back(CipherMesh::Core::Location(-1, "url", l));
+    }
+    
+    bool res = false;
+    try { res = g_vault->updateEntry(e, std::string(p)); } JNI_CATCH_RETURN(false)
+    
+    env->ReleaseStringUTFChars(title, t);
+    env->ReleaseStringUTFChars(user, u);
+    env->ReleaseStringUTFChars(notes, n);
+    env->ReleaseStringUTFChars(pass, p);
+    env->ReleaseStringUTFChars(url, l);
+    return res;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_renameGroup(JNIEnv* env, jobject thiz, jstring oldName, jstring newName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return false;
+    const char* cOld = env->GetStringUTFChars(oldName, 0);
+    const char* cNew = env->GetStringUTFChars(newName, 0);
+    bool result = false;
+    try {
+        if (!g_vault->groupExists(cNew)) {
+            result = g_vault->renameGroup(cOld, cNew);
+            if (result) triggerJavaRefresh();
+        }
+    } JNI_CATCH_RETURN(false)
+    env->ReleaseStringUTFChars(oldName, cOld);
+    env->ReleaseStringUTFChars(newName, cNew);
+    return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_leaveGroup(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    try { g_vault->leaveGroup(grp); triggerJavaRefresh(); } JNI_CATCH_VOID
+    env->ReleaseStringUTFChars(groupName, grp);
+}
+
+// =============================================================
+// AUTOFILL SUPPORT
+// =============================================================
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_ciphermesh_mobile_core_Vault_findEntriesByLocation(JNIEnv* env, jobject thiz, jstring locationValue) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || g_vault->isLocked()) return nullptr;
+
+    const char* loc = env->GetStringUTFChars(locationValue, 0);
+    std::vector<CipherMesh::Core::VaultEntry> entries = g_vault->findEntriesByLocation(loc);
+    env->ReleaseStringUTFChars(locationValue, loc);
+
+    jclass cls = env->FindClass("java/lang/String");
+    jobjectArray res = env->NewObjectArray(entries.size(), cls, env->NewStringUTF(""));
+    
+    for (size_t i = 0; i < entries.size(); i++) {
+        std::string pass = g_vault->getDecryptedPassword(entries[i].id);
+        std::string s = std::to_string(entries[i].id) + "|" + entries[i].title + "|" + entries[i].username + "|" + pass;
+        
+        jstring js = env->NewStringUTF(s.c_str());
+        env->SetObjectArrayElement(res, i, js);
+        env->DeleteLocalRef(js);
+        
+        CipherMesh::Core::Crypto::secureWipe(pass);
+    }
+    return res;
+}
+
+// =============================================================
+// PASSWORD & VAULT MANAGEMENT
+// =============================================================
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_changeMasterPassword(JNIEnv* env, jobject thiz, jstring currentPassword, jstring newPassword) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !currentPassword || !newPassword) return false;
+    
+    const char* current = env->GetStringUTFChars(currentPassword, 0);
+    const char* newPwd = env->GetStringUTFChars(newPassword, 0);
+    
+    bool result = false;
+    try {
+        // First verify current password
+        if (g_vault->verifyMasterPassword(current)) {
+            result = g_vault->changeMasterPassword(newPwd);
+        }
+    } JNI_CATCH_RETURN(false)
+    
+    env->ReleaseStringUTFChars(currentPassword, current);
+    env->ReleaseStringUTFChars(newPassword, newPwd);
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_exportVault(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || g_vault->isLocked()) return env->NewStringUTF("");
+    
+    try {
+        // Export all groups and their entries as JSON with proper escaping
+        std::ostringstream json;
+        json << "{\"version\":2,\"groups\":[";
+        
+        std::vector<std::string> groups = g_vault->getGroupNames();
+        for (size_t g = 0; g < groups.size(); g++) {
+            if (g > 0) json << ",";
+            json << "{\"name\":\"" << escapeJsonString(groups[g]) << "\",";
+            
+            // Get group owner
+            std::string owner = g_vault->getGroupOwner(groups[g]);
+            json << "\"owner\":\"" << escapeJsonString(owner) << "\",";
+            
+            // Get members
+            json << "\"members\":" << g_vault->exportGroupMembers(groups[g]) << ",";
+            
+            // Get entries
+            g_vault->setActiveGroup(groups[g]);
+            std::vector<CipherMesh::Core::VaultEntry> entries = g_vault->getEntries();
+            json << "\"entries\":[";
+            for (size_t e = 0; e < entries.size(); e++) {
+                if (e > 0) json << ",";
+                std::string pwd = g_vault->getDecryptedPassword(entries[e].id);
+                // Access totpSecret field directly from struct
+                std::string totp = entries[e].totpSecret;
+                
+                json << "{\"title\":\"" << escapeJsonString(entries[e].title) << "\",";
+                json << "\"username\":\"" << escapeJsonString(entries[e].username) << "\",";
+                json << "\"password\":\"" << escapeJsonString(pwd) << "\",";
+                json << "\"url\":\"" << escapeJsonString(entries[e].url) << "\",";
+                json << "\"totp\":\"" << escapeJsonString(totp) << "\",";
+                json << "\"notes\":\"" << escapeJsonString(entries[e].notes) << "\"}";
+                
+                CipherMesh::Core::Crypto::secureWipe(pwd);
+                // totp is std::string, tricky to wipe since it's in the struct, but we wipe the local copy if needed? 
+                // The struct copy is managed by vector. We just wipe the decrypted pwd which we fetched.
+            }
+            json << "]}";
+        }
+        json << "]}";
+        
+        return env->NewStringUTF(json.str().c_str());
+    } JNI_CATCH_RETURN(env->NewStringUTF(""))
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_importVault(JNIEnv* env, jobject thiz, jstring data, jstring password) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !data || !password) return false;
+    
+    const char* jsonData = env->GetStringUTFChars(data, 0);
+    const char* pwd = env->GetStringUTFChars(password, 0);
+    std::string jsonStr(jsonData);
+    
+    bool result = false;
+    try {
+        // Verify the password matches current vault
+        if (!g_vault->verifyMasterPassword(pwd)) {
+            env->ReleaseStringUTFChars(data, jsonData);
+            env->ReleaseStringUTFChars(password, pwd);
+            return false;
+        }
+        
+        LOGI("Import vault called with %zu bytes of data", jsonStr.length());
+        
+        // Parse groups array - find each group object
+        size_t groupsStart = jsonStr.find("\"groups\":[");
+        if (groupsStart == std::string::npos) {
+            LOGE("Import: No groups array found");
+            env->ReleaseStringUTFChars(data, jsonData);
+            env->ReleaseStringUTFChars(password, pwd);
+            return false;
+        }
+        
+        int importedGroups = 0;
+        int importedEntries = 0;
+        
+        // Simple JSON parsing - find group objects
+        size_t pos = groupsStart;
+        while ((pos = jsonStr.find("\"name\":\"", pos)) != std::string::npos) {
+            pos += 8; // skip past "name":"
+            size_t nameEnd = pos;
+            while (nameEnd < jsonStr.length() && !(jsonStr[nameEnd] == '"' && jsonStr[nameEnd-1] != '\\')) nameEnd++;
+            std::string groupName = jsonStr.substr(pos, nameEnd - pos);
+            
+            // Check if group exists, create if not
+            std::vector<std::string> existingGroups = g_vault->getGroupNames();
+            bool groupExists = std::find(existingGroups.begin(), existingGroups.end(), groupName) != existingGroups.end();
+            
+            if (!groupExists) {
+                g_vault->addGroup(groupName);
+                importedGroups++;
+                LOGI("Import: Created group '%s'", groupName.c_str());
+            }
+            g_vault->setActiveGroup(groupName);
+            
+            // Find entries array for this group
+            size_t entriesStart = jsonStr.find("\"entries\":[", nameEnd);
+            if (entriesStart == std::string::npos) continue;
+            
+            // Find the end of entries array
+            int bracketCount = 1;
+            size_t entryPos = entriesStart + 11; // skip past "entries":
+            while (entryPos < jsonStr.length() && bracketCount > 0) {
+                if (jsonStr[entryPos] == '[') bracketCount++;
+                else if (jsonStr[entryPos] == ']') bracketCount--;
+                entryPos++;
+            }
+            std::string entriesSection = jsonStr.substr(entriesStart, entryPos - entriesStart);
+            
+            // Parse individual entries
+            size_t ePos = 0;
+            while ((ePos = entriesSection.find("\"title\":\"", ePos)) != std::string::npos) {
+                // Extract entry fields
+                std::string title = extractJsonValueJNI(entriesSection.substr(ePos), "title");
+                std::string username = extractJsonValueJNI(entriesSection.substr(ePos), "username");
+                std::string password_val = extractJsonValueJNI(entriesSection.substr(ePos), "password");
+                std::string url = extractJsonValueJNI(entriesSection.substr(ePos), "url");
+                std::string notes = extractJsonValueJNI(entriesSection.substr(ePos), "notes");
+                std::string totp = extractJsonValueJNI(entriesSection.substr(ePos), "totp");
+                
+                if (!title.empty() && !password_val.empty()) {
+                    // Create VaultEntry struct
+                    CipherMesh::Core::VaultEntry entry;
+                    entry.title = title;
+                    entry.username = username;
+                    entry.url = url;
+                    entry.notes = notes;
+                    entry.totpSecret = totp; // Set TOTP secret directly
+                    
+                    bool added = g_vault->addEntry(entry, password_val);
+                    if (added) {
+                        importedEntries++;
+                        LOGI("Import: Added entry '%s' with TOTP len %zu", title.c_str(), totp.length());
+                    }
+                }
+                ePos++;
+            }
+            
+            pos = entryPos; // Move past this group
+        }
+        
+        LOGI("Import complete: %d groups, %d entries", importedGroups, importedEntries);
+        result = (importedGroups > 0 || importedEntries > 0);
+        
+    } JNI_CATCH_RETURN(false)
+    
+    env->ReleaseStringUTFChars(data, jsonData);
+    env->ReleaseStringUTFChars(password, pwd);
+    return result;
+}

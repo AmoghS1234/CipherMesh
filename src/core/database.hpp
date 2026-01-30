@@ -1,21 +1,25 @@
-#pragma once
+#ifndef CIPHERMESH_CORE_DATABASE_HPP
+#define CIPHERMESH_CORE_DATABASE_HPP
 
 #include <string>
 #include <vector>
 #include <map>
-#include <stdexcept>
-#include <QSqlDatabase>
+#include "vault_entry.hpp"
 
-// Include existing definitions to prevent redefinition errors
-#include "vault_entry.hpp" 
+#if defined(__ANDROID__) || defined(ANDROID)
+    typedef struct sqlite3 sqlite3;
+#else
+    #include <QSqlDatabase>
+#endif
 
 namespace CipherMesh {
 namespace Core {
 
-// Exception class for Database errors
-class DBException : public std::runtime_error {
+class DBException : public std::exception {
+    std::string msg;
 public:
-    explicit DBException(const std::string& msg) : std::runtime_error(msg) {}
+    DBException(const std::string& m) : msg(m) {}
+    const char* what() const noexcept override { return msg.c_str(); }
 };
 
 class Database {
@@ -23,16 +27,11 @@ public:
     Database();
     ~Database();
 
-    // Core Management
     void open(const std::string& path);
     void close();
-    bool isOpen() const; // <--- FIX: Added missing method
+    bool isOpen() const;
     void createTables();
     void exec(const std::string& sql);
-
-    // Metadata
-    void storeMetadata(const std::string& key, const std::vector<unsigned char>& value);
-    std::vector<unsigned char> getMetadata(const std::string& key);
 
     // Groups
     void storeEncryptedGroup(const std::string& name, const std::vector<unsigned char>& encryptedKey, const std::string& ownerId);
@@ -44,47 +43,65 @@ public:
     int getGroupId(const std::string& name);
     int getGroupIdForEntry(int entryId);
     bool deleteGroup(const std::string& name);
+    std::string getGroupOwner(int groupId);
+    void updateGroupOwner(int groupId, const std::string& ownerId);
+
+    // Members
+    void addGroupMember(int groupId, const std::string& userId, const std::string& role, const std::string& status);
+    std::vector<GroupMember> getGroupMembers(int groupId);
+    void removeGroupMember(int groupId, const std::string& userId);
+    void setGroupPermissions(int groupId, bool adminsOnly);
+    GroupPermissions getGroupPermissions(int groupId);
+    void updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole);
+    void updateGroupMemberStatus(int groupId, const std::string& userId, const std::string& newStatus);
 
     // Entries
     void storeEntry(int groupId, VaultEntry& entry, const std::vector<unsigned char>& encryptedPassword);
     std::vector<VaultEntry> getEntriesForGroup(int groupId);
     std::vector<Location> getLocationsForEntry(int entryId);
+    std::vector<unsigned char> getEncryptedPassword(int entryId);
+    void updateEntry(const VaultEntry& entry, const std::vector<unsigned char>* newEncryptedPassword);
+    bool deleteEntry(int entryId);
+    
+    // [NEW] Phase 3: Cleanup
+    void cleanupTombstones(long long olderThanTimestamp);
+
+    bool entryExists(const std::string& username, const std::string& locationValue);
     std::vector<VaultEntry> findEntriesByLocation(const std::string& locationValue);
     std::vector<VaultEntry> searchEntries(const std::string& searchTerm);
-    std::vector<unsigned char> getEncryptedPassword(int entryId);
-    bool deleteEntry(int entryId);
-    void updateEntry(const VaultEntry& entry, const std::vector<unsigned char>* newEncryptedPassword = nullptr);
-    bool entryExists(const std::string& username, const std::string& locationValue);
+    std::vector<VaultEntry> getRecentlyAccessedEntries(int groupId, int limit);
+    void updateEntryAccessTime(int entryId);
 
-    // Password History
+    // Metadata & History
+    void storeMetadata(const std::string& key, const std::vector<unsigned char>& value);
+    std::vector<unsigned char> getMetadata(const std::string& key);
     void storePasswordHistory(int entryId, const std::vector<unsigned char>& oldEncryptedPassword);
     std::vector<PasswordHistoryEntry> getPasswordHistory(int entryId);
     void deleteOldPasswordHistory(int entryId, int keepCount);
 
-    // Access Tracking
-    void updateEntryAccessTime(int entryId);
-    std::vector<VaultEntry> getRecentlyAccessedEntries(int groupId, int limit);
-
-    // Pending Invites
+    // Invites
     void storePendingInvite(const std::string& senderId, const std::string& groupName, const std::string& payloadJson);
-    void updatePendingInviteStatus(int inviteId, const std::string& status);
     std::vector<PendingInvite> getPendingInvites();
     void deletePendingInvite(int inviteId);
+    void updatePendingInviteStatus(int inviteId, const std::string& status);
 
-    // Group Members & Permissions
-    void addGroupMember(int groupId, const std::string& userId, const std::string& role, const std::string& status);
-    void removeGroupMember(int groupId, const std::string& userId);
-    void updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole);
-    void updateGroupMemberStatus(int groupId, const std::string& userId, const std::string& newStatus);
-    std::vector<GroupMember> getGroupMembers(int groupId);
-    
-    void setGroupPermissions(int groupId, bool adminsOnly);
-    GroupPermissions getGroupPermissions(int groupId);
-    std::string getGroupOwner(int groupId);
+    std::vector<VaultEntry> getRecentEntries(int limit);
+
+    // Sync Queue
+    void storeSyncJob(const std::string& targetUser, const std::string& groupName, const std::string& operation, const std::string& payload);
+    std::vector<SyncJob> getSyncJobsForUser(const std::string& userId);
+    void deleteSyncJob(int jobId);
 
 private:
-    QSqlDatabase m_db; 
+#if defined(__ANDROID__) || defined(ANDROID)
+    sqlite3* m_db_handle;
+#else
+    std::string m_connectionName;
+    QSqlDatabase m_db;
+#endif
 };
 
 } // namespace Core
 } // namespace CipherMesh
+
+#endif

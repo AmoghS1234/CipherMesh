@@ -4,8 +4,8 @@ cmake_minimum_required(VERSION 3.16)
 # 1. Dependencies
 # ======================
 
-# Qt6 Core (for SHA-1 in breach detection)
-find_package(Qt6 REQUIRED COMPONENTS Core)
+# Qt6 Core and Sql (for Database)
+find_package(Qt6 REQUIRED COMPONENTS Core Sql)
 
 # libsodium
 if(WIN32)
@@ -56,6 +56,7 @@ if(WIN32)
             unofficial-sodium::sodium
             SQLite::SQLite3
             Qt6::Core
+            Qt6::Sql
     )
 else()
     target_link_libraries(ciphermesh-core
@@ -63,5 +64,6 @@ else()
             ${SODIUM_LIBRARIES}
             SQLite::SQLite3
             Qt6::Core
+            Qt6::Sql
     )
 endif()

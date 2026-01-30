@@ -67,5 +67,5 @@ private:
     QPushButton* m_inviteButton;
     QPushButton* m_removeButton;
     QLabel* m_statusLabel;
-    QCheckBox* m_adminOnlyCheckbox; // <-- NEW
+    // [REMOVED] m_adminOnlyCheckbox - Admin-only restriction feature removed for mobile parity
 };

@@ -1,6 +1,7 @@
 #include "sharegroupdialog.hpp"
 #include "vault.hpp" 
 #include "crypto.hpp" 
+#include "mainwindow.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -23,7 +24,25 @@ ShareGroupDialog::ShareGroupDialog(const QString& groupName,
     : QDialog(parent), m_groupName(groupName), m_p2pService(p2pService), m_vault(vault)
 {
     setupUi();
-    setWindowTitle("Manage Group: " + m_groupName);
+    
+    // Check if user is owner to set appropriate title
+    bool isOwner = false;
+    try {
+        int groupId = m_vault->getGroupId(m_groupName.toStdString());
+        std::string myId = m_vault->getUserId();
+        std::string ownerId = m_vault->getGroupOwner(groupId);
+        isOwner = (myId == ownerId);
+    } catch (...) {
+        isOwner = false;
+    }
+    
+    setWindowTitle(isOwner ? "Manage Group: " + m_groupName : "Members: " + m_groupName);
+    
+    // Hide invite/remove buttons for non-owners - matching mobile behavior
+    if (!isOwner) {
+        m_inviteButton->setVisible(false);
+        m_removeButton->setVisible(false);
+    }
     
     connect(this, &ShareGroupDialog::internalGroupMembersUpdated, this, &ShareGroupDialog::updateMemberList);
     connect(this, &ShareGroupDialog::internalInviteStatus, this, &ShareGroupDialog::showStatusMessage);
@@ -32,6 +51,15 @@ ShareGroupDialog::ShareGroupDialog(const QString& groupName,
     setupServiceCallbacks();
     loadMembers(); 
     loadPermissions();
+    
+    // Connect to MainWindow signals for global updates
+    if (MainWindow* mw = qobject_cast<MainWindow*>(parent)) {
+        connect(mw, &MainWindow::groupMembersUpdated, this, [this](const QString& groupName) {
+            if (groupName == m_groupName) {
+                loadMembers();
+            }
+        });
+    }
 }
 
 ShareGroupDialog::~ShareGroupDialog() {
@@ -62,30 +90,8 @@ void ShareGroupDialog::loadMembers() {
 }
 
 void ShareGroupDialog::loadPermissions() {
-    if (!m_vault) return;
-    try {
-        int groupId = m_vault->getGroupId(m_groupName.toStdString());
-        CipherMesh::Core::GroupPermissions perms = m_vault->getGroupPermissions(groupId);
-        
-        // Block signals to prevent triggering onToggleAdminOnly while loading
-        m_adminOnlyCheckbox->blockSignals(true);
-        m_adminOnlyCheckbox->setChecked(perms.adminsOnlyWrite);
-        m_adminOnlyCheckbox->blockSignals(false);
-        
-        // Only Owner can change this setting
-        std::string myId = m_vault->getUserId();
-        std::string ownerId = m_vault->getGroupOwner(groupId);
-        
-        if (myId != ownerId) {
-            m_adminOnlyCheckbox->setEnabled(false);
-            m_adminOnlyCheckbox->setToolTip("Only the Owner can change permissions.");
-        } else {
-            m_adminOnlyCheckbox->setEnabled(true);
-            m_adminOnlyCheckbox->setToolTip("When enabled, only Admins and Owner can edit entries in this group.");
-        }
-    } catch (const std::exception& e) {
-        qWarning() << "Failed to load group permissions:" << e.what();
-    }
+    // [REMOVED] Admin-only restriction feature to match mobile implementation
+    // Mobile doesn't have this feature, so desktop shouldn't either
 }
 
 void ShareGroupDialog::setupServiceCallbacks() {
@@ -116,10 +122,7 @@ void ShareGroupDialog::setupUi() {
     idLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     mainLayout->addWidget(idLabel);
     
-    // --- Permission Checkbox ---
-    m_adminOnlyCheckbox = new QCheckBox("Restrict editing to Admins only", this);
-    connect(m_adminOnlyCheckbox, &QCheckBox::toggled, this, &ShareGroupDialog::onToggleAdminOnly);
-    mainLayout->addWidget(m_adminOnlyCheckbox);
+    // [REMOVED] Admin-only permission checkbox - not in mobile, so removed for parity
 
     QLabel* listLabel = new QLabel("Members:", this);
     listLabel->setStyleSheet("font-weight: bold; margin-top: 8px;");
@@ -169,32 +172,34 @@ void ShareGroupDialog::updateMemberList(const QList<UIGroupMember>& members) {
     QString myId = QString::fromStdString(m_vault->getUserId());
 
     for (const auto& member : members) {
-        QString suffix = "";
-        QString idToDisplay = member.id;
+        QString displayText = member.id;
         
-        // Add "(You)" for clarity, but keep the ID
+        // [FIX] Add "(You)" after the userId if it's the current user - matching mobile
         if (member.id == myId) {
-            idToDisplay += " (You)";
+            displayText += " (You)";
         }
-
-        // Determine Role/Status Text
+        
+        // [FIX] Determine color and prefix based on role/status - matching mobile format
         QColor textColor = QColor("#FFFFFF"); // Default White
+        QString prefix = "";
         
         if (member.status == "pending") {
-            suffix = " (Invite Sent)";
-            textColor = QColor("#FFA000"); // Orange
+            textColor = QColor("#FFA000"); // Orange for pending
+            displayText += " (Invite Sent)";
         } 
         else if (member.role == "owner") {
-            suffix = " ★ Owner";
-            textColor = QColor("#4CAF50"); // Green
+            prefix = "★ ";  // Star BEFORE userId - matching mobile
+            textColor = QColor("#4CAF50"); // Green for owner
         }
         else if (member.role == "admin") {
-            suffix = " 🛡️ Admin";
-            textColor = QColor("#2196F3"); // Blue
+            prefix = "🛡️ ";  // Shield BEFORE userId - matching mobile
+            textColor = QColor("#2196F3"); // Blue for admin
         }
-        // No text for "member" status="accepted"
-
-        QString displayText = idToDisplay + suffix;
+        // Regular members stay white with no prefix
+        
+        // Construct final display text with prefix
+        displayText = prefix + displayText;
+        
         QListWidgetItem* item = new QListWidgetItem(displayText, m_memberListWidget);
         
         // Store metadata
@@ -260,50 +265,34 @@ void ShareGroupDialog::demoteUser() {
 }
 
 void ShareGroupDialog::onToggleAdminOnly(bool checked) {
-    int groupId = m_vault->getGroupId(m_groupName.toStdString());
-    m_vault->setGroupPermissions(groupId, checked);
+    // [REMOVED] Admin-only feature to match mobile implementation
+    (void)checked; // Suppress unused parameter warning
 }
 
 void ShareGroupDialog::onInviteClicked() {
     if (!m_vault || !m_p2pService) return;
 
-    // Create a custom dialog instead of using QInputDialog
     QDialog inviteDialog(this);
     inviteDialog.setWindowTitle("Invite User");
     inviteDialog.setMinimumWidth(400);
     
     QVBoxLayout* layout = new QVBoxLayout(&inviteDialog);
-    layout->setContentsMargins(20, 20, 20, 20);
-    layout->setSpacing(16);
     
     QLabel* titleLabel = new QLabel("Invite User to Group", &inviteDialog);
     titleLabel->setObjectName("DialogTitle");
     layout->addWidget(titleLabel);
     
-    QLabel* infoLabel = new QLabel(
-        "Enter the User ID of the person you want to invite to this group.\n"
-        "They will receive access to all entries in this group.",
-        &inviteDialog
-    );
-    infoLabel->setWordWrap(true);
-    layout->addWidget(infoLabel);
-    
     QLabel* inputLabel = new QLabel("User ID:", &inviteDialog);
     layout->addWidget(inputLabel);
     
     QLineEdit* userIdInput = new QLineEdit(&inviteDialog);
-    userIdInput->setPlaceholderText("e.g., user@example.com or user-id-123");
+    userIdInput->setPlaceholderText("e.g., user@example.com");
     layout->addWidget(userIdInput);
     
     QHBoxLayout* buttonLayout = new QHBoxLayout();
-    buttonLayout->setSpacing(8);
-    
     QPushButton* cancelButton = new QPushButton("Cancel", &inviteDialog);
-    cancelButton->setMinimumWidth(100);
-    
     QPushButton* inviteButton = new QPushButton("Send Invite", &inviteDialog);
     inviteButton->setObjectName("NewButton");
-    inviteButton->setMinimumWidth(100);
     inviteButton->setDefault(true);
     
     buttonLayout->addStretch();
@@ -313,7 +302,6 @@ void ShareGroupDialog::onInviteClicked() {
     
     connect(cancelButton, &QPushButton::clicked, &inviteDialog, &QDialog::reject);
     connect(inviteButton, &QPushButton::clicked, &inviteDialog, &QDialog::accept);
-    connect(userIdInput, &QLineEdit::returnPressed, &inviteDialog, &QDialog::accept);
     
     if (inviteDialog.exec() == QDialog::Accepted) {
         QString email = userIdInput->text().trimmed();
@@ -321,13 +309,29 @@ void ShareGroupDialog::onInviteClicked() {
             m_statusLabel->setText("Preparing data...");
             
             try {
+                // 1. Get Key
                 std::vector<unsigned char> key = m_vault->getGroupKey(m_groupName.toStdString());
+                
+                // 2. Get Entries
                 std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(m_groupName.toStdString());
                 
-                m_statusLabel->setText("Sending invite...");
-                m_p2pService->inviteUser(m_groupName.toStdString(), email.toStdString(), key, entries);
+                // 3. Get Members (New)
+                std::string members = m_vault->exportGroupMembers(m_groupName.toStdString());
                 
+                m_statusLabel->setText("Sending invite...");
+                
+                // 4. Send Invite via P2P
+                m_p2pService->inviteUser(
+                    m_groupName.toStdString(), 
+                    email.toStdString(), 
+                    key, 
+                    entries, 
+                    members // Pass members here
+                );
+                
+                // 5. Add Pending Member Locally
                 m_vault->addGroupMember(m_groupName.toStdString(), email.toStdString(), "member", "pending");
+                
                 loadMembers();
                 CipherMesh::Core::Crypto::secureWipe(key);
                 

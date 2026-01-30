@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    
+    <item
+        android:id="@+id/action_search"
+        android:icon="@android:drawable/ic_menu_search"
+        android:title="@string/action_search"
+        app:showAsAction="ifRoom|collapseActionView"
+        app:actionViewClass="androidx.appcompat.widget.SearchView"/>
+    
+    <item
+        android:id="@+id/action_reconnect"
+        android:icon="@android:drawable/ic_menu_rotate"
+        android:title="Reconnect"
+        app:showAsAction="ifRoom"/>
+
+    <item
+        android:id="@+id/action_group_settings"
+        android:icon="@android:drawable/ic_menu_preferences"
+        android:title="Group Settings"
+        app:showAsAction="ifRoom"
+        android:visible="false"/>
+</menu>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_500">#6200EE</color>
+    <color name="purple_700">#3700B3</color>
+    <color name="teal_200">#03DAC5</color>
+    <color name="teal_700">#018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="error_red">#CF6679</color>
+
+    <color name="prof_header_black">#000000</color>
+
+    <!-- Professional Dark Theme Colors -->
+    <color name="prof_bg">#121212</color>          
+    <color name="prof_surface">#1E1E1E</color>     
+    <color name="prof_primary">#90CAF9</color>     
+    <color name="prof_variant">#2C2C2C</color>     
+    <color name="prof_secondary">#81C784</color>   
+    <color name="prof_text_primary">#E0E0E0</color>
+    <color name="prof_text_secondary">#B0B0B0</color>
+    <color name="prof_divider">#333333</color>
+
+    <!-- Modern Light Theme Colors -->
+    <color name="light_bg">#FFFFFF</color>
+    <color name="light_surface">#F5F5F5</color>
+    <color name="light_primary">#0277BD</color>    
+    <color name="light_variant">#E0E0E0</color>
+    <color name="light_secondary">#2E7D32</color>
+    <color name="light_text_primary">#212121</color>
+    <color name="light_text_secondary">#616161</color>
+    <color name="light_divider">#EEEEEE</color>
+    <color name="light_control">#424242</color>
+
+    <!-- Status Indicator Colors -->
+    <color name="status_connected">#4CAF50</color>
+    <color name="status_connecting">#FFC107</color>
+    <color name="status_disconnected">#F44336</color>
+</resources>
