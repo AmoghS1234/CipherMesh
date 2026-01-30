@@ -29,11 +29,8 @@ class RecentEntriesActivity : AppCompatActivity() {
     private fun applySavedTheme() {
         val idx = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getInt("theme_index", 0)
         val themes = listOf(
-            R.style.Theme_CipherMesh_Professional, 
-            R.style.Theme_CipherMesh_ModernLight, 
-            R.style.Theme_CipherMesh_Ocean, 
-            R.style.Theme_CipherMesh_Warm, 
-            R.style.Theme_CipherMesh_Vibrant
+            R.style.Theme_CipherMesh_Professional,
+            R.style.Theme_CipherMesh_ModernLight
         )
         if(idx in themes.indices) setTheme(themes[idx])
     }

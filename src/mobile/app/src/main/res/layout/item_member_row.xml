@@ -37,7 +37,7 @@
         android:layout_height="32dp"
         android:src="@android:drawable/ic_menu_close_clear_cancel"
         android:background="?android:attr/selectableItemBackgroundBorderless"
-        app:tint="#D32F2F"
+        app:tint="?attr/colorError"
         android:visibility="gone"/>
 
 </LinearLayout>

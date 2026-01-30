@@ -12,7 +12,7 @@
         android:layout_marginTop="12dp"
         android:layout_marginBottom="12dp"
         android:layout_gravity="center_horizontal"
-        android:background="#55888888" />
+        android:background="?android:attr/listDivider" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -98,11 +98,11 @@
         android:text="Delete Entry"
         android:drawableStart="@android:drawable/ic_menu_delete"
         android:drawablePadding="16dp"
-        android:drawableTint="#FF5555"
+        android:drawableTint="?attr/colorError"
         android:gravity="center_vertical"
         android:padding="16dp"
         android:textSize="16sp"
-        android:textColor="#FF5555"
+        android:textColor="?attr/colorError"
         android:textStyle="bold"
         android:background="?android:attr/selectableItemBackground"/>
 

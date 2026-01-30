@@ -240,7 +240,8 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             if (onIncomingInvite) onIncomingInvite(peerId, extractJsonValue(msg, "group"));
         }
         else if (type == "invite-accept") {
-            std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            // ... (keep existing invite-accept logic)
+             std::lock_guard<std::recursive_mutex> lock(m_mutex);
             
             bool hasPendingInvite = m_pendingInvites.count(peerId) > 0;
             bool hasPendingKeys = m_pendingKeys.count(peerId) > 0;
@@ -275,7 +276,10 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
                  type == "member-leave" || type == "member-kick") {
             if (onGroupDataReceived) onGroupDataReceived(peerId, msg);
         }
-        // [FIX] Removed separate sync-payload handler block as it's now handled by onGroupDataReceived above
+        else {
+            // [DEBUG] Fallback: Forward everything else to Vault for analysis
+            if (onGroupDataReceived) onGroupDataReceived(peerId, msg);
+        }
     });
 }
 

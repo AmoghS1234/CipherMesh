@@ -28,6 +28,7 @@ class Vault {
     external fun setActivityContext(activity: Activity)
     external fun createAccount(dbPath: String, username: String, masterPass: String): Boolean
     external fun unlock(password: String): Boolean
+    external fun lock()
     external fun isLocked(): Boolean
     external fun verifyMasterPassword(password: String): Boolean
     external fun hasUsers(): Boolean
@@ -117,4 +118,11 @@ class Vault {
     external fun decryptPasswordFromHistory(encryptedPassword: String): String
     external fun updateEntryAccessTime(entryId: Int)
     external fun getEntryFullDetails(entryId: Int): String
+    
+    // Password management
+    external fun changeMasterPassword(currentPassword: String, newPassword: String): Boolean
+    
+    // Export/Import vault data
+    external fun exportVault(): String
+    external fun importVault(data: String, password: String): Boolean
 }

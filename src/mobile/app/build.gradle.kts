@@ -20,6 +20,7 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
+                arguments += "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
             }
         }
     }
@@ -49,7 +50,7 @@ android {
     buildFeatures {
         viewBinding = true
     }
-    ndkVersion = "27.2.12479018"
+    ndkVersion = "26.1.10909125"
 }
 
 dependencies {

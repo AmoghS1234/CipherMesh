@@ -467,6 +467,13 @@ int Vault::findGroupIdForSync(const std::string& remoteGroupName, const std::str
          LOG_DEBUG("findGroupIdForSync: found explicit derived match '" + derivedName + "' id " + std::to_string(derivedId));
          return derivedId;
     }
+    
+    // 2b. Try derived name with LOWERCASE sender (Case Insensitivity)
+    std::string derivedNameLower = remoteGroupName + " (from " + senderLower + ")";
+    if (m_db->getGroupId(derivedNameLower) != -1) {
+         LOG_DEBUG("findGroupIdForSync: found derived match (lower) id " + std::to_string(m_db->getGroupId(derivedNameLower)));
+         return m_db->getGroupId(derivedNameLower);
+    }
 
     // 3. Try generic prefix match (fallback for renamed split groups)
     std::vector<std::string> allGroups = m_db->getAllGroupNames();
@@ -762,6 +769,7 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         }
 
         gid = findGroupIdForSync(group, senderId);
+        
         if (gid == -1) {
             LOGW("handleIncomingSync: Group '" + group + "' from sender " + senderId + " NOT FOUND locally. Acknowledging but skipping processing.");
             goto SEND_ACK; 
@@ -770,93 +778,87 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         groupKey = m_crypto->decrypt(m_db->getEncryptedGroupKeyById(gid), m_masterKey_RAM);
 
         if (op == "UPSERT") {
-            VaultEntry e;
-            e.uuid = getJsonString(dataJson, "uuid");
-            e.updatedAt = getJsonLong(dataJson, "updatedAt");
+            try {
+                LOG_DEBUG("handleIncomingSync: Processing UPSERT for group '" + group + "'");
 
+                VaultEntry e;
+            e.uuid = getJsonString(dataJson, "uuid");
+            e.title = getJsonString(dataJson, "title");
+            e.username = getJsonString(dataJson, "username");
+            e.notes = getJsonString(dataJson, "notes");
+            e.url = getJsonString(dataJson, "url");
+            e.totpSecret = getJsonString(dataJson, "totpSecret");
+            e.updatedAt = getJsonLong(dataJson, "updatedAt");
+            e.entryType = getJsonString(dataJson, "type");
+            
+            // Locations Parsing (Defensive)
+            try {
+                e.locations.clear();
+                if (dataJson.find("\"locations\"") != std::string::npos) {
+                     size_t locPos = dataJson.find("\"locations\"");
+                     size_t arrStart = dataJson.find('[', locPos);
+                     if (arrStart != std::string::npos) {
+                        size_t objStart = arrStart;
+                        while ((objStart = dataJson.find('{', objStart)) != std::string::npos) {
+                            size_t objEnd = dataJson.find('}', objStart);
+                             if (objEnd == std::string::npos || objEnd > dataJson.find(']', arrStart)) break;
+                            std::string locObj = dataJson.substr(objStart, objEnd - objStart + 1);
+                            
+                            std::string locType = getJsonString(locObj, "locType");
+                            std::string locValue = getJsonString(locObj, "value");
+                            if (locType == "url") locType = "URL"; // Normalize
+                            
+                            if (!locType.empty() && !locValue.empty()) {
+                                e.locations.push_back(Location(-1, locType, locValue));
+                            }
+                            objStart = objEnd + 1;
+                        }
+                     }
+                }
+            } catch (...) {
+                LOGW("UPSERT: Error parsing locations, proceeding without them.");
+            }
+            
+            // Fallback location
+            if (e.locations.empty() && !e.url.empty()) {
+               e.locations.push_back(Location(-1, "URL", e.url));
+            }
+
+            std::vector<unsigned char> encPass;
+            try {
+                encPass = base64DecodeInternal(getJsonString(dataJson, "password"));
+            } catch (...) {}
+            
+            // Check if entry exists by UUID in this group
+            bool found = false;
             auto locals = m_db->getEntriesForGroup(gid);
-            found = false;
             for (auto& l : locals) {
                 if (l.uuid == e.uuid) {
-                    // IDEMPOTENCY: If local is newer or same, ignore but still ACK
-                    LOG_DEBUG("UPSERT: Found existing entry with uuid " + e.uuid + ", local updatedAt=" + std::to_string(l.updatedAt) + ", remote updatedAt=" + std::to_string(e.updatedAt));
-                    if (l.updatedAt >= e.updatedAt) {
-                        LOG_DEBUG("UPSERT: Skipping update - local is newer or same");
-                        goto SEND_ACK;
+                    // IDEMPOTENCY: Only skip if Remote has a VALID timestamp AND Local is NEWER.
+                    // If Remote timestamp is 0 (missing/parse fail), we FORCE UPDATE to be safe.
+                    if (e.updatedAt > 0 && l.updatedAt > e.updatedAt) {
+                        LOG_DEBUG("UPSERT: Skipping update - local is newer for uuid " + e.uuid);
+                        goto SEND_ACK; 
                     }
-                    e.id = l.id;
                     found = true;
+                    e.id = l.id; // Preserve ID
                     break;
                 }
             }
-
-            e.title = getJsonString(dataJson, "title");
-            e.username = getJsonString(dataJson, "username");
-            e.url = getJsonString(dataJson, "url");
-            e.notes = getJsonString(dataJson, "notes");
-            e.entryType = getJsonString(dataJson, "type");
             
-            // [FIX] Parse locations array from UPSERT payload (critical for Desktop→Mobile sync)
-            e.locations.clear();
-            size_t locPos = dataJson.find("\"locations\"");
-            if (locPos != std::string::npos) {
-                size_t arrStart = dataJson.find('[', locPos);
-                if (arrStart != std::string::npos) {
-                    size_t arrEnd = dataJson.find(']', arrStart);
-                    if (arrEnd != std::string::npos) {
-                        std::string locArray = dataJson.substr(arrStart + 1, arrEnd - arrStart - 1);
-                        size_t pos = 0;
-                        while (pos < locArray.size()) {
-                            size_t objStart = locArray.find('{', pos);
-                            if (objStart == std::string::npos) break;
-                            size_t objEnd = locArray.find('}', objStart);
-                            if (objEnd == std::string::npos) break;
-                            
-                            std::string locBlock = locArray.substr(objStart, objEnd - objStart + 1);
-                            
-                            // Extract locType and value
-                            size_t typePos = locBlock.find("\"locType\"");
-                            size_t valPos = locBlock.find("\"value\"");
-                            
-                            if (typePos != std::string::npos && valPos != std::string::npos) {
-                                // Extract type
-                                size_t typeStart = locBlock.find(":", typePos) + 1;
-                                while (typeStart < locBlock.size() && (locBlock[typeStart] == ' ' || locBlock[typeStart] == '\"')) typeStart++;
-                                size_t typeEnd = locBlock.find_first_of(",}\"", typeStart);
-                                std::string locType = locBlock.substr(typeStart, typeEnd - typeStart);
-                                
-                                // Extract value  
-                                size_t valueStart = locBlock.find(":", valPos) + 1;
-                                while (valueStart < locBlock.size() && (locBlock[valueStart] == ' ' || locBlock[valueStart] == '\"')) valueStart++;
-                                size_t valueEnd = locBlock.find_first_of("}\"", valueStart);
-                                std::string locValue = locBlock.substr(valueStart, valueEnd - valueStart);
-                                
-                                // Normalize legacy "url" to "URL"
-                                if (locType == "url") locType = "URL";
-                                
-                                if (!locType.empty() && !locValue.empty()) {
-                                    Location loc;
-                                    loc.id = -1;
-                                    loc.type = locType;
-                                    loc.value = locValue;
-                                    e.locations.push_back(loc);
-                                }
-                            }
-                            
-                            pos = objEnd + 1;
-                        }
-                    }
-                }
+            LOG_DEBUG("UPSERT: " + std::string(found ? "Updating " : "Creating ") + "entry '" + e.title + "' in group " + group);
+            
+            if (found) {
+                 m_db->updateEntry(e, &encPass);
+            } else {
+                 m_db->storeEntry(gid, e, encPass);
             }
-            LOG_DEBUG("UPSERT: Parsed " + std::to_string(e.locations.size()) + " locations for entry '" + e.title + "'");
-            
-            
-            auto encPass = base64DecodeInternal(getJsonString(dataJson, "password"));
-            LOG_DEBUG("UPSERT: " + std::string(found ? "Updating" : "Creating") + " entry '" + e.title + "' with password length " + std::to_string(encPass.size()));
-            if (found) m_db->updateEntry(e, &encPass);
-            else m_db->storeEntry(gid, e, encPass);
 
-            notifySync("entry-updated", group);
+                notifySync("entry-updated", group);
+
+            } catch (const std::exception& ex) {
+                LOGW("handleIncomingSync: Error processing UPSERT JSON: " + std::string(ex.what()));
+            }
         }
         else if (op == "DELETE") {
             std::string uuid = getJsonString(dataJson, "uuid");

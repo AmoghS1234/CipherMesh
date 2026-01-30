@@ -2,6 +2,7 @@ package com.ciphermesh.mobile
 
 import android.content.Context
 import android.graphics.Color
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -13,7 +14,27 @@ import java.util.ArrayList
 class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel>) : 
     ArrayAdapter<EntryModel>(context, R.layout.item_list_row, dataList) {
 
-    // View Holder Pattern to improve scrolling performance
+    // Theme colors cached for performance
+    private val colorPrimary: Int
+    private val colorOnSurface: Int
+    private val colorSecondary: Int
+    private val colorError: Int
+    
+    init {
+        val typedValue = TypedValue()
+        context.theme.resolveAttribute(android.R.attr.textColorPrimary, typedValue, true)
+        colorOnSurface = typedValue.data
+        
+        context.theme.resolveAttribute(android.R.attr.textColorSecondary, typedValue, true)
+        colorSecondary = typedValue.data
+        
+        context.theme.resolveAttribute(com.google.android.material.R.attr.colorPrimary, typedValue, true)
+        colorPrimary = typedValue.data
+        
+        context.theme.resolveAttribute(com.google.android.material.R.attr.colorError, typedValue, true)
+        colorError = if (typedValue.data != 0) typedValue.data else Color.parseColor("#CF6679")
+    }
+
     private class ViewHolder {
         lateinit var title: TextView
         lateinit var subtitle: TextView
@@ -24,7 +45,6 @@ class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel
         val view: View
         val holder: ViewHolder
 
-        // 1. Recycle View if possible (Performance Optimization)
         if (convertView == null) {
             view = LayoutInflater.from(context).inflate(R.layout.item_list_row, parent, false)
             holder = ViewHolder()
@@ -37,53 +57,51 @@ class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel
             holder = view.tag as ViewHolder
         }
 
-        // 2. Get Data
         val item = getItem(position) ?: return view
 
-        // 3. Set Base Text
         holder.title.text = item.title
         holder.subtitle.text = item.subtitle
 
-        // 4. Default Styling (Reset state for recycled views)
+        // Reset to theme defaults
         holder.icon.alpha = 1.0f
-        holder.title.setTextColor(Color.WHITE)
-        holder.subtitle.setTextColor(Color.parseColor("#B0B0B0")) // Light Gray
+        holder.icon.clearColorFilter()
+        holder.title.setTextColor(colorOnSurface)
+        holder.subtitle.setTextColor(colorSecondary)
 
-        // 5. Apply Logic based on ID types
         when {
-            // --- Case A: Pending Invite ---
+            // Pending Invite - use error color
             item.id < -1000 -> {
                 holder.icon.setImageResource(android.R.drawable.ic_dialog_email)
+                holder.icon.setColorFilter(colorError)
                 holder.icon.alpha = 0.8f
-                
-                // Red Alert Style
-                holder.title.setTextColor(Color.parseColor("#FF5252")) 
-                holder.subtitle.setTextColor(Color.parseColor("#FF8A80")) 
+                holder.title.setTextColor(colorError)
+                holder.subtitle.setTextColor(colorError)
             }
 
-            // --- Case B: Syncing / Status Message ---
+            // Syncing / Status Message - dimmed
             item.id == -1 -> {
                 holder.icon.setImageResource(android.R.drawable.stat_notify_sync)
+                holder.icon.setColorFilter(colorSecondary)
                 holder.icon.alpha = 0.5f
-                
-                // Dimmed Gray Style
-                holder.title.setTextColor(Color.parseColor("#757575"))
-                holder.subtitle.setTextColor(Color.parseColor("#9E9E9E"))
+                holder.title.setTextColor(colorSecondary)
+                holder.subtitle.setTextColor(colorSecondary)
             }
 
-            // --- Case C: Password Entry ---
+            // Password Entry
             item.id > 0 -> {
-                // Check if it's a Note or a Password based on title/logic (optional)
                 holder.icon.setImageResource(android.R.drawable.ic_lock_lock)
+                holder.icon.setColorFilter(colorPrimary)
             }
 
-            // --- Case D: Group (Folder) ---
+            // Group (Folder)
             else -> {
                 holder.icon.setImageResource(android.R.drawable.ic_menu_myplaces)
+                holder.icon.setColorFilter(colorPrimary)
                 
                 // Special highlight for Personal group
                 if (item.title == "Personal") {
-                    holder.title.setTextColor(Color.parseColor("#64B5F6")) // Light Blue
+                    holder.title.setTextColor(colorPrimary)
+                    holder.icon.setColorFilter(colorPrimary)
                 }
             }
         }
@@ -91,7 +109,6 @@ class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel
         return view
     }
 
-    // Helper to refresh list from Activity
     fun updateData(newData: ArrayList<EntryModel>) {
         dataList.clear()
         dataList.addAll(newData)

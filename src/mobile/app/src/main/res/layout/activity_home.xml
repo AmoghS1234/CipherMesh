@@ -23,10 +23,10 @@
                 android:id="@+id/toolbar"
                 android:layout_width="match_parent"
                 android:layout_height="?attr/actionBarSize"
-                android:background="?attr/colorPrimary"
+                android:background="?attr/toolbarColor"
                 app:popupTheme="@style/ThemeOverlay.AppCompat.Light"
-                app:titleTextColor="?attr/colorOnPrimary"
-                app:navigationIconTint="?attr/colorOnPrimary" />
+                app:titleTextColor="?attr/toolbarTextColor"
+                app:navigationIconTint="?attr/toolbarTextColor" />
 
         </com.google.android.material.appbar.AppBarLayout>
 
@@ -61,6 +61,9 @@
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:fitsSystemWindows="true"
+        android:background="?attr/colorSurface"
+        app:itemIconTint="?android:attr/textColorPrimary"
+        app:itemTextColor="?android:attr/textColorPrimary"
         app:headerLayout="@layout/nav_header_main"
         app:menu="@menu/activity_main_drawer" />
 

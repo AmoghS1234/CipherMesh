@@ -1,62 +1,68 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginVertical="4dp"
-    app:cardElevation="2dp"
-    app:cardCornerRadius="8dp">
+    android:orientation="vertical"
+    android:layout_marginVertical="6dp"
+    android:background="?attr/colorSurfaceVariant"
+    android:padding="12dp">
 
+    <!-- Type Row -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="12dp">
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Type:"
+            android:textSize="13sp"
+            android:textColor="?android:attr/textColorSecondary"
+            android:layout_marginEnd="8dp"/>
 
         <Spinner
             android:id="@+id/spinnerLocationType"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="48dp"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
             android:spinnerMode="dropdown"
-            android:layout_marginBottom="8dp" />
+            android:background="?android:attr/selectableItemBackground"/>
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.Dense"
-                app:boxStrokeWidth="1dp"
-                android:layout_marginEnd="8dp">
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/inputLocationValue"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="Value"
-                    android:inputType="textUri"
-                    android:singleLine="true" />
-
-            </com.google.android.material.textfield.TextInputLayout>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnDeleteLocation"
-                style="@style/Widget.MaterialComponents.Button.TextButton.Icon"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                app:icon="@android:drawable/ic_menu_delete"
-                app:iconPadding="0dp"
-                app:iconGravity="textStart"
-                android:contentDescription="Delete location" />
-
-        </LinearLayout>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDeleteLocation"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:text="✕"
+            android:textColor="?attr/colorError"
+            android:textSize="18sp"
+            android:contentDescription="Delete"/>
 
     </LinearLayout>
 
-</com.google.android.material.card.MaterialCardView>
+    <!-- Value Input - NO HINT, only placeholder inside EditText -->
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.Dense"
+        app:hintEnabled="false">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/inputLocationValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Enter URL, app package, etc."
+            android:inputType="textUri"
+            android:singleLine="true"/>
+
+    </com.google.android.material.textfield.TextInputLayout>
+
+</LinearLayout>

@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <string>
 #include <vector>
+#include <sstream>
 #include <android/log.h>
 #include <thread>
 #include <mutex>
@@ -70,6 +71,32 @@ std::string extractJsonValueJNI(const std::string& json, const std::string& key)
         size_t end = json.find_first_of(",}", valStart);
         return json.substr(valStart, end - valStart);
     }
+}
+
+// Escape special characters for JSON strings
+std::string escapeJsonString(const std::string& input) {
+    std::ostringstream out;
+    for (char c : input) {
+        switch (c) {
+            case '"':  out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\b': out << "\\b"; break;
+            case '\f': out << "\\f"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            default:
+                if ((unsigned char)c < 0x20) {
+                    // Control characters - encode as unicode escape
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+                    out << buf;
+                } else {
+                    out << c;
+                }
+        }
+    }
+    return out.str();
 }
 
 std::vector<unsigned char> decodeBase64(const std::string& in) {
@@ -224,6 +251,12 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_ciphermesh_mobile_core_Vault_isLocked(JNIEnv* env, jobject thiz) {
     std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
     return !g_vault || g_vault->isLocked();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_lock(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (g_vault) g_vault->lock();
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -458,7 +491,7 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
         if (g_vault) g_vault->onPeerOnline(userId);
     };
-
+    
     g_p2p->onIncomingInvite = [](std::string sender, std::string groupName) {
         {
             std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
@@ -829,4 +862,187 @@ Java_com_ciphermesh_mobile_core_Vault_findEntriesByLocation(JNIEnv* env, jobject
         CipherMesh::Core::Crypto::secureWipe(pass);
     }
     return res;
+}
+
+// =============================================================
+// PASSWORD & VAULT MANAGEMENT
+// =============================================================
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_changeMasterPassword(JNIEnv* env, jobject thiz, jstring currentPassword, jstring newPassword) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !currentPassword || !newPassword) return false;
+    
+    const char* current = env->GetStringUTFChars(currentPassword, 0);
+    const char* newPwd = env->GetStringUTFChars(newPassword, 0);
+    
+    bool result = false;
+    try {
+        // First verify current password
+        if (g_vault->verifyMasterPassword(current)) {
+            result = g_vault->changeMasterPassword(newPwd);
+        }
+    } JNI_CATCH_RETURN(false)
+    
+    env->ReleaseStringUTFChars(currentPassword, current);
+    env->ReleaseStringUTFChars(newPassword, newPwd);
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_ciphermesh_mobile_core_Vault_exportVault(JNIEnv* env, jobject thiz) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || g_vault->isLocked()) return env->NewStringUTF("");
+    
+    try {
+        // Export all groups and their entries as JSON with proper escaping
+        std::ostringstream json;
+        json << "{\"version\":2,\"groups\":[";
+        
+        std::vector<std::string> groups = g_vault->getGroupNames();
+        for (size_t g = 0; g < groups.size(); g++) {
+            if (g > 0) json << ",";
+            json << "{\"name\":\"" << escapeJsonString(groups[g]) << "\",";
+            
+            // Get group owner
+            std::string owner = g_vault->getGroupOwner(groups[g]);
+            json << "\"owner\":\"" << escapeJsonString(owner) << "\",";
+            
+            // Get members
+            json << "\"members\":" << g_vault->exportGroupMembers(groups[g]) << ",";
+            
+            // Get entries
+            g_vault->setActiveGroup(groups[g]);
+            std::vector<CipherMesh::Core::VaultEntry> entries = g_vault->getEntries();
+            json << "\"entries\":[";
+            for (size_t e = 0; e < entries.size(); e++) {
+                if (e > 0) json << ",";
+                std::string pwd = g_vault->getDecryptedPassword(entries[e].id);
+                // Access totpSecret field directly from struct
+                std::string totp = entries[e].totpSecret;
+                
+                json << "{\"title\":\"" << escapeJsonString(entries[e].title) << "\",";
+                json << "\"username\":\"" << escapeJsonString(entries[e].username) << "\",";
+                json << "\"password\":\"" << escapeJsonString(pwd) << "\",";
+                json << "\"url\":\"" << escapeJsonString(entries[e].url) << "\",";
+                json << "\"totp\":\"" << escapeJsonString(totp) << "\",";
+                json << "\"notes\":\"" << escapeJsonString(entries[e].notes) << "\"}";
+                
+                CipherMesh::Core::Crypto::secureWipe(pwd);
+                // totp is std::string, tricky to wipe since it's in the struct, but we wipe the local copy if needed? 
+                // The struct copy is managed by vector. We just wipe the decrypted pwd which we fetched.
+            }
+            json << "]}";
+        }
+        json << "]}";
+        
+        return env->NewStringUTF(json.str().c_str());
+    } JNI_CATCH_RETURN(env->NewStringUTF(""))
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_importVault(JNIEnv* env, jobject thiz, jstring data, jstring password) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault || !data || !password) return false;
+    
+    const char* jsonData = env->GetStringUTFChars(data, 0);
+    const char* pwd = env->GetStringUTFChars(password, 0);
+    std::string jsonStr(jsonData);
+    
+    bool result = false;
+    try {
+        // Verify the password matches current vault
+        if (!g_vault->verifyMasterPassword(pwd)) {
+            env->ReleaseStringUTFChars(data, jsonData);
+            env->ReleaseStringUTFChars(password, pwd);
+            return false;
+        }
+        
+        LOGI("Import vault called with %zu bytes of data", jsonStr.length());
+        
+        // Parse groups array - find each group object
+        size_t groupsStart = jsonStr.find("\"groups\":[");
+        if (groupsStart == std::string::npos) {
+            LOGE("Import: No groups array found");
+            env->ReleaseStringUTFChars(data, jsonData);
+            env->ReleaseStringUTFChars(password, pwd);
+            return false;
+        }
+        
+        int importedGroups = 0;
+        int importedEntries = 0;
+        
+        // Simple JSON parsing - find group objects
+        size_t pos = groupsStart;
+        while ((pos = jsonStr.find("\"name\":\"", pos)) != std::string::npos) {
+            pos += 8; // skip past "name":"
+            size_t nameEnd = pos;
+            while (nameEnd < jsonStr.length() && !(jsonStr[nameEnd] == '"' && jsonStr[nameEnd-1] != '\\')) nameEnd++;
+            std::string groupName = jsonStr.substr(pos, nameEnd - pos);
+            
+            // Check if group exists, create if not
+            std::vector<std::string> existingGroups = g_vault->getGroupNames();
+            bool groupExists = std::find(existingGroups.begin(), existingGroups.end(), groupName) != existingGroups.end();
+            
+            if (!groupExists) {
+                g_vault->addGroup(groupName);
+                importedGroups++;
+                LOGI("Import: Created group '%s'", groupName.c_str());
+            }
+            g_vault->setActiveGroup(groupName);
+            
+            // Find entries array for this group
+            size_t entriesStart = jsonStr.find("\"entries\":[", nameEnd);
+            if (entriesStart == std::string::npos) continue;
+            
+            // Find the end of entries array
+            int bracketCount = 1;
+            size_t entryPos = entriesStart + 11; // skip past "entries":
+            while (entryPos < jsonStr.length() && bracketCount > 0) {
+                if (jsonStr[entryPos] == '[') bracketCount++;
+                else if (jsonStr[entryPos] == ']') bracketCount--;
+                entryPos++;
+            }
+            std::string entriesSection = jsonStr.substr(entriesStart, entryPos - entriesStart);
+            
+            // Parse individual entries
+            size_t ePos = 0;
+            while ((ePos = entriesSection.find("\"title\":\"", ePos)) != std::string::npos) {
+                // Extract entry fields
+                std::string title = extractJsonValueJNI(entriesSection.substr(ePos), "title");
+                std::string username = extractJsonValueJNI(entriesSection.substr(ePos), "username");
+                std::string password_val = extractJsonValueJNI(entriesSection.substr(ePos), "password");
+                std::string url = extractJsonValueJNI(entriesSection.substr(ePos), "url");
+                std::string notes = extractJsonValueJNI(entriesSection.substr(ePos), "notes");
+                std::string totp = extractJsonValueJNI(entriesSection.substr(ePos), "totp");
+                
+                if (!title.empty() && !password_val.empty()) {
+                    // Create VaultEntry struct
+                    CipherMesh::Core::VaultEntry entry;
+                    entry.title = title;
+                    entry.username = username;
+                    entry.url = url;
+                    entry.notes = notes;
+                    entry.totpSecret = totp; // Set TOTP secret directly
+                    
+                    bool added = g_vault->addEntry(entry, password_val);
+                    if (added) {
+                        importedEntries++;
+                        LOGI("Import: Added entry '%s' with TOTP len %zu", title.c_str(), totp.length());
+                    }
+                }
+                ePos++;
+            }
+            
+            pos = entryPos; // Move past this group
+        }
+        
+        LOGI("Import complete: %d groups, %d entries", importedGroups, importedEntries);
+        result = (importedGroups > 0 || importedEntries > 0);
+        
+    } JNI_CATCH_RETURN(false)
+    
+    env->ReleaseStringUTFChars(data, jsonData);
+    env->ReleaseStringUTFChars(password, pwd);
+    return result;
 }

@@ -36,6 +36,8 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.textfield.TextInputEditText
+import com.ciphermesh.mobile.ui.PasswordGeneratorDialog
+import com.google.android.material.button.MaterialButton
 import java.io.File
 import java.util.*
 
@@ -57,6 +59,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     
     private var reconnectMenuItem: MenuItem? = null
     private var currentConnectionState = P2PManager.ConnectionState.DISCONNECTED
+    private var isOfflineMode = true  // Default to offline
 
     // State
     private var isShowingGroups = true 
@@ -138,8 +141,16 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             }
         })
 
-        // Start Connection
-        p2pManager.connect()
+        // Check offline mode preference and start connection only if online
+        isOfflineMode = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            .getBoolean(SettingsActivity.PREF_OFFLINE_MODE, true)
+        
+        if (!isOfflineMode) {
+            p2pManager.connect()
+        } else {
+            // Notify that we're in offline mode
+            onConnectionStateChanged(P2PManager.ConnectionState.DISCONNECTED)
+        }
     }
 
     override fun onDestroy() {
@@ -150,27 +161,60 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         }
         clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
     }
+    
+    override fun onResume() {
+        super.onResume()
+        // Clear navigation drawer selection when returning from an activity
+        val navView = findViewById<NavigationView>(R.id.nav_view)
+        navView.checkedItem?.isChecked = false
+        
+        // Refresh offline mode state in case it was changed in Settings
+        val wasOffline = isOfflineMode
+        isOfflineMode = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            .getBoolean(SettingsActivity.PREF_OFFLINE_MODE, true)
+        
+        // Update icon state
+        onConnectionStateChanged(currentConnectionState)
+        
+        // If we went online, try to connect
+        if (wasOffline && !isOfflineMode) {
+            p2pManager.connect()
+        }
+    }
 
     // --- P2P Listener ---
     override fun onConnectionStateChanged(state: P2PManager.ConnectionState) {
         currentConnectionState = state
         runOnUiThread {
-            // Update menu icon color based on connection state
+            // Update menu icon based on connection state
             reconnectMenuItem?.let { item ->
-                val icon = item.icon?.mutate()
-                if (icon != null) {
-                    val color = when (state) {
-                        P2PManager.ConnectionState.CONNECTED -> Color.parseColor("#4CAF50")
-                        P2PManager.ConnectionState.CONNECTING -> Color.parseColor("#FFC107")
-                        P2PManager.ConnectionState.DISCONNECTED -> Color.parseColor("#F44336")
+                if (isOfflineMode) {
+                    // Show offline icon
+                    item.setIcon(R.drawable.ic_cloud_off)
+                    val icon = item.icon?.mutate()
+                    if (icon != null) {
+                        DrawableCompat.setTint(icon, Color.parseColor("#9E9E9E"))
+                        item.icon = icon
                     }
-                    DrawableCompat.setTint(icon, color)
-                    item.icon = icon
-                }
-                item.title = when (state) {
-                    P2PManager.ConnectionState.CONNECTED -> "Connected"
-                    P2PManager.ConnectionState.CONNECTING -> "Connecting..."
-                    P2PManager.ConnectionState.DISCONNECTED -> "Reconnect"
+                    item.title = "Offline Mode"
+                } else {
+                    // Show connection status
+                    item.setIcon(android.R.drawable.ic_menu_rotate)
+                    val icon = item.icon?.mutate()
+                    if (icon != null) {
+                        val color = when (state) {
+                            P2PManager.ConnectionState.CONNECTED -> Color.parseColor("#4CAF50")
+                            P2PManager.ConnectionState.CONNECTING -> Color.parseColor("#FFC107")
+                            P2PManager.ConnectionState.DISCONNECTED -> Color.parseColor("#F44336")
+                        }
+                        DrawableCompat.setTint(icon, color)
+                        item.icon = icon
+                    }
+                    item.title = when (state) {
+                        P2PManager.ConnectionState.CONNECTED -> "Connected"
+                        P2PManager.ConnectionState.CONNECTING -> "Connecting..."
+                        P2PManager.ConnectionState.DISCONNECTED -> "Reconnect"
+                    }
                 }
             }
         }
@@ -255,9 +299,25 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     
     override fun onOptionsItemSelected(item: MenuItem): Boolean { 
         when (item.itemId) {
-            R.id.action_reconnect -> { 
-                p2pManager.connect()
-                Toast.makeText(this, "Reconnecting...", Toast.LENGTH_SHORT).show()
+            R.id.action_reconnect -> {
+                if (isOfflineMode) {
+                    // Show dialog to toggle online mode
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle("Enable Online Mode?")
+                        .setMessage("This will connect to the sync server to share groups with other devices.")
+                        .setPositiveButton("Go Online") { _, _ ->
+                            isOfflineMode = false
+                            getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                                .edit().putBoolean(SettingsActivity.PREF_OFFLINE_MODE, false).apply()
+                            p2pManager.connect()
+                            Toast.makeText(this, "Connecting...", Toast.LENGTH_SHORT).show()
+                        }
+                        .setNegativeButton("Stay Offline", null)
+                        .show()
+                } else {
+                    p2pManager.connect()
+                    Toast.makeText(this, "Reconnecting...", Toast.LENGTH_SHORT).show()
+                }
                 return true
             }
             R.id.action_group_settings -> {
@@ -565,6 +625,9 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private fun showCreateEntryDialog(editMode: Boolean = false, entryId: Int = -1) {
         val builder = MaterialAlertDialogBuilder(this)
         val view = layoutInflater.inflate(R.layout.dialog_create_entry, null)
+        
+        val dialogTitle = if (editMode) "Edit Entry" else "New Entry"
+        builder.setTitle(dialogTitle)
         val titleInput = view.findViewById<EditText>(R.id.inputTitle)
         val userInput = view.findViewById<EditText>(R.id.inputUsername)
         val passInput = view.findViewById<EditText>(R.id.inputPassword)
@@ -589,9 +652,55 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             }
         }
         
+        val btnCheckBreach = view.findViewById<Button>(R.id.btnCheckBreach)
+        val textStrength = view.findViewById<TextView>(R.id.textPasswordStrength)
+        val progressStrength = view.findViewById<ProgressBar>(R.id.progressPasswordStrength)
+        val strengthContainer = view.findViewById<View>(R.id.passwordStrengthContainer)
+        
+        btnCheckBreach.setOnClickListener {
+            val pass = passInput.text.toString()
+            if (pass.isEmpty()) {
+                Toast.makeText(this, "Enter password first", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            
+            btnCheckBreach.isEnabled = false
+            btnCheckBreach.text = "Checking..."
+            
+            // Use LifecycleScope (requires androidx.lifecycle:lifecycle-runtime-ktx)
+            // If not available, we use GlobalScope (not ideal) or Thread.
+            // Assuming we have basic Coroutine support since we added it for HIBP.
+            // Let's use Thread as fallback if scope missing, but we added BreachChecker with 'suspend'.
+            // Accessing UI from suspend requires loopers.
+            
+            // Let's us basic Thread + runOnUiThread for simplicity if scopes aren't setup
+            Thread {
+                kotlinx.coroutines.runBlocking {
+                    val count = com.ciphermesh.util.BreachChecker.checkPassword(pass)
+                    runOnUiThread {
+                        btnCheckBreach.isEnabled = true
+                        btnCheckBreach.text = "🕵️ Check Breach"
+                        if (count > 0) {
+                            MaterialAlertDialogBuilder(this@HomeActivity)
+                                .setTitle("⚠️ Password Compromised!")
+                                .setMessage("This password has been seen in $count data breaches.\n\nIt is NOT safe to use.")
+                                .setPositiveButton("OK", null)
+                                .setIcon(android.R.drawable.ic_dialog_alert)
+                                .show()
+                        } else if (count == 0) {
+                            Toast.makeText(this@HomeActivity, "✅ Good news! This password was not found in known breaches.", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(this@HomeActivity, "Network error checking breach status", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }.start()
+        }
+
         btnGenerate.setOnClickListener {
-            val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*"
-            passInput.setText((1..16).map { chars.random() }.joinToString(""))
+            com.ciphermesh.mobile.ui.PasswordGeneratorDialog(this) { password ->
+                passInput.setText(password)
+            }.show()
         }
 
         var originalPassword = ""
@@ -602,6 +711,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 titleInput.setText(parts[0])
                 userInput.setText(parts[1])
                 originalPassword = parts[2]
+                passInput.setText(originalPassword)
                 notesInput.setText(parts[3])
                 
                 // Parse full locations list from JSON (index 9)
@@ -750,36 +860,80 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
     
     private fun showThemeDialog() {
-        val themes = arrayOf("Professional (Dark)", "Modern Light", "Ocean", "Warm", "Vibrant")
-        val themeStyles = listOf(R.style.Theme_CipherMesh_Professional, R.style.Theme_CipherMesh_ModernLight, R.style.Theme_CipherMesh_Ocean, R.style.Theme_CipherMesh_Warm, R.style.Theme_CipherMesh_Vibrant)
-        
         val currentIdx = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getInt("theme_index", 0)
         
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Choose Theme")
-            .setSingleChoiceItems(themes, currentIdx) { dialog, which ->
-                getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit().putInt("theme_index", which).apply()
-                dialog.dismiss()
-                recreate() // Restart activity to apply theme
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        val dialogView = layoutInflater.inflate(R.layout.dialog_theme_picker, null)
+        val cardDark = dialogView.findViewById<com.google.android.material.card.MaterialCardView>(R.id.cardDarkTheme)
+        val cardLight = dialogView.findViewById<com.google.android.material.card.MaterialCardView>(R.id.cardLightTheme)
+        
+        // Highlight current selection
+        val primaryColor = android.util.TypedValue().also { 
+            theme.resolveAttribute(com.google.android.material.R.attr.colorPrimary, it, true) 
+        }.data
+        
+        if (currentIdx == 0) {
+            cardDark.strokeColor = primaryColor
+            cardLight.strokeColor = android.graphics.Color.TRANSPARENT
+        } else {
+            cardLight.strokeColor = primaryColor
+            cardDark.strokeColor = android.graphics.Color.TRANSPARENT
+        }
+        
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
+            .create()
+        
+        cardDark.setOnClickListener {
+            getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit().putInt("theme_index", 0).apply()
+            dialog.dismiss()
+            recreate()
+        }
+        
+        cardLight.setOnClickListener {
+            getSharedPreferences("app_prefs", Context.MODE_PRIVATE).edit().putInt("theme_index", 1).apply()
+            dialog.dismiss()
+            recreate()
+        }
+        
+        dialog.show()
     }
     
     private fun applySavedTheme() {
         val idx = getSharedPreferences("app_prefs", Context.MODE_PRIVATE).getInt("theme_index", 0)
-        val themes = listOf(R.style.Theme_CipherMesh_Professional, R.style.Theme_CipherMesh_ModernLight, R.style.Theme_CipherMesh_Ocean, R.style.Theme_CipherMesh_Warm, R.style.Theme_CipherMesh_Vibrant)
+        val themes = listOf(R.style.Theme_CipherMesh_Professional, R.style.Theme_CipherMesh_ModernLight)
         if(idx in themes.indices) setTheme(themes[idx])
     }
 
     private fun copyToClipboardSecure(label: String, text: String, toastMessage: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText(label, text)
+        
+        // Mark as sensitive to prevent system from showing content in notifications
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            clip.description.extras = android.os.PersistableBundle().apply {
+                putBoolean("android.content.extra.IS_SENSITIVE", true)
+            }
+        }
+        
         clipboard.setPrimaryClip(clip)
         Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show()
-        clipboardHandler.postDelayed({ 
-            try { clipboard.setPrimaryClip(ClipData.newPlainText("", "")) } catch(e:Exception){} 
-        }, 60000)
+        
+        // Clear clipboard after 60 seconds - silently without triggering new notifications
+        clipboardClearRunnable?.let { clipboardHandler.removeCallbacks(it) }
+        clipboardClearRunnable = Runnable {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    clipboard.clearPrimaryClip()
+                } else {
+                    // For older versions, set empty clip without notification
+                    val emptyClip = ClipData.newPlainText("", "")
+                    clipboard.setPrimaryClip(emptyClip)
+                }
+            } catch(e: Exception) {
+                // Ignore errors
+            }
+        }
+        clipboardHandler.postDelayed(clipboardClearRunnable!!, 60000)
     }
 
     // Data class to hold location information
@@ -792,6 +946,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val dialog = MaterialAlertDialogBuilder(this)
         val dialogView = layoutInflater.inflate(R.layout.dialog_edit_locations, null)
         
+        // Note: Using updated IDs from the new XML below
         val locationsContainer = dialogView.findViewById<LinearLayout>(R.id.locationsContainer)
         val btnAddLocation = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnAddLocation)
         val btnCancel = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnCancel)
@@ -815,14 +970,14 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             val typeIndex = locationTypes.indexOf(locData.type)
             if (typeIndex != -1) spinner.setSelection(typeIndex)
             
-            // Set initial hint BEFORE setting text to avoid overlap
+            // Set hint based on type (this is just the EditText hint, no floating label)
             val initialHint = when (locData.type) {
                 "URL" -> "e.g., https://google.com"
                 "Android App" -> "e.g., com.google.android.gm"
                 "iOS App" -> "e.g., com.google.Gmail"
                 "Wi-Fi SSID" -> "e.g., MyHomeNetwork"
                 "Other" -> "Custom value"
-                else -> "Value"
+                else -> "Enter value"
             }
             inputValue.hint = initialHint
             inputValue.setText(locData.value)

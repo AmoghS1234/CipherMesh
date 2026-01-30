@@ -14,4 +14,6 @@
     <attr name="colorInputBackground" format="color" />
     <attr name="colorInputBorder" format="color" />
     <attr name="textInputStyle" format="reference" />
+    <attr name="toolbarColor" format="color|reference" />
+    <attr name="toolbarTextColor" format="color|reference" />
 </resources>

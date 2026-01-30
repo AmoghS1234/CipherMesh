@@ -36,6 +36,15 @@ class CipherMeshAutofillService : AutofillService() {
     ) {
         Log.d("AutoFill", "onFillRequest: Starting")
         
+        // Check if autofill is enabled in settings
+        val prefs = getSharedPreferences("app_prefs", android.content.Context.MODE_PRIVATE)
+        val isAutofillEnabled = prefs.getBoolean("autofill_enabled", false)
+        if (!isAutofillEnabled) {
+            Log.d("AutoFill", "Autofill is disabled in settings, returning null")
+            callback.onSuccess(null)
+            return
+        }
+        
         try {
             val structure = request.fillContexts.last().structure
             Log.d("AutoFill", "Structure retrieved. WindowNodeCount: ${structure.windowNodeCount}")
@@ -92,42 +101,17 @@ class CipherMeshAutofillService : AutofillService() {
 
                             val datasetBuilder = Dataset.Builder()
                             
-                            // improved presentation
                             val displayTitle = if (title.isNotEmpty()) title else "CipherMesh"
                             val subTitle = if (username.isNotEmpty()) username else "Tap to fill"
                             val presentation = getRemoteViews("$displayTitle\n$subTitle")
-                            
-                            // Inline Presentation Support (Temporarily disabled due to build issues)
-                            /*
-                            var inlinePresentation: InlinePresentation? = null
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                try {
-                                    val inlineRequest = request.inlineSuggestionsRequest
-                                    if (inlineRequest != null && inlineRequest.inlinePresentationSpecs.isNotEmpty()) {
-                                        val spec = inlineRequest.inlinePresentationSpecs[0]
-                                        inlinePresentation = createInlinePresentation(username, "CipherMesh", spec)
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e("AutoFill", "Failed to create inline presentation", e)
-                                }
-                            }
-                            */
 
                             var valid = false
                             if (parser.usernameFields.isNotEmpty()) {
-                                /* if (inlinePresentation != null) {
-                                    datasetBuilder.setValue(parser.usernameFields[0], AutofillValue.forText(username), presentation, inlinePresentation)
-                                } else { */
-                                    datasetBuilder.setValue(parser.usernameFields[0], AutofillValue.forText(username), presentation)
-                                // }
+                                datasetBuilder.setValue(parser.usernameFields[0], AutofillValue.forText(username), presentation)
                                 valid = true
                             }
                             if (parser.passwordFields.isNotEmpty()) {
-                                /* if (inlinePresentation != null) {
-                                     datasetBuilder.setValue(parser.passwordFields[0], AutofillValue.forText(password), presentation, inlinePresentation)
-                                } else { */
-                                     datasetBuilder.setValue(parser.passwordFields[0], AutofillValue.forText(password), presentation)
-                                // }
+                                datasetBuilder.setValue(parser.passwordFields[0], AutofillValue.forText(password), presentation)
                                 valid = true
                             } 
                             
@@ -215,22 +199,4 @@ class CipherMeshAutofillService : AutofillService() {
         val intent = Intent(this, AutofillAuthActivity::class.java)
         return PendingIntent.getActivity(this, 1001, intent, PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE).intentSender
     }
-
-    /*
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun createInlinePresentation(
-        title: String,
-        subtitle: String,
-        spec: InlinePresentationSpec
-    ): InlinePresentation {
-        val content = InlineSuggestionUi.newContent(
-            InlineSuggestionUi.Content.Builder(
-                InlineSuggestionUi.Title.Builder(title).build()
-            )
-            .setSubtitle(subtitle)
-            .build()
-        )
-        return InlinePresentation(content.slice, spec, false)
-    }
-    */
 }
