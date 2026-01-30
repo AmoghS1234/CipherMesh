@@ -37,6 +37,8 @@ _codeql_*
 # Log files
 *.log
 
+.apk
+
 # Extension icons (add your own)
 extensions/*/icons/*.png
 extensions/*/icons/*.jpg
