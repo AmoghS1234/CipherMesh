@@ -4,7 +4,10 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="24dp">
+    android:padding="24dp"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:background="?attr/colorSurface">
 
     <TextView
         android:layout_width="match_parent"
@@ -13,14 +16,17 @@
         android:textSize="20sp"
         android:textStyle="bold"
         android:textColor="?attr/colorPrimary"
-        android:layout_marginBottom="24dp"
+        android:layout_marginBottom="16dp"
         android:gravity="center"/>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center">
+        android:gravity="center"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:padding="8dp">
 
         <!-- Dark Theme Card -->
         <com.google.android.material.card.MaterialCardView
@@ -32,7 +38,9 @@
             app:cardCornerRadius="16dp"
             app:cardElevation="4dp"
             app:strokeWidth="2dp"
-            app:checkedIcon="@android:drawable/checkbox_on_background">
+            app:strokeColor="?attr/colorPrimary"
+            app:cardBackgroundColor="?attr/colorSurface"
+            android:checkable="true">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -41,10 +49,18 @@
                 android:gravity="center"
                 android:padding="16dp">
 
-                <View
+                <FrameLayout
                     android:layout_width="64dp"
                     android:layout_height="64dp"
-                    android:background="#1A1A2E"/>
+                    android:background="@drawable/bg_theme_preview_dark">
+
+                    <ImageView
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:layout_gravity="center"
+                        android:src="@android:drawable/ic_menu_view"
+                        app:tint="#90CAF9"/>
+                </FrameLayout>
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -52,6 +68,7 @@
                     android:text="🌙 Dark"
                     android:textSize="16sp"
                     android:textStyle="bold"
+                    android:textColor="?android:attr/textColorPrimary"
                     android:layout_marginTop="12dp"/>
 
                 <TextView
@@ -73,7 +90,10 @@
             android:layout_marginStart="8dp"
             app:cardCornerRadius="16dp"
             app:cardElevation="4dp"
-            app:strokeWidth="2dp">
+            app:strokeWidth="2dp"
+            app:strokeColor="?attr/colorPrimary"
+            app:cardBackgroundColor="?attr/colorSurface"
+            android:checkable="true">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -82,10 +102,18 @@
                 android:gravity="center"
                 android:padding="16dp">
 
-                <View
+                <FrameLayout
                     android:layout_width="64dp"
                     android:layout_height="64dp"
-                    android:background="#FAFAFA"/>
+                    android:background="@drawable/bg_theme_preview_light">
+
+                    <ImageView
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:layout_gravity="center"
+                        android:src="@android:drawable/ic_menu_view"
+                        app:tint="#0277BD"/>
+                </FrameLayout>
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -93,6 +121,7 @@
                     android:text="☀️ Light"
                     android:textSize="16sp"
                     android:textStyle="bold"
+                    android:textColor="?android:attr/textColorPrimary"
                     android:layout_marginTop="12dp"/>
 
                 <TextView

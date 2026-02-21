@@ -134,6 +134,7 @@ void Database::createTables() {
     // Migrations
     try { exec("ALTER TABLE entries ADD COLUMN uuid TEXT"); } catch (...) {}
     try { exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0"); } catch (...) {}
+    try { exec("ALTER TABLE entries ADD COLUMN totp_secret TEXT"); } catch (...) {}
 }
 
 // -- Groups --
@@ -711,6 +712,7 @@ void Database::createTables() {
 
     try { exec("ALTER TABLE entries ADD COLUMN uuid TEXT"); } catch (...) {}
     try { exec("ALTER TABLE entries ADD COLUMN is_deleted INTEGER DEFAULT 0"); } catch (...) {}
+    try { exec("ALTER TABLE entries ADD COLUMN totp_secret TEXT"); } catch (...) {}
 }
 
 void Database::storeEncryptedGroup(const std::string& name, const std::vector<unsigned char>& encryptedKey, const std::string& ownerId) {

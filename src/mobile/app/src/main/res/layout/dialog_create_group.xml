@@ -18,10 +18,8 @@
     <com.google.android.material.textfield.TextInputLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
-        app:boxStrokeColor="?attr/colorPrimary"
+        style="@style/CipherMesh.Input"
         app:hintTextColor="?attr/colorPrimary"
-        android:textColorHint="?android:attr/textColorSecondary"
         android:hint="Group Name">
 
         <com.google.android.material.textfield.TextInputEditText

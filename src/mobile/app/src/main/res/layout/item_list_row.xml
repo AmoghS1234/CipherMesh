@@ -9,19 +9,25 @@
     android:background="?android:attr/selectableItemBackground">
 
     <FrameLayout
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:background="@drawable/bg_circle_icon"
-        android:padding="8dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_marginEnd="16dp">
-        
-        <ImageView
-            android:id="@+id/rowIcon"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:src="@android:drawable/ic_menu_my_calendar"
-            android:contentDescription="Icon"
-            android:tint="?attr/colorPrimary"/>
+
+        <FrameLayout
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_circle_icon"
+            android:padding="8dp">
+            
+            <ImageView
+                android:id="@+id/rowIcon"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:src="@android:drawable/ic_menu_my_calendar"
+                android:contentDescription="Icon"
+                android:tint="?attr/colorPrimary"/>
+        </FrameLayout>
     </FrameLayout>
 
     <LinearLayout

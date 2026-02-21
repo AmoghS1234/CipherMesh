@@ -72,7 +72,7 @@ class Vault {
         notes: String,
         totp: String
     ): Boolean {
-        addEntryNative(title, username, pass, url, notes)
+        addEntryNative(title, username, pass, url, notes, totp)
         return true
     }
 
@@ -81,7 +81,8 @@ class Vault {
         user: String,
         pass: String,
         url: String,
-        notes: String
+        notes: String,
+        totp: String
     )
 
     external fun deleteEntry(id: Int): Boolean
@@ -92,7 +93,8 @@ class Vault {
         user: String,
         pass: String,
         url: String, 
-        notes: String
+        notes: String,
+        totp: String
     ): Boolean
 
     external fun renameGroup(oldName: String, newName: String): Boolean

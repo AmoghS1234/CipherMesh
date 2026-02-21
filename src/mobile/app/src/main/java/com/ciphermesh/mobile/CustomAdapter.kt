@@ -39,6 +39,7 @@ class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel
         lateinit var title: TextView
         lateinit var subtitle: TextView
         lateinit var icon: ImageView
+        lateinit var frameContainer: android.widget.FrameLayout
     }
 
     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
@@ -51,6 +52,7 @@ class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel
             holder.title = view.findViewById(R.id.rowTitle)
             holder.subtitle = view.findViewById(R.id.rowSubtitle)
             holder.icon = view.findViewById(R.id.rowIcon)
+            holder.frameContainer = holder.icon.parent as android.widget.FrameLayout
             view.tag = holder
         } else {
             view = convertView
@@ -91,6 +93,8 @@ class CustomAdapter(context: Context, private var dataList: ArrayList<EntryModel
             item.id > 0 -> {
                 holder.icon.setImageResource(android.R.drawable.ic_lock_lock)
                 holder.icon.setColorFilter(colorPrimary)
+                
+                // Removed redundant OTP circular indicator
             }
 
             // Group (Folder)

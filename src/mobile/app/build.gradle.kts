@@ -78,6 +78,10 @@ dependencies {
     
     // [NEW] Inline Autofill
     implementation("androidx.autofill:autofill:1.1.0")
+    
+    // [NEW] QR Code Scanning
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    implementation("com.google.zxing:core:3.5.1")
 }
 
 // Fix for the schema warning (Optional but cleaner)

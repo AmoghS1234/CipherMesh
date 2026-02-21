@@ -456,7 +456,8 @@ Java_com_ciphermesh_mobile_core_Vault_getEntries(JNIEnv* env, jobject thiz) {
         
         std::string s = std::to_string(entries[i].id) + "|" + entries[i].title + "|" + 
                        entries[i].username + "|" + entries[i].notes + "|" + 
-                       entries[i].entryType + "|" + entries[i].url + "|" + locationsJson.str();
+                       entries[i].entryType + "|" + entries[i].url + "|" + locationsJson.str() + "|" + 
+                       entries[i].totpSecret; 
         jstring jStr = env->NewStringUTF(s.c_str());
         env->SetObjectArrayElement(result, i, jStr);
         env->DeleteLocalRef(jStr);
@@ -531,7 +532,7 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_ciphermesh_mobile_core_Vault_addEntryNative(JNIEnv* env, jobject thiz, jstring title, jstring user, jstring pass, jstring url, jstring notes) {
+Java_com_ciphermesh_mobile_core_Vault_addEntryNative(JNIEnv* env, jobject thiz, jstring title, jstring user, jstring pass, jstring url, jstring notes, jstring totp) {
     std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
     if (!g_vault) return;
     CipherMesh::Core::VaultEntry e;
@@ -542,10 +543,13 @@ Java_com_ciphermesh_mobile_core_Vault_addEntryNative(JNIEnv* env, jobject thiz, 
     e.url = l; // [FIX] Set main URL field
     e.locations.push_back(CipherMesh::Core::Location(-1, "URL", l)); // Changed from "url" to "URL"
     const char* n = env->GetStringUTFChars(notes, 0); e.notes = n;
+    const char* totpStr = env->GetStringUTFChars(totp, 0); e.totpSecret = totpStr;
+    
     try { g_vault->addEntry(e, e.password); } JNI_CATCH_VOID
+    
     env->ReleaseStringUTFChars(title, t); env->ReleaseStringUTFChars(user, u);
     env->ReleaseStringUTFChars(pass, p); env->ReleaseStringUTFChars(url, l);
-    env->ReleaseStringUTFChars(notes, n);
+    env->ReleaseStringUTFChars(notes, n); env->ReleaseStringUTFChars(totp, totpStr);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -780,7 +784,7 @@ Java_com_ciphermesh_mobile_core_Vault_deleteEntry(JNIEnv* env, jobject, jint id)
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_ciphermesh_mobile_core_Vault_updateEntry(JNIEnv* env, jobject thiz, jint id, jstring title, jstring user, jstring pass, jstring url, jstring notes) {
+Java_com_ciphermesh_mobile_core_Vault_updateEntry(JNIEnv* env, jobject thiz, jint id, jstring title, jstring user, jstring pass, jstring url, jstring notes, jstring totp) {
     std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
     if (!g_vault) return false;
     
@@ -791,6 +795,7 @@ Java_com_ciphermesh_mobile_core_Vault_updateEntry(JNIEnv* env, jobject thiz, jin
     const char* n = env->GetStringUTFChars(notes, 0); e.notes = n;
     const char* p = env->GetStringUTFChars(pass, 0); 
     const char* l = env->GetStringUTFChars(url, 0); 
+    const char* totpStr = env->GetStringUTFChars(totp, 0); e.totpSecret = totpStr;
     
     e.url = l; 
     if (e.url.length() > 0) {
@@ -805,6 +810,7 @@ Java_com_ciphermesh_mobile_core_Vault_updateEntry(JNIEnv* env, jobject thiz, jin
     env->ReleaseStringUTFChars(notes, n);
     env->ReleaseStringUTFChars(pass, p);
     env->ReleaseStringUTFChars(url, l);
+    env->ReleaseStringUTFChars(totp, totpStr);
     return res;
 }
 
@@ -951,12 +957,9 @@ Java_com_ciphermesh_mobile_core_Vault_importVault(JNIEnv* env, jobject thiz, jst
     
     bool result = false;
     try {
-        // Verify the password matches current vault
-        if (!g_vault->verifyMasterPassword(pwd)) {
-            env->ReleaseStringUTFChars(data, jsonData);
-            env->ReleaseStringUTFChars(password, pwd);
-            return false;
-        }
+        // Note: The password parameter was previously incorrectly verified against the vault master password.
+        // The backup password is only used for file decryption (done in Kotlin SettingsActivity.decryptData),
+        // so we don't need to verify it again here.
         
         LOGI("Import vault called with %zu bytes of data", jsonStr.length());
         

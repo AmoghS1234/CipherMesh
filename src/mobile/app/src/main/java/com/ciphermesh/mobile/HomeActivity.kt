@@ -41,6 +41,10 @@ import com.google.android.material.button.MaterialButton
 import java.io.File
 import java.util.*
 
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+
+
 class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener, P2PConnectionListener {
 
     companion object {
@@ -71,6 +75,39 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private val clipboardHandler = Handler(Looper.getMainLooper())
     private var clipboardClearRunnable: Runnable? = null
     private var isReceiverRegistered = false
+    
+    // TOTP Timer
+    private val refreshHandler = Handler(Looper.getMainLooper())
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            if (!isShowingGroups && ::adapter.isInitialized) {
+                adapter.notifyDataSetChanged()
+            }
+            refreshHandler.postDelayed(this, 1000)
+        }
+    }
+    
+    // QR Code Scanner
+    private var scanResultCallback: ((String) -> Unit)? = null
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+        if (result.contents != null) {
+            val content = result.contents
+            // Parse otpauth if present
+            // Example: otpauth://totp/Example:alice@google.com?secret=JBSWY3DPEHPK3PXP&issuer=Example
+            if (content.startsWith("otpauth://")) {
+                val uri = android.net.Uri.parse(content)
+                val secret = uri.getQueryParameter("secret")
+                if (secret != null) {
+                    scanResultCallback?.invoke(secret)
+                } else {
+                    Toast.makeText(this, "No secret found in QR", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                // Assume raw secret if not otpauth
+                scanResultCallback?.invoke(content)
+            }
+        }
+    }
 
     // JNI Callbacks
     private val refreshReceiver = object : BroadcastReceiver() {
@@ -164,6 +201,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     
     override fun onResume() {
         super.onResume()
+        refreshHandler.post(refreshRunnable)
         // Clear navigation drawer selection when returning from an activity
         val navView = findViewById<NavigationView>(R.id.nav_view)
         navView.checkedItem?.isChecked = false
@@ -182,6 +220,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        refreshHandler.removeCallbacks(refreshRunnable)
+    }
+    
     // --- P2P Listener ---
     override fun onConnectionStateChanged(state: P2PManager.ConnectionState) {
         currentConnectionState = state
@@ -402,9 +445,12 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         if (entriesRaw != null) {
             for (raw in entriesRaw) {
                 val parts = raw.split("|")
-                if (parts.size >= 3) {
+                if (parts.size >= 8) {
                     val id = parts[0].toIntOrNull() ?: 0
-                    entryList.add(EntryModel(id, parts[1], parts[2])) 
+                    // parts: id|title|user|notes|type|url|locations|totp
+                    val totp = parts[7]
+                    
+                    entryList.add(EntryModel(id, parts[1], parts[2], totpSecret = totp))
                 }
             }
         }
@@ -595,6 +641,47 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             dialog.dismiss()
         }
 
+        val containerTotp = view.findViewById<View>(R.id.containerTotp)
+        val textTotp = view.findViewById<TextView>(R.id.textTotpCode)
+        val progressTotp = view.findViewById<ProgressBar>(R.id.progressTotpSheet)
+
+        if (totpSecret.isNotEmpty()) {
+            containerTotp.visibility = View.VISIBLE
+            
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            val runnable = object : Runnable {
+                override fun run() {
+                    val code = vault.generateTOTP(totpSecret)
+                    // Format code with space (e.g. 123 456)
+                    if (code.length == 6) {
+                        textTotp.text = "${code.substring(0, 3)} ${code.substring(3)}"
+                    } else {
+                        textTotp.text = code
+                    }
+
+                    val time = System.currentTimeMillis() / 1000
+                    val remaining = 30 - (time % 30)
+                    progressTotp.progress = (remaining * 100).toInt()
+
+                    val color = if (remaining < 5) android.graphics.Color.RED else android.graphics.Color.parseColor("#4285F4") // Google Blue
+                    val drawable = progressTotp.progressDrawable?.mutate()
+                    drawable?.setTint(color)
+                    progressTotp.progressDrawable = drawable
+
+                    if (dialog.isShowing) handler.postDelayed(this, 1000)
+                }
+            }
+            handler.post(runnable)
+            dialog.setOnDismissListener { handler.removeCallbacks(runnable) }
+
+            containerTotp.setOnClickListener {
+                val code = vault.generateTOTP(totpSecret)
+                copyToClipboardSecure("2FA Code", code, "2FA Code copied")
+            }
+        } else {
+            containerTotp.visibility = View.GONE
+        }
+
         view.findViewById<View>(R.id.actionEdit).setOnClickListener {
             dialog.dismiss()
             showCreateEntryDialog(editMode = true, entryId = item.id)
@@ -633,6 +720,20 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val passInput = view.findViewById<EditText>(R.id.inputPassword)
         val notesInput = view.findViewById<EditText>(R.id.inputNotes)
         val btnGenerate = view.findViewById<Button>(R.id.btnGeneratePassword)
+        val totpInput = view.findViewById<EditText>(R.id.inputTotp)
+        val btnScan = view.findViewById<View>(R.id.btnScanQr)
+
+        btnScan.setOnClickListener {
+            scanResultCallback = { secret ->
+                totpInput.setText(secret)
+            }
+            val options = ScanOptions()
+            options.setPrompt("Scan QR Code")
+            options.setBeepEnabled(false)
+            options.setOrientationLocked(true)
+            options.setCaptureActivity(com.ciphermesh.mobile.PortraitCaptureActivity::class.java)
+            scanLauncher.launch(options)
+        }
         
         
         val btnEditLocations = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnEditLocations)
@@ -705,6 +806,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         var originalPassword = ""
         if (editMode && entryId != -1) {
+            val entry = allEntries.find { it.id == entryId }
+            if (entry != null) {
+                 totpInput.setText(entry.totpSecret)
+            }
+
             val fullData = vault.getEntryFullDetails(entryId)
             val parts = fullData.split("|")
             if (parts.size >= 4) {
@@ -748,6 +854,7 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 val user = userInput.text.toString().trim()
                 var pass = passInput.text.toString()
                 val notes = notesInput.text.toString().trim()
+                val totp = totpInput.text.toString().trim()
                 
                 // Extract first URL-type location as primary url
                 var url = ""
@@ -761,34 +868,10 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     
                     var success = false
                     if (editMode) {
-                        // Update native to accept URL! passing via extra notes or new param?
-                        // Vault.updateEntry signature in Kotlin: (id, title, user, pass, totp, notes)
-                        // It DOES NOT have URL param!
-                        // I must update Vault.kt and JNI or overload notes.
-                        // For now, let's prepend URL to notes with specific prefix or just wait?
-                        // USER SAID: "Make them the same".
-                        // I NEED TO UPDATE Vault.kt and native-lib JNI signature for updateEntry too?
-                        // native-lib updateEntry implementation:
-                        // Java...updateEntry(..., jstring notes)
-                        // It doesn't take URL.
-                        
-                        // [Workaround while keeping signature same-ish? No, I should fix it properly]
-                        // But I can't see Vault.java/kt easily.
-                        // Wait, vault.addEntryNative takes URL (I modified/saw it in native-lib).
-                        // vault.updateEntry does NOT?
-                        // Let's check native-lib updateEntry.
-                        
-                        val result: Any = vault.updateEntry(entryId, title, user, pass, url, notes) 
+                         val result: Any = vault.updateEntry(entryId, title, user, pass, url, notes, totp)
                         success = (result as? Boolean) ?: false
-                        
-                        // We also need to update the location if possible.
-                        // Since updateEntry doesn't take URL, we might need a separate call or update JNI.
-                        // But native-lib `updateEntry` implementation in `vault.cpp`?
-                        // C++ `updateEntry` takes `VaultEntry`.
-                        // JNI `updateEntry` takes fields.
-                        // I should update JNI `updateEntry` to take URL.
                     } else {
-                        vault.addEntryNative(title, user, pass, url, notes)
+                        vault.addEntryNative(title, user, pass, url, notes, totp)
                         success = true
                     }
                     

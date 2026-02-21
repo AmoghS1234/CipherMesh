@@ -42,6 +42,13 @@
             android:exported="false"
             android:parentActivityName=".HomeActivity" />
 
+        <activity
+            android:name=".PortraitCaptureActivity"
+            android:screenOrientation="portrait"
+            android:stateNotNeeded="true"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+
         <!-- AutoFill Service -->
         <service
             android:name=".autofill.CipherMeshAutofillService"

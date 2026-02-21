@@ -39,7 +39,7 @@
         android:background="?android:attr/colorBackground">
         
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            style="@style/CipherMesh.Input"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="User ID to Invite">

@@ -1,5 +1,5 @@
-<?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -59,18 +59,60 @@
         android:background="?android:attr/selectableItemBackground"
         android:textColor="?android:attr/textColorPrimary"/>
 
-    <TextView
-        android:id="@+id/actionCopyTOTP"
+    <LinearLayout
+        android:id="@+id/containerTotp"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Copy 2FA Code"
-        android:drawableStart="@android:drawable/ic_menu_rotate"
-        android:drawablePadding="16dp"
+        android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:padding="16dp"
-        android:textSize="16sp"
         android:background="?android:attr/selectableItemBackground"
-        android:textColor="?android:attr/textColorPrimary"/>
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:src="@android:drawable/ic_menu_rotate"
+            android:layout_marginEnd="16dp" 
+            app:tint="?android:attr/textColorPrimary"/>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            
+            <TextView
+                android:id="@+id/textTotpCode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Wait..."
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.1"
+                android:textColor="?android:attr/textColorPrimary"/>
+                
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Tap to copy"
+                android:textSize="12sp"
+                android:textColor="?android:attr/textColorSecondary"/>
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/progressTotpSheet"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginStart="16dp"
+            android:indeterminate="false"
+            android:max="3000"
+            android:progress="0"
+            android:progressDrawable="@drawable/circular_progress"
+            android:rotation="-90"/>
+
+    </LinearLayout>
 
     <TextView
         android:id="@+id/actionEdit"
