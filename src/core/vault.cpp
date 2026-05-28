@@ -1699,7 +1699,6 @@ void Vault::sendP2PInvite(const std::string& groupName, const std::string& targe
             << "\"owner\":\"" << escapeJson(getUserId()) << "\","
             << "\"ownerName\":\"" << escapeJson(getDisplayUsername()) << "\"}";
 
-    m_db->storePendingInvite(getUserId(), groupName, payload.str());
     m_db->storeSyncJob(targetUser, groupName, "INVITE", payload.str());
     processOutboxForUser(targetUser);
     notifySync("invite-sent", groupName);

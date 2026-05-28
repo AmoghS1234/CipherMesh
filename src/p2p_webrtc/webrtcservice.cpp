@@ -718,6 +718,20 @@ void WebRTCService::setupPeerConnection(const QString& remoteId, bool isOfferer)
                  });
             });
             
+            if (dc->isOpen()) {
+                 if (onPeerOnline) onPeerOnline(remoteId.toStdString());
+                 QTimer::singleShot(500, this, [this, remoteId]() {
+                     QMutexLocker l(&g_peerMutex);
+                     if (m_pendingInvites.contains(remoteId)) {
+                         QJsonObject req; 
+                         req["type"] = "invite-request"; 
+                         req["group"] = m_pendingInvites[remoteId];
+                         l.unlock();
+                         sendP2PMessage(remoteId, req);
+                     }
+                 });
+            }
+            
             dc->onMessage([this, remoteId](std::variant<rtc::binary, rtc::string> message) {
                 QString msg;
                 if (std::holds_alternative<rtc::string>(message)) {
