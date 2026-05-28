@@ -855,7 +855,7 @@ void MainWindow::postUnlockInit()
     loadGroups();
     
     qDebug() << "[MAIN] restoring invites";
-    restoreOutgoingInvites(); 
+    // restoreOutgoingInvites(); // [FIX] Disabled: Handled natively by Vault::processAllPendingSync() via sync_queue
     
     // [FIX] Process any pending sync jobs that accumulated while offline
     qDebug() << "[MAIN] processing pending sync jobs";
@@ -1719,30 +1719,9 @@ void MainWindow::handleDataRequested(const QString& requesterId, const QString& 
 }
 
 void MainWindow::restoreOutgoingInvites() {
-    if (!m_vault || !m_p2pService) return;
-    
-    auto* p2p = dynamic_cast<WebRTCService*>(m_p2pService);
-    if (!p2p) return;
-
-    std::vector<std::string> groups = m_vault->getGroupNames();
-    
-    for (const std::string& groupName : groups) {
-        auto members = m_vault->getGroupMembers(groupName);
-        for (const auto& member : members) {
-            if (member.status == "pending") {
-                try {
-                    std::vector<unsigned char> key = m_vault->getGroupKey(groupName);
-                    std::vector<CipherMesh::Core::VaultEntry> entries = m_vault->exportGroupEntries(groupName);
-                    
-                    p2p->queueInvite(groupName, member.userId, key, entries);
-                    
-                    CipherMesh::Core::Crypto::secureWipe(key);
-                } catch (...) {
-                    qWarning() << "Failed to restore invite for" << QString::fromStdString(member.userId);
-                }
-            }
-        }
-    }
+    // [FIX] Legacy invite restoration disabled.
+    // In Phase 2, all pending syncs (including invites) are persisted in the SQLite sync_queue table
+    // and naturally restored via Vault::processAllPendingSync() -> processOutboxForUser().
 }
 
 void MainWindow::handleInviteResponse(const QString& userId, const QString& groupName, bool accepted) {

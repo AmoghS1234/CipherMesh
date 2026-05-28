@@ -318,20 +318,10 @@ void ShareGroupDialog::onInviteClicked() {
                 
                 m_statusLabel->setText("Sending invite...");
                 
-                // 4. Send Invite via P2P
-                m_p2pService->inviteUser(
-                    m_groupName.toStdString(), 
-                    email.toStdString(), 
-                    key, 
-                    entries, 
-                    members // Pass members here
-                );
-                
-                // 5. Add Pending Member Locally
-                m_vault->addGroupMember(m_groupName.toStdString(), email.toStdString(), "member", "pending");
+                // 4. Send Invite via Vault (queues in SQLite sync_queue)
+                m_vault->sendP2PInvite(m_groupName.toStdString(), email.toStdString());
                 
                 loadMembers();
-                CipherMesh::Core::Crypto::secureWipe(key);
                 
             } catch (const std::exception& e) {
                 QMessageBox::critical(this, "Error", QString("Failed to export group: %1").arg(e.what()));
