@@ -90,7 +90,9 @@ Database::~Database() {
 
 void Database::open(const std::string& path) {
     sqlite3* db = nullptr;
-    if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
+    int rc = sqlite3_open(path.c_str(), &db);
+    if (rc != SQLITE_OK) {
+        if (db) sqlite3_close(db);
         throw DBException("Failed to open database");
     }
     m_db_handle = db;

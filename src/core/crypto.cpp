@@ -1,9 +1,12 @@
 #include "crypto.hpp"
 #include <sodium.h>
+#include <openssl/sha.h>
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
 #include <random>
+#include <sstream>
+#include <iomanip>
 
 namespace CipherMesh {
 namespace Core {
@@ -144,9 +147,12 @@ std::string Crypto::generatePassword(const PasswordOptions& options) {
 }
 
 std::string Crypto::sha1(const std::string& input) {
-    unsigned char hash[crypto_hash_sha256_BYTES]; // Use SHA256 instead of SHA1 (more secure)
-    crypto_hash_sha256(hash, (const unsigned char*)input.c_str(), input.length());
-    return base64Encode(std::vector<unsigned char>(hash, hash + crypto_hash_sha256_BYTES));
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(reinterpret_cast<const unsigned char*>(input.c_str()), input.length(), hash);
+    std::ostringstream oss;
+    for (int i = 0; i < SHA_DIGEST_LENGTH; ++i)
+        oss << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash[i]);
+    return oss.str();
 }
 
 // --- Asymmetric / Sealed Box ---

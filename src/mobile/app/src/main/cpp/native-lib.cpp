@@ -62,13 +62,14 @@ std::string extractJsonValueJNI(const std::string& json, const std::string& key)
         size_t start = valStart + 1;
         size_t end = start;
         while (end < json.length()) {
-            if (json[end] == '"' && json[end-1] != '\\') break;
+            if (json[end] == '"' && (end == start || json[end-1] != '\\')) break;
             end++;
         }
         if (end >= json.length()) return "";
         return json.substr(start, end - start);
     } else {
         size_t end = json.find_first_of(",}", valStart);
+        if (end == std::string::npos) end = json.length();
         return json.substr(valStart, end - valStart);
     }
 }
@@ -139,10 +140,18 @@ void sendSignalingToKotlin(const std::string& target, const std::string& type, c
 }
 
 void showToastFromNative(const std::string& message) {
-    std::lock_guard<std::mutex> lock(g_jniMutex);
-    if (!g_jvm || !g_context) return;
-    
-    JNIEnv* env;
+    if (!g_jvm) return;
+
+    // Only hold the lock long enough to snapshot the context reference,
+    // then release before making the JNI call to avoid potential deadlock.
+    jobject ctx = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_jniMutex);
+        ctx = g_context;
+    }
+    if (!ctx) return;
+
+    JNIEnv* env = nullptr;
     bool attached = false;
     int status = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
     if (status == JNI_EDETACHED) {
@@ -150,17 +159,17 @@ void showToastFromNative(const std::string& message) {
         attached = true;
     }
 
-    jclass contextClass = env->GetObjectClass(g_context);
+    jclass contextClass = env->GetObjectClass(ctx);
     jmethodID mid = env->GetMethodID(contextClass, "showToast", "(Ljava/lang/String;)V");
-    
+
     // [FIX] Check for and CLEAR any pending exception (NoSuchMethodError)
     // This prevents the app from crashing if the method is missing/renamed.
     if (env->ExceptionCheck()) {
-        env->ExceptionClear(); 
+        env->ExceptionClear();
         LOGE("Could not find showToast method in Activity");
     } else if (mid) {
         jstring jMsg = env->NewStringUTF(message.c_str());
-        env->CallVoidMethod(g_context, mid, jMsg);
+        env->CallVoidMethod(ctx, mid, jMsg);
         env->DeleteLocalRef(jMsg);
     }
 

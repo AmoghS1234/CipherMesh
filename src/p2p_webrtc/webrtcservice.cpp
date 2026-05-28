@@ -67,7 +67,7 @@ static std::string extractJsonValue(const std::string& json, const std::string& 
         start++; 
         size_t end = start;
         while (end < json.length()) {
-            if (json[end] == '\"' && json[end-1] != '\\') break;
+            if (json[end] == '\"' && (end == start || json[end-1] != '\\')) break;
             end++;
         }
         if (end >= json.length()) return "";
@@ -97,7 +97,7 @@ WebRTCService::WebRTCService(const std::string& signalingUrl, const std::string&
 
 WebRTCService::~WebRTCService() { 
     // [FIX] Set shutdown flag before destroying to prevent detached thread crashes
-    m_isShuttingDown.store(true);
+    m_isShuttingDown->store(true);
     disconnect(); 
 }
 
@@ -124,7 +124,7 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
 
     pc->onStateChange([this, peerId](rtc::PeerConnection::State state) {
         // [FIX] Check shutdown flag before accessing members
-        if (m_isShuttingDown.load()) return;
+        if (m_isShuttingDown->load()) return;
         if (state == rtc::PeerConnection::State::Failed) {
             bool shouldRetry = false;
             {
@@ -135,7 +135,7 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
             }
             if (shouldRetry) {
                 std::this_thread::sleep_for(std::chrono::seconds(2));
-                if (!m_isShuttingDown.load()) {
+                if (!m_isShuttingDown->load()) {
                     retryPendingInviteFor(peerId);
                 }
             }
@@ -144,7 +144,7 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
 
     pc->onLocalCandidate([this, peerId](auto candidate) {
         // [FIX] Check shutdown flag before accessing members
-        if (m_isShuttingDown.load()) return;
+        if (m_isShuttingDown->load()) return;
         std::string json = "{\"candidate\":\"" + escapeJsonString(candidate.candidate()) + 
                            "\", \"mid\":\"" + escapeJsonString(candidate.mid()) + "\"}";
         sendSignalingMessage(peerId, "ice-candidate", json);
@@ -152,14 +152,14 @@ void WebRTCService::setupPeerConnection(const std::string& peerId, bool isOffere
 
     pc->onDataChannel([this, peerId](auto dc) { 
         // [FIX] Check shutdown flag before accessing members
-        if (m_isShuttingDown.load()) return;
+        if (m_isShuttingDown->load()) return;
         LOGI("Data Channel received from %s", peerId.c_str());
         setupDataChannel(dc, peerId); 
     });
 
     pc->onGatheringStateChange([this, peerId, pc](rtc::PeerConnection::GatheringState state) {
         // [FIX] Check shutdown flag before accessing members
-        if (m_isShuttingDown.load()) return;
+        if (m_isShuttingDown->load()) return;
         if (state == rtc::PeerConnection::GatheringState::Complete) {
             auto desc = pc->localDescription();
             if (desc.has_value()) {
@@ -189,7 +189,7 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
 
     dc->onClosed([this, peerId]() {
         // [FIX] Check shutdown flag before accessing members
-        if (m_isShuttingDown.load()) return;
+        if (m_isShuttingDown->load()) return;
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         m_channels.erase(peerId);
         if (m_peers.count(peerId)) { m_peers[peerId]->close(); m_peers.erase(peerId); }
@@ -197,14 +197,14 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
 
     dc->onOpen([this, peerId]() {
         // [FIX] Check shutdown flag before accessing members
-        if (m_isShuttingDown.load()) return;
+        if (m_isShuttingDown->load()) return;
         if (onPeerOnline) onPeerOnline(peerId);
         
         // [FIX] Use shared pointer to prevent accessing destroyed object
         std::thread([this, peerId]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             // [FIX] Check shutdown flag before accessing members
-            if (m_isShuttingDown.load()) return;
+            if (m_isShuttingDown->load()) return;
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
             if (m_pendingInvites.count(peerId)) {
                 // [FIX] Escape group name to prevent JSON parsing issues
@@ -223,7 +223,7 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
 
     dc->onMessage([this, peerId](auto data) {
         // [FIX] Check shutdown flag before accessing members
-        if (m_isShuttingDown.load()) return;
+        if (m_isShuttingDown->load()) return;
         std::string msg;
         if (std::holds_alternative<std::string>(data)) {
             msg = std::get<std::string>(data);

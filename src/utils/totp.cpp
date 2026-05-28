@@ -17,8 +17,8 @@ public:
     static std::vector<uint8_t> hmac_sha1(const std::vector<uint8_t>& key, const std::vector<uint8_t>& data) {
         std::vector<uint8_t> k = key;
         if (k.size() > 64) {
-            // If key > block size, hash it
-            // (Skipping for brevity as TOTP keys are usually short, but standard requires it)
+            // RFC 2104 §2: if key is longer than block size (64), hash it first
+            k = sha1(k);
         }
         if (k.size() < 64) k.resize(64, 0); // Pad with zeros
 
@@ -88,7 +88,7 @@ std::vector<uint8_t> TOTP::decodeBase32(const std::string& input) {
     for (char c : input) if (c != ' ' && c != '\n' && c != '-') cleanInput += std::toupper(c);
     if (cleanInput.empty()) return output;
     
-    int buffer = 0; int bitsLeft = 0;
+    uint32_t buffer = 0; int bitsLeft = 0;
     for (char c : cleanInput) {
         if (c == '=') break;
         size_t val = base32Chars.find(c);
@@ -125,8 +125,8 @@ std::string TOTP::generateCode(const std::string& secretKey) {
     
     int offset = hash[hash.size() - 1] & 0x0F;
     
-    // Validate offset bounds: need offset + 3 < hash.size()
-    if (offset + 3 >= static_cast<int>(hash.size())) {
+    // Validate offset bounds: need 4 bytes starting at offset (offset, offset+1, offset+2, offset+3)
+    if (offset + 4 > static_cast<int>(hash.size())) {
         offset = 0; // Fallback to safe offset
     }
     

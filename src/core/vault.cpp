@@ -107,7 +107,7 @@ static std::string getJsonString(const std::string& json, const std::string& key
         size_t start = valStart + 1;
         size_t end = start;
         while (end < json.length()) {
-            if (json[end] == '"' && json[end-1] != '\\') break;
+            if (json[end] == '"' && (end == start || json[end-1] != '\\')) break;
             end++;
         }
         if (end >= json.length()) return "";
@@ -138,12 +138,10 @@ Vault::Vault() : m_activeGroupId(-1) {
 Vault::~Vault() { lock(); if (m_db) m_db->close(); }
 
 void Vault::connect(const std::string& path) {
-    try {
-        if (m_db->isOpen()) m_db->close();
-        m_dbPath = path;
-        m_db->open(path);
-        m_db->createTables(); 
-    } catch (...) {}
+    if (m_db->isOpen()) m_db->close();
+    m_dbPath = path;
+    m_db->open(path);
+    m_db->createTables();
 }
 
 std::string Vault::getDBPath() const { return m_dbPath; }
@@ -750,7 +748,7 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                     if (payload[i] == '{') depth++;
                     else if (payload[i] == '}') depth--;
                 }
-                dataJson = payload.substr(b + 1, i - b - 2);
+                if (i >= b + 2) dataJson = payload.substr(b + 1, i - b - 2);
             }
         }
 

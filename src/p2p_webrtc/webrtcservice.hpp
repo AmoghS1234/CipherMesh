@@ -83,8 +83,9 @@ private:
     bool m_isConnected;
     bool m_isAuthenticated;
     
-    // [FIX] Atomic flag to track if service is being destroyed to prevent detached thread crashes
-    std::atomic<bool> m_isShuttingDown{false};
+    // [FIX] Use shared_ptr so lambda captures that outlive `this` (e.g. after a sleep)
+    // can safely check the flag without accessing freed memory.
+    std::shared_ptr<std::atomic<bool>> m_isShuttingDown{std::make_shared<std::atomic<bool>>(false)};
     
     std::recursive_mutex m_mutex;
     std::map<std::string, std::shared_ptr<rtc::PeerConnection>> m_peers;
