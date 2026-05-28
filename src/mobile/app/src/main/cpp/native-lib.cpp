@@ -645,35 +645,16 @@ Java_com_ciphermesh_mobile_core_Vault_sendP2PInvite(JNIEnv* env, jobject thiz, j
     env->ReleaseStringUTFChars(groupName, grp); 
     env->ReleaseStringUTFChars(targetUser, tgt);
 
-    std::thread([sGroup, sTarget]() {
-        std::vector<unsigned char> key;
-        std::vector<CipherMesh::Core::VaultEntry> entries;
-        bool dataLoaded = false;
-        {
-            std::lock_guard<std::recursive_mutex> vaultLock(g_vaultMutex);
-            if (g_vault) {
-                try {
-                    g_vault->addGroupMember(sGroup, sTarget, "member", "pending");
-                    key = g_vault->getGroupKey(sGroup);
-                    entries = g_vault->exportGroupEntries(sGroup);
-                    dataLoaded = true;
-                } catch (...) {}
-            }
-        } 
-        if (dataLoaded) {
-            std::lock_guard<std::mutex> p2pLock(g_p2pMutex);
-            if (g_p2p) {
-                if (key.empty()) {
-                    LOGE("sendP2PInvite: Key for group %s is EMPTY! Handshake will likely fail.", sGroup.c_str());
-                    showToastFromNative("Error: Group Key not found!");
-                } else {
-                    LOGI("sendP2PInvite: Queueing invite for %s with key size %zu, entries %zu", sGroup.c_str(), key.size(), entries.size());
-                    g_p2p->queueInvite(sGroup, sTarget, key, entries);
-                    showToastFromNative("Handshake started with " + sTarget);
-                }
-            }
+    std::lock_guard<std::recursive_mutex> vaultLock(g_vaultMutex);
+    if (g_vault) {
+        try {
+            g_vault->sendP2PInvite(sGroup, sTarget);
+            showToastFromNative("Invite queued for " + sTarget);
+        } catch (const std::exception& e) {
+            LOGE("Failed to send P2P invite: %s", e.what());
+            showToastFromNative("Failed to send invite");
         }
-    }).detach();
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
