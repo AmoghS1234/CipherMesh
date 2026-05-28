@@ -19,8 +19,8 @@
     #define LOG_INFO(msg) __android_log_print(ANDROID_LOG_INFO, "CipherMesh_Core", "%s", std::string(msg).c_str())
     #define LOGW(msg) __android_log_print(ANDROID_LOG_WARN, "CipherMesh_Core", "%s", std::string(msg).c_str())
 #else
-    #define LOG_DEBUG(msg) std::cout << "[CORE_DEBUG] " << msg << std::endl
-    #define LOG_INFO(msg) std::cout << "[CORE_INFO] " << msg << std::endl
+    #define LOG_DEBUG(msg) std::cerr << "[CORE_DEBUG] " << msg << std::endl
+    #define LOG_INFO(msg) std::cerr << "[CORE_INFO] " << msg << std::endl
     #define LOGW(msg) std::cerr << "[CORE_WARN] " << msg << std::endl
 #endif
 

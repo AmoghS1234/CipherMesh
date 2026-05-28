@@ -410,7 +410,7 @@ void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned c
 }
 
 bool Database::entryExists(const std::string& username, const std::string& locationValue) {
-    SqlStatement q(m_db_handle, "SELECT count(*) FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = ? AND l.value = ?");
+    SqlStatement q(m_db_handle, "SELECT count(*) FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = ? AND l.value = ? AND (e.is_deleted IS NULL OR e.is_deleted = 0)");
     q.bind(1, username); q.bind(2, locationValue);
     if (q.step()) return q.getInt(0) > 0;
     return false;
@@ -584,7 +584,7 @@ void Database::storeSyncJob(const std::string& targetUser, const std::string& gr
 
 std::vector<SyncJob> Database::getSyncJobsForUser(const std::string& userId) {
     std::vector<SyncJob> jobs;
-    SqlStatement q(m_db_handle, "SELECT id, target_user, group_name, operation, payload, created_at FROM sync_queue WHERE target_user = ? ORDER BY created_at ASC");
+    SqlStatement q(m_db_handle, "SELECT id, target_user, group_name, operation, payload, created_at FROM sync_queue WHERE LOWER(target_user) = LOWER(?) ORDER BY created_at ASC");
     q.bind(1, userId);
     while(q.step()) {
         SyncJob j;
@@ -1063,7 +1063,7 @@ void Database::updateEntry(const VaultEntry& entry, const std::vector<unsigned c
 
 bool Database::entryExists(const std::string& username, const std::string& locationValue) {
     QSqlQuery q(m_db);
-    q.prepare("SELECT count(*) FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = :user AND l.value = :loc");
+    q.prepare("SELECT count(*) FROM entries e JOIN locations l ON e.id = l.entry_id WHERE e.username = :user AND l.value = :loc AND (e.is_deleted IS NULL OR e.is_deleted = 0)");
     q.bindValue(":user", QString::fromStdString(username));
     q.bindValue(":loc", QString::fromStdString(locationValue));
     if (q.exec() && q.next()) return q.value(0).toInt() > 0;
@@ -1286,7 +1286,7 @@ void Database::storeSyncJob(const std::string& targetUser, const std::string& gr
 std::vector<SyncJob> Database::getSyncJobsForUser(const std::string& userId) {
     std::vector<SyncJob> jobs;
     QSqlQuery q(m_db);
-    q.prepare("SELECT id, target_user, group_name, operation, payload, created_at FROM sync_queue WHERE target_user = :target ORDER BY created_at ASC");
+    q.prepare("SELECT id, target_user, group_name, operation, payload, created_at FROM sync_queue WHERE LOWER(target_user) = LOWER(:target) ORDER BY created_at ASC");
     q.bindValue(":target", QString::fromStdString(userId));
     if (q.exec()) {
         while(q.next()) {
