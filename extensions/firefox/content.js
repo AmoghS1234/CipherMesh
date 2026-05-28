@@ -87,10 +87,13 @@
                 console.log('[CipherMesh] Credential check response:', response);
                 
                 if (response.success && response.data) {
-                    const entries = response.data.entries || response.data.credentials || [];
-                    
-                    // Check if any entry matches this username
-                    const existingEntry = entries.find(e => e.username === pending.username);
+                    let existingEntry = null;
+                    if (response.data.username && response.data.username === pending.username) {
+                        existingEntry = response.data;
+                    } else {
+                        const entries = response.data.entries || response.data.credentials || [];
+                        existingEntry = entries.find(e => e.username === pending.username);
+                    }
                     
                     if (existingEntry) {
                         console.log('[CipherMesh] Credentials already exist in vault for this username, not prompting');
@@ -222,11 +225,42 @@
         console.log('[CipherMesh] Processed', processed, 'new password fields');
     }
     
-    // Check if element is visible
+        // Check if element is visible
     function isVisible(element) {
+        if (!element || !document.body.contains(element)) return false;
         return element.offsetWidth > 0 && element.offsetHeight > 0 &&
                window.getComputedStyle(element).visibility !== 'hidden' &&
                window.getComputedStyle(element).display !== 'none';
+    }
+    
+    // Handle SPA (Single Page Application) logins where the page doesn't reload
+    function checkForSPALogin(passwordField) {
+        let attempts = 0;
+        const maxAttempts = 20; // 10 seconds total
+        
+        const checkInterval = setInterval(() => {
+            attempts++;
+            
+            if (attempts > maxAttempts) {
+                clearInterval(checkInterval);
+                return;
+            }
+            
+            const pendingStr = sessionStorage.getItem('ciphermesh-pending-credentials');
+            if (!pendingStr) {
+                clearInterval(checkInterval);
+                return;
+            }
+            
+            // If the password field is removed from the DOM or hidden, assume login success
+            if (!isVisible(passwordField)) {
+                console.log('[CipherMesh] SPA login detected (password field disappeared), checking credentials...');
+                clearInterval(checkInterval);
+                
+                // Add a small delay to let SPA fully transition UI
+                setTimeout(checkPendingCredentials, 1000);
+            }
+        }, 500);
     }
     
     // Process individual password field
@@ -286,6 +320,7 @@
             
             console.log('[CipherMesh] Storing credentials for post-login check');
             sessionStorage.setItem('ciphermesh-pending-credentials', JSON.stringify(pendingCredentials));
+            checkForSPALogin(passwordField);
             
             // Allow normal form submission - don't prevent default
             // The save prompt will appear after successful login

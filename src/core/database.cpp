@@ -418,7 +418,7 @@ bool Database::entryExists(const std::string& username, const std::string& locat
 
 std::vector<VaultEntry> Database::findEntriesByLocation(const std::string& locationValue) {
     std::vector<VaultEntry> results;
-    SqlStatement q(m_db_handle, "SELECT DISTINCT e.id, e.group_id, e.title, e.username, e.url, e.notes FROM entries e JOIN locations l ON e.id = l.entry_id WHERE l.value LIKE ?");
+    SqlStatement q(m_db_handle, "SELECT DISTINCT e.id, e.group_id, e.title, e.username, e.url, e.notes FROM entries e JOIN locations l ON e.id = l.entry_id WHERE l.value LIKE ? AND (e.is_deleted IS NULL OR e.is_deleted = 0)");
     q.bind(1, "%" + locationValue + "%");
     while (q.step()) {
         VaultEntry e;
@@ -436,7 +436,7 @@ std::vector<VaultEntry> Database::findEntriesByLocation(const std::string& locat
 
 std::vector<VaultEntry> Database::searchEntries(const std::string& searchTerm) {
     std::vector<VaultEntry> list;
-    SqlStatement q(m_db_handle, "SELECT id, group_id, title, username, url, notes FROM entries WHERE title LIKE ? OR username LIKE ? OR url LIKE ? OR notes LIKE ?");
+    SqlStatement q(m_db_handle, "SELECT id, group_id, title, username, url, notes FROM entries WHERE (title LIKE ? OR username LIKE ? OR url LIKE ? OR notes LIKE ?) AND (is_deleted IS NULL OR is_deleted = 0)");
     std::string term = "%" + searchTerm + "%";
     q.bind(1, term); q.bind(2, term); q.bind(3, term); q.bind(4, term);
     while (q.step()) {
@@ -1073,7 +1073,7 @@ bool Database::entryExists(const std::string& username, const std::string& locat
 std::vector<VaultEntry> Database::findEntriesByLocation(const std::string& locationValue) {
     std::vector<VaultEntry> results;
     QSqlQuery q(m_db);
-    q.prepare("SELECT DISTINCT e.id, e.group_id, e.title, e.username, e.url, e.notes FROM entries e JOIN locations l ON e.id = l.entry_id WHERE l.value LIKE :loc");
+    q.prepare("SELECT DISTINCT e.id, e.group_id, e.title, e.username, e.url, e.notes FROM entries e JOIN locations l ON e.id = l.entry_id WHERE l.value LIKE :loc AND (e.is_deleted IS NULL OR e.is_deleted = 0)");
     q.bindValue(":loc", "%" + QString::fromStdString(locationValue) + "%");
     if (q.exec()) {
         while (q.next()) {
@@ -1095,7 +1095,7 @@ std::vector<VaultEntry> Database::searchEntries(const std::string& searchTerm) {
     std::vector<VaultEntry> results;
     QString term = "%" + QString::fromStdString(searchTerm) + "%";
     QSqlQuery q(m_db);
-    q.prepare("SELECT id, group_id, title, username, url, notes FROM entries WHERE title LIKE :term OR username LIKE :term OR url LIKE :term OR notes LIKE :term");
+    q.prepare("SELECT id, group_id, title, username, url, notes FROM entries WHERE (title LIKE :term OR username LIKE :term OR url LIKE :term OR notes LIKE :term) AND (is_deleted IS NULL OR is_deleted = 0)");
     q.bindValue(":term", term);
     if (q.exec()) {
         while (q.next()) {
