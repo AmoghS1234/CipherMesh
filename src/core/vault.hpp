@@ -43,6 +43,7 @@ public:
     std::vector<std::string> getGroupNames();
     bool groupExists(const std::string& groupName);
     bool isGroupActive() const;
+    std::string getActiveGroupName() const;
     int getGroupId(const std::string& groupName);
     std::string getGroupOwner(const std::string& groupName);
     std::string getGroupOwner(int groupId);
@@ -54,7 +55,7 @@ public:
     void addGroupMember(const std::string& groupName, const std::string& userId, const std::string& role, const std::string& status);
     std::vector<GroupMember> getGroupMembers(const std::string& groupName);
     void updateGroupMemberStatus(const std::string& groupName, const std::string& userId, const std::string& newStatus);
-    void updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole);
+    void updateGroupMemberRole(const std::string& groupName, const std::string& userId, const std::string& newRole);
     void removeGroupMember(const std::string& groupName, const std::string& userId); 
     
     bool canUserEdit(const std::string& groupName);

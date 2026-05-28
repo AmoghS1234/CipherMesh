@@ -250,8 +250,7 @@ void ShareGroupDialog::promoteUser() {
     QListWidgetItem* item = m_memberListWidget->currentItem();
     if (!item) return;
     QString userId = m_itemToUserIdMap[item];
-    int groupId = m_vault->getGroupId(m_groupName.toStdString());
-    m_vault->updateGroupMemberRole(groupId, userId.toStdString(), "admin");
+    m_vault->updateGroupMemberRole(m_groupName.toStdString(), userId.toStdString(), "admin");
     loadMembers();
 }
 
@@ -259,8 +258,7 @@ void ShareGroupDialog::demoteUser() {
     QListWidgetItem* item = m_memberListWidget->currentItem();
     if (!item) return;
     QString userId = m_itemToUserIdMap[item];
-    int groupId = m_vault->getGroupId(m_groupName.toStdString());
-    m_vault->updateGroupMemberRole(groupId, userId.toStdString(), "member");
+    m_vault->updateGroupMemberRole(m_groupName.toStdString(), userId.toStdString(), "member");
     loadMembers();
 }
 
@@ -349,8 +347,9 @@ void ShareGroupDialog::onRemoveClicked() {
 
     QString userId = m_itemToUserIdMap.value(selectedItem);
     QString status = selectedItem->data(Qt::UserRole).toString();
+    QString role = selectedItem->data(Qt::UserRole + 1).toString();
     
-    if (status == "owner" || userId == QString::fromStdString(m_vault->getUserId())) {
+    if (role == "owner" || userId == QString::fromStdString(m_vault->getUserId())) {
         QMessageBox::warning(this, "Error", "Cannot remove the owner.");
         return;
     }

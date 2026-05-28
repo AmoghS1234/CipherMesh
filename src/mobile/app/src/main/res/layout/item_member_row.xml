@@ -22,22 +22,37 @@
             android:textSize="16sp"
             android:textColor="?android:attr/textColorPrimary"/>
 
-        <TextView
-            android:id="@+id/memberStatus"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Status"
-            android:textSize="12sp"
-            android:textColor="?android:attr/textColorSecondary"/>
+            android:orientation="horizontal">
+            <TextView
+                android:id="@+id/memberStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Status"
+                android:textSize="12sp"
+                android:textColor="?android:attr/textColorSecondary"/>
+                
+            <TextView
+                android:id="@+id/memberRole"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Role"
+                android:textSize="12sp"
+                android:textStyle="italic"
+                android:textColor="?android:attr/textColorSecondary"/>
+        </LinearLayout>
     </LinearLayout>
 
     <ImageView
-        android:id="@+id/btnRemove"
+        android:id="@+id/btnOptions"
         android:layout_width="32dp"
         android:layout_height="32dp"
-        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        android:src="@android:drawable/ic_menu_more"
         android:background="?android:attr/selectableItemBackgroundBorderless"
-        app:tint="?attr/colorError"
+        app:tint="?android:attr/textColorSecondary"
         android:visibility="gone"/>
 
 </LinearLayout>

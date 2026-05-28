@@ -54,6 +54,8 @@ class Vault {
     external fun getGroupMembers(groupName: String): Array<String>
 
     external fun removeUser(groupName: String, targetUserId: String)
+    external fun updateGroupMemberRole(groupName: String, userId: String, newRole: String)
+    external fun canUserEdit(groupName: String): Boolean
 
     external fun getEntries(): Array<String>?
 

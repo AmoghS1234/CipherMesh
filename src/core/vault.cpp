@@ -284,8 +284,7 @@ bool Vault::changeMasterPassword(const std::string& newPassword) {
         for (auto const& [name, key] : decryptedKeys) {
             std::vector<unsigned char> reEncKey = m_crypto->encrypt(key, newMasterKey);
             int gid = m_db->getGroupId(name);
-            std::string owner = m_db->getGroupOwner(gid);
-            m_db->storeEncryptedGroup(name, reEncKey, owner);
+            m_db->updateEncryptedGroupKey(gid, reEncKey);
         }
         
         m_crypto->secureWipe(m_masterKey_RAM);
@@ -759,11 +758,87 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         }
         
         if (op == "INVITE_ACCEPT") {
-            // [FIX] Desktop sends INVITE_ACCEPT after sharing group with Mobile
-            // This is just a notification that the user accepted - we don't need to do anything
-            // The group and entries have already been received via group-data/entry-data messages
+            // [FIX] When a peer accepts our invite, update their member status to "accepted"
+            // This ensures queueSyncForGroup will include them in future entry syncs.
             LOG_DEBUG("handleIncomingSync: Received INVITE_ACCEPT from " + senderId + " for group " + group);
-            goto SEND_ACK; // ACK and skip further processing
+            
+            int acceptGid = m_db->getGroupId(group);
+            if (acceptGid != -1) {
+                m_db->updateGroupMemberStatus(acceptGid, senderId, "accepted");
+                LOG_DEBUG("handleIncomingSync: Updated member " + senderId + " to 'accepted' in group " + group);
+                notifySync("members-updated", group);
+                
+                // [FIX] Directly push initial group data (key, entries, members) to the peer!
+                // This handles the gap where transient in-memory maps in WebRTCService are lost 
+                // during offline/reconnection cycles, ensuring robust synchronization.
+                if (isGroupOwner(group) && m_p2pSender) {
+                    LOG_DEBUG("handleIncomingSync: Sending group-data directly to newly accepted member " + senderId);
+                    try {
+                        // 1. Send group-data (key)
+                        std::vector<unsigned char> encKey = m_db->getEncryptedGroupKeyById(acceptGid);
+                        std::vector<unsigned char> decryptedKey = m_crypto->decrypt(encKey, m_masterKey_RAM);
+                        std::string keyBase64 = base64EncodeInternal(decryptedKey);
+                        m_crypto->secureWipe(decryptedKey);
+                        
+                        std::ostringstream gd;
+                        gd << "{\"type\":\"group-data\",\"group\":\"" << escapeJson(group) << "\",\"key\":\"" << keyBase64 << "\"}";
+                        m_p2pSender(senderId, gd.str());
+                        
+                        // 2. Send entries
+                        std::vector<VaultEntry> entries = m_db->getEntriesForGroup(acceptGid);
+                        for (const auto& e : entries) {
+                            std::vector<unsigned char> encPass = m_db->getEncryptedPassword(e.id);
+                            std::string encPassB64 = base64EncodeInternal(encPass);
+                            
+                            std::ostringstream ed;
+                            ed << "{\"type\":\"entry-data\","
+                               << "\"group\":\"" << escapeJson(group) << "\","
+                               << "\"uuid\":\"" << escapeJson(e.uuid) << "\","
+                               << "\"title\":\"" << escapeJson(e.title) << "\","
+                               << "\"username\":\"" << escapeJson(e.username) << "\","
+                               << "\"password\":\"" << encPassB64 << "\","
+                               << "\"url\":\"" << escapeJson(e.url) << "\","
+                               << "\"notes\":\"" << escapeJson(e.notes) << "\","
+                               << "\"totpSecret\":\"" << escapeJson(e.totpSecret) << "\","
+                               << "\"locations\":[";
+                            for (size_t k = 0; k < e.locations.size(); k++) {
+                                ed << "{\"locType\":\"" << escapeJson(e.locations[k].type) << "\",";
+                                ed << "\"value\":\"" << escapeJson(e.locations[k].value) << "\"}";
+                                if (k + 1 < e.locations.size()) ed << ",";
+                            }
+                            ed << "]}";
+                            m_p2pSender(senderId, ed.str());
+                        }
+                        
+                        // 3. Send member-list
+                        std::vector<GroupMember> members = m_db->getGroupMembers(acceptGid);
+                        std::ostringstream ml;
+                        ml << "{\"type\":\"member-list\",\"group\":\"" << escapeJson(group) << "\",\"members\":[";
+                        for (size_t k = 0; k < members.size(); k++) {
+                            ml << "{\"userId\":\"" << escapeJson(members[k].userId) << "\","
+                               << "\"role\":\"" << escapeJson(members[k].role) << "\","
+                               << "\"status\":\"" << escapeJson(members[k].status) << "\"}";
+                            if (k + 1 < members.size()) ml << ",";
+                        }
+                        ml << "]}";
+                        m_p2pSender(senderId, ml.str());
+                    } catch (const std::exception& ex) {
+                        LOGW("handleIncomingSync: Failed to send initial group data: " + std::string(ex.what()));
+                    }
+                }
+            }
+            
+            goto SEND_ACK;
+        }
+
+        if (op == "INVITE_REJECT") {
+            LOG_DEBUG("handleIncomingSync: Received INVITE_REJECT from " + senderId + " for group " + group);
+            int acceptGid = m_db->getGroupId(group);
+            if (acceptGid != -1) {
+                m_db->removeGroupMember(acceptGid, senderId);
+                notifySync("members-updated", group);
+            }
+            goto SEND_ACK;
         }
 
         gid = findGroupIdForSync(group, senderId);
@@ -778,6 +853,21 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
         if (op == "UPSERT") {
             try {
                 LOG_DEBUG("handleIncomingSync: Processing UPSERT for group '" + group + "'");
+
+                // [FIX] Enforce write permissions - only owners and admins can add/edit entries
+                bool hasPermission = false;
+                std::vector<GroupMember> members = m_db->getGroupMembers(gid);
+                for (const auto& m : members) {
+                    if (m.userId == senderId) {
+                        if (m.role == "owner" || m.role == "admin") hasPermission = true;
+                        break;
+                    }
+                }
+                
+                if (!hasPermission) {
+                    LOGW("handleIncomingSync: Rejected UPSERT from " + senderId + " - insufficient permissions");
+                    goto SEND_ACK;
+                }
 
                 VaultEntry e;
             e.uuid = getJsonString(dataJson, "uuid");
@@ -859,6 +949,21 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
             }
         }
         else if (op == "DELETE") {
+            // [FIX] Enforce write permissions - only owners and admins can delete entries
+            bool hasPermission = false;
+            std::vector<GroupMember> members = m_db->getGroupMembers(gid);
+            for (const auto& m : members) {
+                if (m.userId == senderId) {
+                    if (m.role == "owner" || m.role == "admin") hasPermission = true;
+                    break;
+                }
+            }
+            
+            if (!hasPermission) {
+                LOGW("handleIncomingSync: Rejected DELETE from " + senderId + " - insufficient permissions");
+                goto SEND_ACK;
+            }
+
             std::string uuid = getJsonString(dataJson, "uuid");
             auto locals = m_db->getEntriesForGroup(gid);
             for (auto& l : locals) {
@@ -892,6 +997,12 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
             if (gid != -1) {
                 m_db->removeGroupMember(gid, userId);
                 notifySync("members-updated", group);
+                
+                // [FIX] If we are the owner, we must forward this removal to all other members
+                if (isGroupOwner(group)) {
+                    LOG_DEBUG("handleIncomingSync: Forwarding MEMBER_REMOVE for " + userId + " to remaining members of " + group);
+                    queueSyncForGroup(group, "MEMBER_REMOVE", dataJson);
+                }
             }
         }
         else if (op == "GROUP_SPLIT") {
@@ -906,6 +1017,53 @@ void Vault::handleIncomingSync(const std::string& senderId, const std::string& p
                 notifySync("group-deleted", group);
                 notifySync("group-disbanded", group + "|" + reason);
             }
+        }
+        else if (op == "GROUP_RENAME") {
+            std::string oldName = getJsonString(dataJson, "old");
+            std::string newName = getJsonString(dataJson, "new");
+            
+            LOG_DEBUG("handleIncomingSync: Received GROUP_RENAME from '" + oldName + "' to '" + newName + "'");
+            
+            if (gid != -1) {
+                std::string localNewName = newName;
+                if (groupExists(localNewName)) {
+                     localNewName = newName + " (from " + senderId + ")";
+                }
+                
+                m_db->exec("UPDATE groups SET name = '" + escapeJson(localNewName) + "' WHERE id = " + std::to_string(gid));
+                
+                if (m_activeGroupId == gid) {
+                    m_activeGroupName = localNewName;
+                }
+                
+                notifySync("groups-updated", "");
+            }
+        }
+        else if (op == "MEMBER_LIST") {
+            LOG_DEBUG("handleIncomingSync: Received MEMBER_LIST for group '" + group + "'");
+            
+            size_t locPos = dataJson.find("\"members\"");
+            if (locPos != std::string::npos && gid != -1) {
+                size_t arrStart = dataJson.find('[', locPos);
+                if (arrStart != std::string::npos) {
+                    size_t objStart = arrStart;
+                    while ((objStart = dataJson.find('{', objStart)) != std::string::npos) {
+                        size_t objEnd = dataJson.find('}', objStart);
+                        if (objEnd == std::string::npos || objEnd > dataJson.find(']', arrStart)) break;
+                        std::string memberObj = dataJson.substr(objStart, objEnd - objStart + 1);
+                        
+                        std::string userId = getJsonString(memberObj, "userId");
+                        std::string role = getJsonString(memberObj, "role");
+                        std::string status = getJsonString(memberObj, "status");
+                        
+                        if (!userId.empty() && !role.empty() && !status.empty()) {
+                            m_db->addGroupMember(gid, userId, role, status);
+                        }
+                        objStart = objEnd + 1;
+                    }
+                }
+            }
+            notifySync("members-updated", group);
         }
 
     SEND_ACK:
@@ -1056,6 +1214,10 @@ bool Vault::renameGroup(const std::string& oldName, const std::string& newName) 
 
     m_db->exec("UPDATE groups SET name = '" + escapeJson(newName) + "' WHERE id = " + std::to_string(gid));
 
+    if (m_activeGroupName == oldName) {
+        m_activeGroupName = newName;
+    }
+
     std::ostringstream payload;
     payload << "{\"old\":\"" << escapeJson(oldName) << "\",\"new\":\"" << escapeJson(newName) << "\"}";
 
@@ -1082,6 +1244,13 @@ void Vault::leaveGroup(const std::string& groupName) {
     
     // Delete group locally to avoid ghost groups
     m_db->deleteGroup(groupName);
+    
+    if (m_activeGroupName == groupName) {
+        m_activeGroupId = -1;
+        m_activeGroupName = "";
+        m_activeGroupKey_RAM.clear();
+    }
+    
     notifySync("groups-updated", "");
 }
 
@@ -1133,6 +1302,10 @@ void Vault::lockActiveGroup() {
 
 bool Vault::isGroupActive() const { return !m_activeGroupKey_RAM.empty() && m_activeGroupId != -1; }
 
+std::string Vault::getActiveGroupName() const {
+    return m_activeGroupName;
+}
+
 bool Vault::addGroup(const std::string& groupName, const std::vector<unsigned char>& key, const std::string& ownerId) {
     checkLocked();
     std::string myId = getUserId();
@@ -1174,6 +1347,13 @@ bool Vault::deleteGroup(const std::string& groupName) {
         processOutboxForUser(m.userId);
     }
     m_db->deleteGroup(groupName);
+    
+    if (m_activeGroupName == groupName) {
+        m_activeGroupId = -1;
+        m_activeGroupName = "";
+        m_activeGroupKey_RAM.clear();
+    }
+    
     notifySync("group-deleted", groupName);
     return true;
 }
@@ -1200,17 +1380,13 @@ void Vault::removeGroupMember(const std::string& groupName, const std::string& u
 
 bool Vault::canUserEdit(const std::string& groupName) {
     if (isLocked()) return false;
-    // [FIX] Remove hardcoded Personal permission, rely on proper owner role check below
-
     try {
         int gid = m_db->getGroupId(groupName);
         std::string myId = getUserId();
         std::vector<GroupMember> members = m_db->getGroupMembers(gid);
         for(const auto& m : members) {
             if (m.userId == myId) {
-                if(m.role == "owner" || m.role == "admin") return true;
-                GroupPermissions perms = m_db->getGroupPermissions(gid);
-                if (!perms.adminsOnlyWrite) return true; 
+                return (m.role == "owner" || m.role == "admin");
             }
         }
         return false;
@@ -1252,7 +1428,30 @@ std::vector<unsigned char> Vault::getGroupKey(const std::string& groupName) {
 
 void Vault::setGroupPermissions(int groupId, bool adminsOnly) { m_db->setGroupPermissions(groupId, adminsOnly); }
 GroupPermissions Vault::getGroupPermissions(int groupId) { return m_db->getGroupPermissions(groupId); }
-void Vault::updateGroupMemberRole(int groupId, const std::string& userId, const std::string& newRole) { m_db->updateGroupMemberRole(groupId, userId, newRole); }
+void Vault::updateGroupMemberRole(const std::string& groupName, const std::string& userId, const std::string& newRole) {
+    checkLocked();
+    int gid = m_db->getGroupId(groupName);
+    if (gid == -1) return;
+    
+    m_db->updateGroupMemberRole(gid, userId, newRole);
+    
+    // [FIX] Broadcast role change to all members if we are the owner
+    if (isGroupOwner(groupName)) {
+        auto members = m_db->getGroupMembers(gid);
+        std::ostringstream snapshot;
+        snapshot << "{ \"members\":[";
+        for (size_t i = 0; i < members.size(); ++i) {
+            snapshot << "{\"userId\":\"" << escapeJson(members[i].userId) << "\","
+                     << "\"role\":\"" << escapeJson(members[i].role) << "\","
+                     << "\"status\":\"" << escapeJson(members[i].status) << "\"}";
+            if (i + 1 < members.size()) snapshot << ",";
+        }
+        snapshot << "]}";
+
+        queueSyncForGroup(groupName, "MEMBER_LIST", snapshot.str());
+        notifySync("members-updated", groupName);
+    }
+}
 void Vault::updateGroupMemberStatus(const std::string& groupName, const std::string& userId, const std::string& newStatus) {
     checkLocked();
     int gid = m_db->getGroupId(groupName);
@@ -1261,6 +1460,50 @@ void Vault::updateGroupMemberStatus(const std::string& groupName, const std::str
     m_db->updateGroupMemberStatus(gid, userId, newStatus);
     if (newStatus != "accepted") return;
     if (!isGroupOwner(groupName)) return;
+
+    // Send group data (key, entries, members) directly to the accepted user immediately!
+    if (m_p2pSender) {
+        LOG_DEBUG("updateGroupMemberStatus: Sending initial group-data directly to accepted user: " + userId);
+        try {
+            // 1. Send group-data (key)
+            std::vector<unsigned char> encKey = m_db->getEncryptedGroupKeyById(gid);
+            std::vector<unsigned char> decryptedKey = m_crypto->decrypt(encKey, m_masterKey_RAM);
+            std::string keyBase64 = base64EncodeInternal(decryptedKey);
+            m_crypto->secureWipe(decryptedKey);
+            
+            std::ostringstream gd;
+            gd << "{\"type\":\"group-data\",\"group\":\"" << escapeJson(groupName) << "\",\"key\":\"" << keyBase64 << "\"}";
+            m_p2pSender(userId, gd.str());
+            
+            // 2. Send entries
+            std::vector<VaultEntry> entries = m_db->getEntriesForGroup(gid);
+            for (const auto& e : entries) {
+                std::vector<unsigned char> encPass = m_db->getEncryptedPassword(e.id);
+                std::string encPassB64 = base64EncodeInternal(encPass);
+                
+                std::ostringstream ed;
+                ed << "{\"type\":\"entry-data\","
+                   << "\"group\":\"" << escapeJson(groupName) << "\","
+                   << "\"uuid\":\"" << escapeJson(e.uuid) << "\","
+                   << "\"title\":\"" << escapeJson(e.title) << "\","
+                   << "\"username\":\"" << escapeJson(e.username) << "\","
+                   << "\"password\":\"" << encPassB64 << "\","
+                   << "\"url\":\"" << escapeJson(e.url) << "\","
+                   << "\"notes\":\"" << escapeJson(e.notes) << "\","
+                   << "\"totpSecret\":\"" << escapeJson(e.totpSecret) << "\","
+                   << "\"locations\":[";
+                for (size_t k = 0; k < e.locations.size(); k++) {
+                    ed << "{\"locType\":\"" << escapeJson(e.locations[k].type) << "\",";
+                    ed << "\"value\":\"" << escapeJson(e.locations[k].value) << "\"}";
+                    if (k + 1 < e.locations.size()) ed << ",";
+                }
+                ed << "]}";
+                m_p2pSender(userId, ed.str());
+            }
+        } catch (const std::exception& ex) {
+            LOGW("updateGroupMemberStatus: Failed to push group data: " + std::string(ex.what()));
+        }
+    }
 
     auto members = m_db->getGroupMembers(gid);
     std::ostringstream snapshot;
@@ -1358,8 +1601,6 @@ void Vault::updatePendingInviteStatus(int id, const std::string& s) { checkLocke
 
 void Vault::respondToInvite(const std::string& groupName, const std::string& senderId, bool accept) {
     checkLocked();
-    int gid = m_db->getGroupId(groupName);
-    if (gid == -1) return;
     std::string myId = getUserId();
 
     // [FIX] Delete pending invite FIRST, BEFORE sending response
@@ -1393,10 +1634,19 @@ void Vault::respondToInvite(const std::string& groupName, const std::string& sen
     
     // NOW send acceptance response (if accepting)
     if (accept) {
-        m_db->addGroupMember(gid, myId, "member", "accepted");
         std::ostringstream payload;
-        payload << "{\"userId\":\"" << escapeJson(myId) << "\"}" ;
+        payload << "{\"userId\":\"" << escapeJson(myId) << "\"}";
         m_db->storeSyncJob(senderId, groupName, "INVITE_ACCEPT", payload.str());
+        processOutboxForUser(senderId);
+
+        int gid = m_db->getGroupId(groupName);
+        if (gid != -1) {
+            m_db->addGroupMember(gid, myId, "member", "accepted");
+        }
+    } else {
+        std::ostringstream payload;
+        payload << "{\"userId\":\"" << escapeJson(myId) << "\"}";
+        m_db->storeSyncJob(senderId, groupName, "INVITE_REJECT", payload.str());
         processOutboxForUser(senderId);
     }
 

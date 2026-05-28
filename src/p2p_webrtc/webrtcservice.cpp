@@ -240,15 +240,16 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             if (onIncomingInvite) onIncomingInvite(peerId, extractJsonValue(msg, "group"));
         }
         else if (type == "invite-accept") {
-            // ... (keep existing invite-accept logic)
              std::lock_guard<std::recursive_mutex> lock(m_mutex);
             
             bool hasPendingInvite = m_pendingInvites.count(peerId) > 0;
             bool hasPendingKeys = m_pendingKeys.count(peerId) > 0;
             bool hasPendingEntries = m_pendingEntries.count(peerId) > 0;
             
-            LOGI("Received invite-accept from %s - invite:%d key:%d entries:%d", 
-                 peerId.c_str(), hasPendingInvite, hasPendingKeys, hasPendingEntries);
+            std::string acceptedGroupName = hasPendingInvite ? m_pendingInvites[peerId] : "";
+            
+            LOGI("Received invite-accept from %s - invite:%d key:%d entries:%d group:%s", 
+                 peerId.c_str(), hasPendingInvite, hasPendingKeys, hasPendingEntries, acceptedGroupName.c_str());
             
             // [FIX] Only require key, entries can be empty for new/empty groups
             if (hasPendingInvite && hasPendingKeys) {
@@ -266,10 +267,23 @@ void WebRTCService::setupDataChannel(std::shared_ptr<rtc::DataChannel> dc, const
             m_pendingKeys.erase(peerId); 
             m_pendingEntries.erase(peerId);
             m_pendingMembers.erase(peerId);
+            
+            // [FIX] Fire onInviteResponse callback so the JNI/Vault layer updates 
+            // the member status from "pending" to "accepted". Without this, 
+            // queueSyncForGroup skips the member for all future entry syncs.
+            if (!acceptedGroupName.empty() && onInviteResponse) {
+                onInviteResponse(peerId, acceptedGroupName, true);
+            }
         }
         else if (type == "invite-reject") {
             std::lock_guard<std::recursive_mutex> lock(m_mutex);
+            std::string rejectedGroupName = m_pendingInvites.count(peerId) ? m_pendingInvites[peerId] : "";
             m_pendingInvites.erase(peerId); m_pendingKeys.erase(peerId); m_pendingEntries.erase(peerId); m_pendingMembers.erase(peerId);
+            
+            // [FIX] Fire onInviteResponse for rejection so member is removed from group
+            if (!rejectedGroupName.empty() && onInviteResponse) {
+                onInviteResponse(peerId, rejectedGroupName, false);
+            }
         }
         else if (type == "group-data" || type == "entry-data" || type == "member-list" || 
                  type == "sync-payload" || type == "sync-ack" || 
@@ -398,89 +412,96 @@ void WebRTCService::sendGroupData_unsafe(const std::string& recipientId, const s
                                          const std::vector<unsigned char>& groupKey, 
                                          const std::vector<CipherMesh::Core::VaultEntry>& entries,
                                          const std::string& memberListJson) {
-    try {
-        if (!m_channels.count(recipientId) || !m_channels[recipientId]->isOpen()) {
-            LOGE("sendGroupData_unsafe: Channel not open for %s - cannot send group data", recipientId.c_str());
-            return;
-        }
-        
-        LOGI("sendGroupData_unsafe: Sending group '%s' to %s with %zu entries", groupName.c_str(), recipientId.c_str(), entries.size());
-        
-        std::ostringstream jsonHeader;
-        jsonHeader << "{\"type\":\"group-data\",\"group\":\"" << escapeJsonString(groupName) << "\",";
-        
-        static const char b64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        std::string keyBase64;
-        // ... (Base64 encoding implementation reused/assumed)
-        // Re-implementing simplified for safety and clarity or reusing existing snippet logic
-        int i = 0, j = 0;
-        unsigned char char_array_3[3], char_array_4[4];
-        for (unsigned char c : groupKey) {
-            char_array_3[i++] = c;
-            if (i == 3) {
+    std::shared_ptr<rtc::DataChannel> dc = m_channels[recipientId];
+    auto shutdownFlag = m_isShuttingDown;
+    
+    std::thread([dc, recipientId, groupName, groupKey, entries, memberListJson, shutdownFlag]() {
+        try {
+            if (shutdownFlag->load()) return;
+            
+            LOGI("sendGroupData_unsafe: Sending group '%s' to %s with %zu entries", groupName.c_str(), recipientId.c_str(), entries.size());
+            
+            std::ostringstream jsonHeader;
+            jsonHeader << "{\"type\":\"group-data\",\"group\":\"" << escapeJsonString(groupName) << "\",";
+            
+            static const char b64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string keyBase64;
+            int i = 0, j = 0;
+            unsigned char char_array_3[3], char_array_4[4];
+            for (unsigned char c : groupKey) {
+                char_array_3[i++] = c;
+                if (i == 3) {
+                    char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
+                    char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
+                    char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
+                    char_array_4[3] = char_array_3[2] & 0x3f;
+                    for(i = 0; i < 4; i++) keyBase64 += b64_chars[char_array_4[i]];
+                    i = 0;
+                }
+            }
+            if (i) {
+                for(j = i; j < 3; j++) char_array_3[j] = '\0';
                 char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
                 char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
                 char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
-                char_array_4[3] = char_array_3[2] & 0x3f;
-                for(i = 0; i < 4; i++) keyBase64 += b64_chars[char_array_4[i]];
-                i = 0;
+                for (j = 0; j < i + 1; j++) keyBase64 += b64_chars[char_array_4[j]];
+                while(i++ < 3) keyBase64 += '=';
             }
+            jsonHeader << "\"key\":\"" << keyBase64 << "\"}";
+            
+            dc->send(jsonHeader.str());
+            LOGI("sendGroupData_unsafe: Header sent.");
+        } catch (const std::exception& e) {
+            LOGE("sendGroupData_unsafe: Exception during header send: %s", e.what());
+            return;
+        } catch (...) {
+            LOGE("sendGroupData_unsafe: Unknown exception during header send");
+            return;
         }
-        if (i) {
-            for(j = i; j < 3; j++) char_array_3[j] = '\0';
-            char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
-            char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
-            char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
-            for (j = 0; j < i + 1; j++) keyBase64 += b64_chars[char_array_4[j]];
-            while(i++ < 3) keyBase64 += '=';
-        }
-        jsonHeader << "\"key\":\"" << keyBase64 << "\"}";
         
-        m_channels[recipientId]->send(jsonHeader.str());
-        LOGI("sendGroupData_unsafe: Header sent.");
-    } catch (const std::exception& e) {
-        LOGE("sendGroupData_unsafe: Exception during header send: %s", e.what());
-        return;
-    } catch (...) {
-        LOGE("sendGroupData_unsafe: Unknown exception during header send");
-        return;
-    }
-    
-    // [FIX] Add delay after group header to allow receiver to process
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    
-    LOGI("sendGroupData_unsafe: Sending %zu entries", entries.size());
-    
-    for (const auto& e : entries) {
-        std::ostringstream entryJson;
-        entryJson << "{\"type\":\"entry-data\","
-                  << "\"group\":\"" << escapeJsonString(groupName) << "\","
-                  << "\"uuid\":\"" << escapeJsonString(e.uuid) << "\","
-                  << "\"title\":\"" << escapeJsonString(e.title) << "\","
-                  << "\"username\":\"" << escapeJsonString(e.username) << "\","
-                  << "\"password\":\"" << escapeJsonString(e.password) << "\"," 
-                  << "\"url\":\"" << escapeJsonString(e.url) << "\","
-                  << "\"notes\":\"" << escapeJsonString(e.notes) << "\","
-                  << "\"totpSecret\":\"" << escapeJsonString(e.totpSecret) << "\","
-                  << "\"locations\":[";
-                  
-        for(size_t k = 0; k < e.locations.size(); k++) {
-            entryJson << "{\"locType\":\"" << escapeJsonString(e.locations[k].type) << "\",";
-            entryJson << "\"value\":\"" << escapeJsonString(e.locations[k].value) << "\"}";
-            if(k < e.locations.size() - 1) entryJson << ",";
+        // [FIX] Add delay after group header to allow receiver to process (increased to 2000ms for mobile sync stability)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        
+        if (shutdownFlag->load()) return;
+        
+        LOGI("sendGroupData_unsafe: Sending %zu entries", entries.size());
+        
+        for (const auto& e : entries) {
+            if (shutdownFlag->load()) break;
+            std::ostringstream entryJson;
+            entryJson << "{\"type\":\"entry-data\","
+                      << "\"group\":\"" << escapeJsonString(groupName) << "\","
+                      << "\"uuid\":\"" << escapeJsonString(e.uuid) << "\","
+                      << "\"title\":\"" << escapeJsonString(e.title) << "\","
+                      << "\"username\":\"" << escapeJsonString(e.username) << "\","
+                      << "\"password\":\"" << escapeJsonString(e.password) << "\"," 
+                      << "\"url\":\"" << escapeJsonString(e.url) << "\","
+                      << "\"notes\":\"" << escapeJsonString(e.notes) << "\","
+                      << "\"totpSecret\":\"" << escapeJsonString(e.totpSecret) << "\","
+                      << "\"locations\":[";
+                      
+            for(size_t k = 0; k < e.locations.size(); k++) {
+                entryJson << "{\"locType\":\"" << escapeJsonString(e.locations[k].type) << "\",";
+                entryJson << "\"value\":\"" << escapeJsonString(e.locations[k].value) << "\"}";
+                if(k < e.locations.size() - 1) entryJson << ",";
+            }
+            entryJson << "]}";
+            
+            try { dc->send(entryJson.str()); } catch (...) {}
+            std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Increased from 20ms
         }
-        entryJson << "]}";
-        m_channels[recipientId]->send(entryJson.str());
-        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Increased from 20ms
-    }
+        
+        if (shutdownFlag->load()) return;
+        
+        std::ostringstream memberListMsg;
+        std::string safeMembers = memberListJson.empty() ? "[]" : memberListJson;
+        memberListMsg << "{\"type\":\"member-list\",\"group\":\"" << escapeJsonString(groupName) << "\",\"members\":" << safeMembers << "}";
+        try { dc->send(memberListMsg.str()); } catch (...) {}
+        
+        LOGI("sendGroupData_unsafe: Completed sending all data to %s", recipientId.c_str());
+    }).detach();
     
-    std::ostringstream memberListMsg;
-    std::string safeMembers = memberListJson.empty() ? "[]" : memberListJson;
-    memberListMsg << "{\"type\":\"member-list\",\"group\":\"" << escapeJsonString(groupName) << "\",\"members\":" << safeMembers << "}";
-    m_channels[recipientId]->send(memberListMsg.str());
-    
-    LOGI("sendGroupData_unsafe: Completed sending all data to %s", recipientId.c_str());
-    
+    // Clear pending keys/entries now that we've captured them in the thread
     m_pendingKeys.erase(recipientId);
     m_pendingEntries.erase(recipientId);
 }
@@ -999,37 +1020,47 @@ void WebRTCService::sendGroupData(const std::string& recipientId, const std::str
     sendP2PMessage(recipient, header);
     
     // [FIX] CRITICAL: Give the mobile app sufficient time (2000ms) to create the group 
-    // and commit the transaction before sending entries. 500ms was insufficient.
-    QThread::msleep(2000); 
+    // and commit the transaction before sending entries. 
+    // Use QTimer to avoid blocking the main UI thread.
     
-    for (const auto& entry : entries) {
-        QJsonObject entryObj;
-        entryObj["type"] = "entry-data";
-        entryObj["group"] = QString::fromStdString(groupName);
-        entryObj["uuid"] = QString::fromStdString(entry.uuid);
-        entryObj["title"] = QString::fromStdString(entry.title);
-        entryObj["username"] = QString::fromStdString(entry.username);
-        entryObj["password"] = QString::fromStdString(entry.password);
-        entryObj["notes"] = QString::fromStdString(entry.notes);
-        entryObj["totpSecret"] = QString::fromStdString(entry.totpSecret);
-        entryObj["url"] = QString::fromStdString(entry.url);
-        QJsonArray locArray;
-        for (const auto& loc : entry.locations) {
-            QJsonObject l; l["locType"] = QString::fromStdString(loc.type); l["value"] = QString::fromStdString(loc.value); locArray.append(l);
+    QString groupNameStr = QString::fromStdString(groupName);
+    QString memberListStr = QString::fromStdString(memberListJson);
+    std::vector<CipherMesh::Core::VaultEntry> entriesCopy = entries;
+    
+    QTimer::singleShot(2000, this, [this, recipient, groupNameStr, entriesCopy, memberListStr]() {
+        for (size_t i = 0; i < entriesCopy.size(); ++i) {
+            const auto& entry = entriesCopy[i];
+            QJsonObject entryObj;
+            entryObj["type"] = "entry-data";
+            entryObj["group"] = groupNameStr;
+            entryObj["uuid"] = QString::fromStdString(entry.uuid);
+            entryObj["title"] = QString::fromStdString(entry.title);
+            entryObj["username"] = QString::fromStdString(entry.username);
+            entryObj["password"] = QString::fromStdString(entry.password);
+            entryObj["notes"] = QString::fromStdString(entry.notes);
+            entryObj["totpSecret"] = QString::fromStdString(entry.totpSecret);
+            entryObj["url"] = QString::fromStdString(entry.url);
+            QJsonArray locArray;
+            for (const auto& loc : entry.locations) {
+                QJsonObject l; l["locType"] = QString::fromStdString(loc.type); l["value"] = QString::fromStdString(loc.value); locArray.append(l);
+            }
+            entryObj["locations"] = locArray;
+            
+            // Keep a small gap between entries to prevent buffer overflow
+            QTimer::singleShot(50 * i, this, [this, recipient, entryObj]() {
+                sendP2PMessage(recipient, entryObj);
+            });
         }
-        entryObj["locations"] = locArray;
-        sendP2PMessage(recipient, entryObj);
         
-        // Keep a small gap between entries to prevent buffer overflow
-        QThread::msleep(50); 
-    }
-    
-    QJsonObject memberListMsg;
-    memberListMsg["type"] = "member-list";
-    memberListMsg["group"] = QString::fromStdString(groupName);
-    QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(memberListJson));
-    if (doc.isArray()) memberListMsg["members"] = doc.array(); else memberListMsg["members"] = QJsonArray();
-    sendP2PMessage(recipient, memberListMsg);
+        QTimer::singleShot(50 * entriesCopy.size() + 100, this, [this, recipient, groupNameStr, memberListStr]() {
+            QJsonObject memberListMsg;
+            memberListMsg["type"] = "member-list";
+            memberListMsg["group"] = groupNameStr;
+            QJsonDocument doc = QJsonDocument::fromJson(memberListStr.toUtf8());
+            if (doc.isArray()) memberListMsg["members"] = doc.array(); else memberListMsg["members"] = QJsonArray();
+            sendP2PMessage(recipient, memberListMsg);
+        });
+    });
 }
 
 void WebRTCService::inviteUser(const std::string& groupName, const std::string& userEmail, 

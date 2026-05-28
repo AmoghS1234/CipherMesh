@@ -498,205 +498,101 @@
         console.log('[CipherMesh] Button added successfully');
     }
     
-    // Create styled modal dialog
+        // Create styled modal dialog
     function createModal(title, content, buttons) {
         const overlay = document.createElement('div');
         overlay.className = 'ciphermesh-modal-overlay';
         overlay.style.cssText = `
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            width: 100% !important;
-            height: 100% !important;
-            background: rgba(0, 0, 0, 0.5) !important;
-            z-index: 2147483647 !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            border: none !important;
-            box-sizing: border-box !important;
+            position: fixed !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important;
+            background: rgba(15, 23, 42, 0.7) !important; backdrop-filter: blur(8px) !important; -webkit-backdrop-filter: blur(8px) !important;
+            z-index: 2147483647 !important; display: flex !important; align-items: center !important; justify-content: center !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important; margin: 0 !important; padding: 0 !important; border: none !important; box-sizing: border-box !important;
         `;
         
         const modal = document.createElement('div');
         modal.className = 'ciphermesh-modal';
         modal.style.cssText = `
-            background: white !important;
-            border-radius: 12px !important;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3) !important;
-            padding: 0 !important;
-            max-width: 450px !important;
-            width: 90% !important;
-            animation: ciphermesh-modal-appear 0.2s ease-out !important;
-            margin: 0 !important;
-            border: none !important;
-            box-sizing: border-box !important;
-            color: #333 !important;
-            font-size: 14px !important;
-            line-height: 1.5 !important;
-            text-align: left !important;
+            background: rgba(30, 41, 59, 0.85) !important; backdrop-filter: blur(16px) !important; -webkit-backdrop-filter: blur(16px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important; border-radius: 16px !important; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+            padding: 0 !important; max-width: 450px !important; width: 90% !important; animation: ciphermesh-modal-appear 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+            margin: 0 !important; box-sizing: border-box !important; color: #f8fafc !important; font-size: 14px !important; line-height: 1.5 !important; text-align: left !important;
         `;
         
         const header = document.createElement('div');
         header.style.cssText = `
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-            color: white !important;
-            padding: 20px 24px !important;
-            border-radius: 12px 12px 0 0 !important;
-            font-size: 18px !important;
-            font-weight: 600 !important;
-            display: flex !important;
-            align-items: center !important;
-            gap: 10px !important;
-            margin: 0 !important;
-            border: none !important;
-            box-sizing: border-box !important;
-            line-height: 1.4 !important;
+            padding: 24px 24px 16px 24px !important; font-size: 20px !important; font-weight: 600 !important;
+            display: flex !important; align-items: center !important; gap: 10px !important; margin: 0 !important; border: none !important; box-sizing: border-box !important;
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important; -webkit-background-clip: text !important; -webkit-text-fill-color: transparent !important;
         `;
-        header.innerHTML = `🔐 ${title}`;
+        header.innerHTML = `<span style="-webkit-text-fill-color: initial !important;">✨</span> ${title}`;
         
         const body = document.createElement('div');
-        body.style.cssText = `
-            padding: 24px !important;
-            color: #333 !important;
-            background: white !important;
-            margin: 0 !important;
-            border: none !important;
-            box-sizing: border-box !important;
-        `;
+        body.style.cssText = `padding: 0 24px 24px 24px !important; color: #cbd5e1 !important; margin: 0 !important; border: none !important; box-sizing: border-box !important;`;
         body.appendChild(content);
         
         const footer = document.createElement('div');
         footer.style.cssText = `
-            padding: 16px 24px !important;
-            background: #f8f9fa !important;
-            border-radius: 0 0 12px 12px !important;
-            display: flex !important;
-            gap: 12px !important;
-            justify-content: flex-end !important;
-            margin: 0 !important;
-            border: none !important;
-            box-sizing: border-box !important;
+            padding: 16px 24px !important; background: rgba(15, 23, 42, 0.4) !important; border-top: 1px solid rgba(255, 255, 255, 0.05) !important;
+            border-radius: 0 0 16px 16px !important; display: flex !important; gap: 12px !important; justify-content: flex-end !important; margin: 0 !important; box-sizing: border-box !important;
         `;
         
         buttons.forEach(btn => footer.appendChild(btn));
+        modal.appendChild(header); modal.appendChild(body); modal.appendChild(footer); overlay.appendChild(modal);
         
-        modal.appendChild(header);
-        modal.appendChild(body);
-        modal.appendChild(footer);
-        overlay.appendChild(modal);
-        
-        // Add animation
         const style = document.createElement('style');
-        style.textContent = `
-            @keyframes ciphermesh-modal-appear {
-                from {
-                    opacity: 0;
-                    transform: scale(0.9) translateY(-20px);
-                }
-                to {
-                    opacity: 1;
-                    transform: scale(1) translateY(0);
-                }
-            }
-        `;
+        style.textContent = `@keyframes ciphermesh-modal-appear { from { opacity: 0; transform: scale(0.95) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }`;
         document.head.appendChild(style);
         
         return overlay;
     }
     
-    // Show master password input dialog
+        // Show master password input dialog
     function showMasterPasswordDialog() {
         return new Promise((resolve) => {
             const content = document.createElement('div');
-            content.style.cssText = 'all: initial !important; display: block !important;';
+            content.style.cssText = 'all: initial !important; display: block !important; width: 100% !important;';
             
             const description = document.createElement('p');
             description.textContent = 'Enter your CipherMesh master password to continue';
             description.style.cssText = `
-                all: initial !important;
-                display: block !important;
-                margin: 0 0 16px 0 !important;
-                color: #666 !important;
-                font-size: 14px !important;
-                line-height: 1.5 !important;
-                padding: 0 !important;
-                background: transparent !important;
-                border: none !important;
+                all: initial !important; display: block !important; margin: 0 0 16px 0 !important;
+                color: #94a3b8 !important; font-size: 14px !important; line-height: 1.5 !important;
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
             content.appendChild(description);
             
             const input = document.createElement('input');
             input.type = 'password';
-            input.id = 'ciphermesh-master-pwd';
             input.placeholder = 'Master password';
             input.style.cssText = `
-                all: initial !important;
-                display: block !important;
-                width: 100% !important;
-                padding: 12px 16px !important;
-                border: 2px solid #e0e0e0 !important;
-                border-radius: 8px !important;
-                font-size: 15px !important;
-                box-sizing: border-box !important;
-                transition: border-color 0.2s !important;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-                background: white !important;
-                background-color: white !important;
-                color: #333 !important;
-                margin: 0 !important;
-                outline: none !important;
-                height: auto !important;
-                min-height: 44px !important;
-                line-height: 1.5 !important;
-                -webkit-appearance: none !important;
-                -moz-appearance: none !important;
-                appearance: none !important;
-                box-shadow: none !important;
-                text-indent: 0 !important;
-                text-align: left !important;
-                letter-spacing: normal !important;
-                word-spacing: normal !important;
-                text-transform: none !important;
-                text-shadow: none !important;
-                cursor: text !important;
+                all: initial !important; display: block !important; width: 100% !important; padding: 12px 16px !important;
+                background: rgba(15, 23, 42, 0.5) !important; border: 1px solid rgba(255, 255, 255, 0.1) !important;
+                border-radius: 8px !important; font-size: 15px !important; box-sizing: border-box !important;
+                transition: all 0.2s !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+                color: #f8fafc !important; outline: none !important;
             `;
             content.appendChild(input);
             
             input.addEventListener('focus', () => {
-                input.style.setProperty('border-color', '#667eea', 'important');
-                input.style.setProperty('outline', 'none', 'important');
-                input.style.setProperty('box-shadow', '0 0 0 3px rgba(102, 126, 234, 0.1)', 'important');
+                input.style.setProperty('border-color', '#8b5cf6', 'important');
+                input.style.setProperty('box-shadow', '0 0 0 3px rgba(139, 92, 246, 0.2)', 'important');
             });
             input.addEventListener('blur', () => {
-                input.style.setProperty('border-color', '#e0e0e0', 'important');
+                input.style.setProperty('border-color', 'rgba(255, 255, 255, 0.1)', 'important');
                 input.style.setProperty('box-shadow', 'none', 'important');
             });
             
             const okButton = document.createElement('button');
             okButton.textContent = 'Unlock';
             okButton.style.cssText = `
-                all: initial !important;
-                display: inline-block !important;
-                padding: 10px 24px !important;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-                color: white !important;
-                border: none !important;
-                border-radius: 6px !important;
-                font-size: 14px !important;
-                font-weight: 600 !important;
-                cursor: pointer !important;
-                transition: transform 0.1s, box-shadow 0.2s !important;
-                margin: 0 !important;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-                line-height: 1.5 !important;
+                all: initial !important; display: inline-block !important; padding: 10px 24px !important;
+                background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important; color: white !important;
+                border: none !important; border-radius: 8px !important; font-size: 14px !important; font-weight: 600 !important;
+                cursor: pointer !important; transition: all 0.2s !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
             okButton.addEventListener('mouseenter', () => {
                 okButton.style.setProperty('transform', 'translateY(-1px)', 'important');
-                okButton.style.setProperty('box-shadow', '0 4px 12px rgba(102, 126, 234, 0.4)', 'important');
+                okButton.style.setProperty('box-shadow', '0 4px 12px rgba(139, 92, 246, 0.4)', 'important');
             });
             okButton.addEventListener('mouseleave', () => {
                 okButton.style.setProperty('transform', 'translateY(0)', 'important');
@@ -706,55 +602,33 @@
             const cancelButton = document.createElement('button');
             cancelButton.textContent = 'Cancel';
             cancelButton.style.cssText = `
-                all: initial !important;
-                display: inline-block !important;
-                padding: 10px 24px !important;
-                background: white !important;
-                background-color: white !important;
-                color: #666 !important;
-                border: 2px solid #e0e0e0 !important;
-                border-radius: 6px !important;
-                font-size: 14px !important;
-                font-weight: 600 !important;
-                cursor: pointer !important;
-                transition: all 0.2s !important;
-                margin: 0 !important;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-                line-height: 1.5 !important;
+                all: initial !important; display: inline-block !important; padding: 10px 24px !important;
+                background: rgba(255, 255, 255, 0.05) !important; color: #94a3b8 !important; border: 1px solid rgba(255, 255, 255, 0.1) !important;
+                border-radius: 8px !important; font-size: 14px !important; font-weight: 600 !important; cursor: pointer !important;
+                transition: all 0.2s !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
             cancelButton.addEventListener('mouseenter', () => {
-                cancelButton.style.setProperty('border-color', '#999', 'important');
-                cancelButton.style.setProperty('color', '#333', 'important');
+                cancelButton.style.setProperty('background', 'rgba(255, 255, 255, 0.1)', 'important');
+                cancelButton.style.setProperty('color', '#f8fafc', 'important');
             });
             cancelButton.addEventListener('mouseleave', () => {
-                cancelButton.style.setProperty('border-color', '#e0e0e0', 'important');
-                cancelButton.style.setProperty('color', '#666', 'important');
+                cancelButton.style.setProperty('background', 'rgba(255, 255, 255, 0.05)', 'important');
+                cancelButton.style.setProperty('color', '#94a3b8', 'important');
             });
             
             const modal = createModal('Master Password', content, [cancelButton, okButton]);
             
-            const submit = () => {
-                const password = input.value;
-                document.body.removeChild(modal);
-                resolve(password);
-            };
-            
+            const submit = () => { document.body.removeChild(modal); resolve(input.value); };
             okButton.addEventListener('click', submit);
-            cancelButton.addEventListener('click', () => {
-                document.body.removeChild(modal);
-                resolve(null);
-            });
-            
-            input.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') submit();
-            });
+            cancelButton.addEventListener('click', () => { document.body.removeChild(modal); resolve(null); });
+            input.addEventListener('keypress', (e) => { if (e.key === 'Enter') submit(); });
             
             document.body.appendChild(modal);
             setTimeout(() => input.focus(), 100);
         });
     }
     
-    // Show confirmation dialog
+        // Show confirmation dialog
     function showConfirmDialog(message, title = 'Confirm') {
         return new Promise((resolve) => {
             const content = document.createElement('div');
@@ -763,12 +637,8 @@
             const para = document.createElement('p');
             para.innerHTML = message;
             para.style.cssText = `
-                all: initial !important;
-                display: block !important;
-                margin: 0 !important;
-                color: #555 !important;
-                font-size: 15px !important;
-                line-height: 1.5 !important;
+                all: initial !important; display: block !important; margin: 0 !important;
+                color: #cbd5e1 !important; font-size: 15px !important; line-height: 1.5 !important;
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
             content.appendChild(para);
@@ -776,23 +646,14 @@
             const yesButton = document.createElement('button');
             yesButton.textContent = 'Yes';
             yesButton.style.cssText = `
-                all: initial !important;
-                display: inline-block !important;
-                padding: 10px 24px !important;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-                color: white !important;
-                border: none !important;
-                border-radius: 6px !important;
-                font-size: 14px !important;
-                font-weight: 600 !important;
-                cursor: pointer !important;
-                transition: transform 0.1s, box-shadow 0.2s !important;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-                line-height: 1.5 !important;
+                all: initial !important; display: inline-block !important; padding: 10px 24px !important;
+                background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important; color: white !important;
+                border: none !important; border-radius: 8px !important; font-size: 14px !important; font-weight: 600 !important;
+                cursor: pointer !important; transition: all 0.2s !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
             yesButton.addEventListener('mouseenter', () => {
                 yesButton.style.setProperty('transform', 'translateY(-1px)', 'important');
-                yesButton.style.setProperty('box-shadow', '0 4px 12px rgba(102, 126, 234, 0.4)', 'important');
+                yesButton.style.setProperty('box-shadow', '0 4px 12px rgba(139, 92, 246, 0.4)', 'important');
             });
             yesButton.addEventListener('mouseleave', () => {
                 yesButton.style.setProperty('transform', 'translateY(0)', 'important');
@@ -802,84 +663,55 @@
             const noButton = document.createElement('button');
             noButton.textContent = 'No';
             noButton.style.cssText = `
-                all: initial !important;
-                display: inline-block !important;
-                padding: 10px 24px !important;
-                background: white !important;
-                background-color: white !important;
-                color: #666 !important;
-                border: 2px solid #e0e0e0 !important;
-                border-radius: 6px !important;
-                font-size: 14px !important;
-                font-weight: 600 !important;
-                cursor: pointer !important;
-                transition: all 0.2s !important;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-                line-height: 1.5 !important;
+                all: initial !important; display: inline-block !important; padding: 10px 24px !important;
+                background: rgba(255, 255, 255, 0.05) !important; color: #94a3b8 !important; border: 1px solid rgba(255, 255, 255, 0.1) !important;
+                border-radius: 8px !important; font-size: 14px !important; font-weight: 600 !important; cursor: pointer !important;
+                transition: all 0.2s !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
             noButton.addEventListener('mouseenter', () => {
-                noButton.style.setProperty('border-color', '#999', 'important');
-                noButton.style.setProperty('color', '#333', 'important');
+                noButton.style.setProperty('background', 'rgba(255, 255, 255, 0.1)', 'important');
+                noButton.style.setProperty('color', '#f8fafc', 'important');
             });
             noButton.addEventListener('mouseleave', () => {
-                noButton.style.setProperty('border-color', '#e0e0e0', 'important');
-                noButton.style.setProperty('color', '#666', 'important');
+                noButton.style.setProperty('background', 'rgba(255, 255, 255, 0.05)', 'important');
+                noButton.style.setProperty('color', '#94a3b8', 'important');
             });
             
             const modal = createModal(title, content, [noButton, yesButton]);
             
-            yesButton.addEventListener('click', () => {
-                document.body.removeChild(modal);
-                resolve(true);
-            });
-            
-            noButton.addEventListener('click', () => {
-                document.body.removeChild(modal);
-                resolve(false);
-            });
+            yesButton.addEventListener('click', () => { document.body.removeChild(modal); resolve(true); });
+            noButton.addEventListener('click', () => { document.body.removeChild(modal); resolve(false); });
             
             document.body.appendChild(modal);
         });
     }
     
-    // Show alert dialog
+        // Show alert dialog
     function showAlertDialog(message, title = 'CipherMesh', isError = false) {
         return new Promise((resolve) => {
             const content = document.createElement('div');
-            content.innerHTML = `
-                <p style="margin: 0; color: #555; font-size: 15px; line-height: 1.5;">
-                    ${message}
-                </p>
-            `;
+            content.innerHTML = `<p style="margin: 0; color: #cbd5e1; font-size: 15px; line-height: 1.5; font-family: -apple-system, sans-serif;">${message}</p>`;
             
             const okButton = document.createElement('button');
             okButton.textContent = 'OK';
             okButton.style.cssText = `
-                padding: 10px 32px;
-                background: ${isError ? 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                font-size: 14px;
-                font-weight: 600;
-                cursor: pointer;
-                transition: transform 0.1s, box-shadow 0.2s;
+                all: initial !important; display: inline-block !important; padding: 10px 32px !important;
+                background: ${isError ? 'linear-gradient(135deg, #f43f5e 0%, #e11d48 100%)' : 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)'} !important;
+                color: white !important; border: none !important; border-radius: 8px !important; font-size: 14px !important; font-weight: 600 !important;
+                cursor: pointer !important; transition: all 0.2s !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
             okButton.addEventListener('mouseenter', () => {
-                okButton.style.transform = 'translateY(-1px)';
-                okButton.style.boxShadow = `0 4px 12px ${isError ? 'rgba(245, 87, 108, 0.4)' : 'rgba(102, 126, 234, 0.4)'}`;
+                okButton.style.setProperty('transform', 'translateY(-1px)', 'important');
+                okButton.style.setProperty('box-shadow', `0 4px 12px ${isError ? 'rgba(225, 29, 72, 0.4)' : 'rgba(139, 92, 246, 0.4)'}`, 'important');
             });
             okButton.addEventListener('mouseleave', () => {
-                okButton.style.transform = 'translateY(0)';
-                okButton.style.boxShadow = 'none';
+                okButton.style.setProperty('transform', 'translateY(0)', 'important');
+                okButton.style.setProperty('box-shadow', 'none', 'important');
             });
             
             const modal = createModal(title, content, [okButton]);
             
-            okButton.addEventListener('click', () => {
-                document.body.removeChild(modal);
-                resolve();
-            });
+            okButton.addEventListener('click', () => { document.body.removeChild(modal); resolve(); });
             
             document.body.appendChild(modal);
             okButton.focus();
@@ -1057,80 +889,141 @@
         }
     }
     
-    // Show group selector dialog
-    function showGroupSelector(groups) {
+        // Show save dialog (Title and Group selection)
+    function showSaveDialog(groups, defaultTitle) {
         return new Promise((resolve) => {
             const content = document.createElement('div');
-            content.innerHTML = `
-                <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">
-                    Choose which group to save this password to
-                </p>
-                <div id="ciphermesh-group-list" style="
-                    max-height: 300px;
-                    overflow-y: auto;
-                "></div>
+            content.style.cssText = 'all: initial !important; display: block !important; width: 100% !important;';
+            
+            // Title Input
+            const titleLabel = document.createElement('label');
+            titleLabel.textContent = 'Title';
+            titleLabel.style.cssText = `
+                all: initial !important; display: block !important; margin: 0 0 8px 0 !important;
+                color: #94a3b8 !important; font-size: 13px !important; font-weight: 500 !important;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
+            content.appendChild(titleLabel);
             
-            const groupList = content.querySelector('#ciphermesh-group-list');
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.value = defaultTitle;
+            titleInput.style.cssText = `
+                all: initial !important; display: block !important; width: 100% !important;
+                padding: 12px 16px !important; background: rgba(15, 23, 42, 0.5) !important;
+                border: 1px solid rgba(255, 255, 255, 0.1) !important; border-radius: 8px !important;
+                color: #f8fafc !important; font-size: 15px !important; margin-bottom: 20px !important;
+                box-sizing: border-box !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+                transition: all 0.2s !important; outline: none !important;
+            `;
+            titleInput.addEventListener('focus', () => {
+                titleInput.style.setProperty('border-color', '#8b5cf6', 'important');
+                titleInput.style.setProperty('box-shadow', '0 0 0 3px rgba(139, 92, 246, 0.2)', 'important');
+            });
+            titleInput.addEventListener('blur', () => {
+                titleInput.style.setProperty('border-color', 'rgba(255, 255, 255, 0.1)', 'important');
+                titleInput.style.setProperty('box-shadow', 'none', 'important');
+            });
+            content.appendChild(titleInput);
             
-            groups.forEach((group, index) => {
-                const groupBtn = document.createElement('button');
-                groupBtn.textContent = group;
-                groupBtn.style.cssText = `
-                    display: block;
-                    width: 100%;
-                    padding: 12px 16px;
-                    margin-bottom: 8px;
-                    background: white;
-                    color: #333;
-                    border: 2px solid ${index === 0 ? '#667eea' : '#e0e0e0'};
-                    border-radius: 8px;
-                    font-size: 14px;
-                    font-weight: 500;
-                    cursor: pointer;
-                    text-align: left;
-                    transition: all 0.2s;
-                `;
-                
-                groupBtn.addEventListener('mouseenter', () => {
-                    groupBtn.style.borderColor = '#667eea';
-                    groupBtn.style.background = '#f8f9ff';
-                });
-                groupBtn.addEventListener('mouseleave', () => {
-                    groupBtn.style.borderColor = index === 0 ? '#667eea' : '#e0e0e0';
-                    groupBtn.style.background = 'white';
-                });
-                groupBtn.addEventListener('click', () => {
-                    document.body.removeChild(modal);
-                    resolve(group);
-                });
-                
-                groupList.appendChild(groupBtn);
+            // Group Selection
+            const groupLabel = document.createElement('label');
+            groupLabel.textContent = 'Save to Group';
+            groupLabel.style.cssText = titleLabel.style.cssText;
+            content.appendChild(groupLabel);
+            
+            const groupSelect = document.createElement('select');
+            groupSelect.style.cssText = titleInput.style.cssText.replace('margin-bottom: 20px', 'margin-bottom: 12px');
+            
+            groups.forEach(group => {
+                const opt = document.createElement('option');
+                opt.value = group;
+                opt.textContent = group;
+                opt.style.cssText = "background: #1e293b !important; color: #f8fafc !important;";
+                groupSelect.appendChild(opt);
+            });
+            
+            const newGroupOpt = document.createElement('option');
+            newGroupOpt.value = '__NEW_GROUP__';
+            newGroupOpt.textContent = '+ Create New Group...';
+            newGroupOpt.style.cssText = "background: #1e293b !important; color: #a78bfa !important; font-weight: 600 !important;";
+            groupSelect.appendChild(newGroupOpt);
+            content.appendChild(groupSelect);
+            
+            // New Group Input (hidden by default)
+            const newGroupInput = document.createElement('input');
+            newGroupInput.type = 'text';
+            newGroupInput.placeholder = 'Enter new group name';
+            newGroupInput.style.cssText = titleInput.style.cssText.replace('margin-bottom: 20px', 'margin-bottom: 8px');
+            newGroupInput.style.setProperty('display', 'none', 'important');
+            content.appendChild(newGroupInput);
+            
+            groupSelect.addEventListener('change', () => {
+                if (groupSelect.value === '__NEW_GROUP__') {
+                    newGroupInput.style.setProperty('display', 'block', 'important');
+                    newGroupInput.focus();
+                } else {
+                    newGroupInput.style.setProperty('display', 'none', 'important');
+                }
+            });
+            
+            const saveButton = document.createElement('button');
+            saveButton.textContent = 'Save Password';
+            saveButton.style.cssText = `
+                all: initial !important; display: inline-block !important; padding: 10px 24px !important;
+                background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+                color: white !important; border: none !important; border-radius: 8px !important;
+                font-size: 14px !important; font-weight: 600 !important; cursor: pointer !important;
+                transition: all 0.2s !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+            `;
+            saveButton.addEventListener('mouseenter', () => {
+                saveButton.style.setProperty('transform', 'translateY(-1px)', 'important');
+                saveButton.style.setProperty('box-shadow', '0 4px 12px rgba(139, 92, 246, 0.4)', 'important');
+            });
+            saveButton.addEventListener('mouseleave', () => {
+                saveButton.style.setProperty('transform', 'translateY(0)', 'important');
+                saveButton.style.setProperty('box-shadow', 'none', 'important');
             });
             
             const cancelButton = document.createElement('button');
             cancelButton.textContent = 'Cancel';
             cancelButton.style.cssText = `
-                padding: 10px 24px;
-                background: white;
-                color: #666;
-                border: 2px solid #e0e0e0;
-                border-radius: 6px;
-                font-size: 14px;
-                font-weight: 600;
-                cursor: pointer;
-                transition: all 0.2s;
+                all: initial !important; display: inline-block !important; padding: 10px 24px !important;
+                background: rgba(255, 255, 255, 0.05) !important; color: #94a3b8 !important;
+                border: 1px solid rgba(255, 255, 255, 0.1) !important; border-radius: 8px !important;
+                font-size: 14px !important; font-weight: 600 !important; cursor: pointer !important;
+                transition: all 0.2s !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
             `;
             cancelButton.addEventListener('mouseenter', () => {
-                cancelButton.style.borderColor = '#999';
-                cancelButton.style.color = '#333';
+                cancelButton.style.setProperty('background', 'rgba(255, 255, 255, 0.1)', 'important');
+                cancelButton.style.setProperty('color', '#f8fafc', 'important');
             });
             cancelButton.addEventListener('mouseleave', () => {
-                cancelButton.style.borderColor = '#e0e0e0';
-                cancelButton.style.color = '#666';
+                cancelButton.style.setProperty('background', 'rgba(255, 255, 255, 0.05)', 'important');
+                cancelButton.style.setProperty('color', '#94a3b8', 'important');
             });
             
-            const modal = createModal('Select Group', content, [cancelButton]);
+            const modal = createModal('Save Password', content, [cancelButton, saveButton]);
+            
+            saveButton.addEventListener('click', () => {
+                const title = titleInput.value.trim();
+                let group = groupSelect.value;
+                if (group === '__NEW_GROUP__') {
+                    group = newGroupInput.value.trim();
+                }
+                
+                if (!title) {
+                    titleInput.style.setProperty('border-color', '#ef4444', 'important');
+                    return;
+                }
+                if (!group) {
+                    newGroupInput.style.setProperty('border-color', '#ef4444', 'important');
+                    return;
+                }
+                
+                document.body.removeChild(modal);
+                resolve({ title, groupName: group });
+            });
             
             cancelButton.addEventListener('click', () => {
                 document.body.removeChild(modal);
@@ -1138,6 +1031,7 @@
             });
             
             document.body.appendChild(modal);
+            setTimeout(() => titleInput.focus(), 100);
         });
     }
     
@@ -1170,14 +1064,10 @@
             
             if (groupsResponse.success && groupsResponse.groups) {
                 const groups = groupsResponse.groups;
-                let groupName = groups[0] || 'Default';
                 
-                if (groups.length > 1) {
-                    // Show group selector
-                    const selected = await showGroupSelector(groups);
-                    if (!selected) return;
-                    groupName = selected;
-                }
+                // Show unified save dialog
+                const saveResult = await showSaveDialog(groups, document.title || url);
+                if (!saveResult) return;
                 
                 // Save credentials
                 const saveResponse = await chrome.runtime.sendMessage({
@@ -1185,12 +1075,12 @@
                     url: url,
                     username: username,
                     password: password,
-                    title: document.title || url,
-                    group: groupName
+                    title: saveResult.title,
+                    group: saveResult.groupName
                 });
                 
                 if (saveResponse.success) {
-                    await showAlertDialog(`Password for <strong>${username}</strong> has been saved to group <strong>${groupName}</strong>!`, 'Password Saved');
+                    await showAlertDialog(`Password for <strong>${username}</strong> has been saved to group <strong>${saveResult.groupName}</strong>!`, 'Password Saved');
                 } else {
                     await showAlertDialog('Failed to save: ' + (saveResponse.error || 'Unknown error'), 'Error', true);
                 }

@@ -514,6 +514,33 @@ Java_com_ciphermesh_mobile_core_Vault_initP2P(JNIEnv* env, jobject thiz, jstring
         triggerJavaRefresh();
     };
 
+    // [FIX] Wire up onInviteResponse callback - this was completely missing on Android!
+    // When a peer accepts our invite, the WebRTC layer fires this callback.
+    // We must update the member status from "pending" to "accepted" so that
+    // queueSyncForGroup will include this member in future entry syncs.
+    g_p2p->onInviteResponse = [](std::string userId, std::string groupName, bool accepted) {
+        std::lock_guard<std::recursive_mutex> vLock(g_vaultMutex);
+        if (!g_vault) return;
+        
+        LOGI("onInviteResponse: user=%s group=%s accepted=%d", userId.c_str(), groupName.c_str(), accepted);
+        
+        try {
+            if (accepted) {
+                g_vault->updateGroupMemberStatus(groupName, userId, "accepted");
+                LOGI("Updated member %s to 'accepted' in group %s", userId.c_str(), groupName.c_str());
+            } else {
+                g_vault->removeGroupMember(groupName, userId);
+                LOGI("Removed rejected member %s from group %s", userId.c_str(), groupName.c_str());
+            }
+        } catch (const std::exception& ex) {
+            LOGE("Error updating member status: %s", ex.what());
+        } catch (...) {
+            LOGE("Unknown error updating member status");
+        }
+        
+        triggerJavaRefresh();
+    };
+
     // [FIX] Route all group data through the core handleIncomingSync function
     // This ensures consistent behavior between Android and Desktop, and proper
     // active group context management
@@ -584,6 +611,29 @@ Java_com_ciphermesh_mobile_core_Vault_getGroupMembers(JNIEnv* env, jobject thiz,
         env->DeleteLocalRef(jMember); 
     }
     return res;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ciphermesh_mobile_core_Vault_updateGroupMemberRole(JNIEnv* env, jobject thiz, jstring groupName, jstring userId, jstring newRole) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return;
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    const char* uid = env->GetStringUTFChars(userId, 0);
+    const char* role = env->GetStringUTFChars(newRole, 0);
+    g_vault->updateGroupMemberRole(grp, uid, role);
+    env->ReleaseStringUTFChars(groupName, grp);
+    env->ReleaseStringUTFChars(userId, uid);
+    env->ReleaseStringUTFChars(newRole, role);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_ciphermesh_mobile_core_Vault_canUserEdit(JNIEnv* env, jobject thiz, jstring groupName) {
+    std::lock_guard<std::recursive_mutex> lock(g_vaultMutex);
+    if (!g_vault) return JNI_FALSE;
+    const char* grp = env->GetStringUTFChars(groupName, 0);
+    bool canEdit = g_vault->canUserEdit(grp);
+    env->ReleaseStringUTFChars(groupName, grp);
+    return canEdit ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -910,6 +960,9 @@ Java_com_ciphermesh_mobile_core_Vault_exportVault(JNIEnv* env, jobject thiz) {
     if (!g_vault || g_vault->isLocked()) return env->NewStringUTF("");
     
     try {
+        // [FIX] Save current active group
+        std::string originalActiveGroup = g_vault->getActiveGroupName();
+        
         // Export all groups and their entries as JSON with proper escaping
         std::ostringstream json;
         json << "{\"version\":2,\"groups\":[";
@@ -927,29 +980,39 @@ Java_com_ciphermesh_mobile_core_Vault_exportVault(JNIEnv* env, jobject thiz) {
             json << "\"members\":" << g_vault->exportGroupMembers(groups[g]) << ",";
             
             // Get entries
-            g_vault->setActiveGroup(groups[g]);
-            std::vector<CipherMesh::Core::VaultEntry> entries = g_vault->getEntries();
-            json << "\"entries\":[";
-            for (size_t e = 0; e < entries.size(); e++) {
-                if (e > 0) json << ",";
-                std::string pwd = g_vault->getDecryptedPassword(entries[e].id);
-                // Access totpSecret field directly from struct
-                std::string totp = entries[e].totpSecret;
-                
-                json << "{\"title\":\"" << escapeJsonString(entries[e].title) << "\",";
-                json << "\"username\":\"" << escapeJsonString(entries[e].username) << "\",";
-                json << "\"password\":\"" << escapeJsonString(pwd) << "\",";
-                json << "\"url\":\"" << escapeJsonString(entries[e].url) << "\",";
-                json << "\"totp\":\"" << escapeJsonString(totp) << "\",";
-                json << "\"notes\":\"" << escapeJsonString(entries[e].notes) << "\"}";
-                
-                CipherMesh::Core::Crypto::secureWipe(pwd);
-                // totp is std::string, tricky to wipe since it's in the struct, but we wipe the local copy if needed? 
-                // The struct copy is managed by vector. We just wipe the decrypted pwd which we fetched.
+            if (g_vault->setActiveGroup(groups[g])) {
+                try {
+                    std::vector<CipherMesh::Core::VaultEntry> entries = g_vault->getEntries();
+                    json << "\"entries\":[";
+                    for (size_t e = 0; e < entries.size(); e++) {
+                        if (e > 0) json << ",";
+                        std::string pwd = g_vault->getDecryptedPassword(entries[e].id);
+                        // Access totpSecret field directly from struct
+                        std::string totp = entries[e].totpSecret;
+                        
+                        json << "{\"title\":\"" << escapeJsonString(entries[e].title) << "\",";
+                        json << "\"username\":\"" << escapeJsonString(entries[e].username) << "\",";
+                        json << "\"password\":\"" << escapeJsonString(pwd) << "\",";
+                        json << "\"url\":\"" << escapeJsonString(entries[e].url) << "\",";
+                        json << "\"totp\":\"" << escapeJsonString(totp) << "\",";
+                        json << "\"notes\":\"" << escapeJsonString(entries[e].notes) << "\"}";
+                        
+                        CipherMesh::Core::Crypto::secureWipe(pwd);
+                    }
+                    json << "]}";
+                } catch (...) {
+                    json << "\"entries\":[]}";
+                }
+            } else {
+                json << "\"entries\":[]}";
             }
-            json << "]}";
         }
         json << "]}";
+        
+        // [FIX] Restore original active group to prevent UI state corruption
+        if (!originalActiveGroup.empty()) {
+            g_vault->setActiveGroup(originalActiveGroup);
+        }
         
         return env->NewStringUTF(json.str().c_str());
     } JNI_CATCH_RETURN(env->NewStringUTF(""))
@@ -967,8 +1030,10 @@ Java_com_ciphermesh_mobile_core_Vault_importVault(JNIEnv* env, jobject thiz, jst
     bool result = false;
     try {
         // Note: The password parameter was previously incorrectly verified against the vault master password.
-        // The backup password is only used for file decryption (done in Kotlin SettingsActivity.decryptData),
         // so we don't need to verify it again here.
+        
+        // [FIX] Save current active group
+        std::string originalActiveGroup = g_vault->getActiveGroupName();
         
         LOGI("Import vault called with %zu bytes of data", jsonStr.length());
         
@@ -1051,6 +1116,11 @@ Java_com_ciphermesh_mobile_core_Vault_importVault(JNIEnv* env, jobject thiz, jst
         
         LOGI("Import complete: %d groups, %d entries", importedGroups, importedEntries);
         result = (importedGroups > 0 || importedEntries > 0);
+        
+        // [FIX] Restore original active group
+        if (!originalActiveGroup.empty()) {
+            g_vault->setActiveGroup(originalActiveGroup);
+        }
         
     } JNI_CATCH_RETURN(false)
     

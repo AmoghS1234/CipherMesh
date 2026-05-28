@@ -439,6 +439,11 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         toggle.isDrawerIndicatorEnabled = false
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         toggle.setToolbarNavigationClickListener { onBackPressedDispatcher.onBackPressed() }
+        if (vault.canUserEdit(currentGroup)) {
+            fabAdd.visibility = View.VISIBLE
+        } else {
+            fabAdd.visibility = View.GONE
+        }
         
         val entriesRaw = vault.getEntries()
         val entryList = ArrayList<EntryModel>()
@@ -593,29 +598,43 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 val parts = m.split("|")
                 if (parts.size < 3) continue
                 val uid = parts[0]
+                val role = parts[1]
                 val status = parts[2]
 
                 val row = layoutInflater.inflate(R.layout.item_member_row, membersContainer, false)
                 val nameTxt = row.findViewById<TextView>(R.id.memberName)
                 val statusTxt = row.findViewById<TextView>(R.id.memberStatus)
-                val btnRemove = row.findViewById<View>(R.id.btnRemove)
+                val roleTxt = row.findViewById<TextView>(R.id.memberRole)
+                val btnOptions = row.findViewById<View>(R.id.btnOptions)
 
-                nameTxt.setText(if (uid == myId) "$uid (You)" else uid)
-                statusTxt.setText(status.uppercase())
+                nameTxt.text = if (uid == myId) "$uid (You)" else uid
+                statusTxt.text = status.uppercase()
+                roleTxt.text = "($role)"
                 
                 if (status.equals("pending", true)) statusTxt.setTextColor(Color.parseColor("#FFA000"))
                 else if (status.equals("accepted", true)) statusTxt.setTextColor(Color.parseColor("#4CAF50"))
 
                 if (isGroupOwner && uid != myId) {
-                    btnRemove.visibility = View.VISIBLE
-                    btnRemove.setOnClickListener {
+                    btnOptions.visibility = View.VISIBLE
+                    btnOptions.setOnClickListener {
+                        val options = if (role == "admin") arrayOf("Demote to Member", "Remove User") else arrayOf("Promote to Admin", "Remove User")
                         MaterialAlertDialogBuilder(this)
-                            .setTitle("Remove Member")
-                            .setMessage("Kick $uid?")
-                            .setPositiveButton("Remove") { _, _ -> vault.removeUser(currentGroup, uid); loadMembers() }
-                            .setNegativeButton("Cancel", null).show()
+                            .setTitle("Manage $uid")
+                            .setItems(options) { _, which ->
+                                if (which == 0) {
+                                    val newRole = if (role == "admin") "member" else "admin"
+                                    vault.updateGroupMemberRole(currentGroup, uid, newRole)
+                                    loadMembers()
+                                } else if (which == 1) {
+                                    MaterialAlertDialogBuilder(this)
+                                        .setTitle("Remove Member")
+                                        .setMessage("Kick $uid?")
+                                        .setPositiveButton("Remove") { _, _ -> vault.removeUser(currentGroup, uid); loadMembers() }
+                                        .setNegativeButton("Cancel", null).show()
+                                }
+                            }.show()
                     }
-                } else btnRemove.visibility = View.GONE
+                } else btnOptions.visibility = View.GONE
                 membersContainer.addView(row)
             }
         }
@@ -682,18 +701,30 @@ class HomeActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             containerTotp.visibility = View.GONE
         }
 
-        view.findViewById<View>(R.id.actionEdit).setOnClickListener {
-            dialog.dismiss()
-            showCreateEntryDialog(editMode = true, entryId = item.id)
-        }
+        val actionEdit = view.findViewById<View>(R.id.actionEdit)
+        val actionDelete = view.findViewById<View>(R.id.actionDelete)
 
-        view.findViewById<View>(R.id.actionDelete).setOnClickListener {
-            dialog.dismiss()
-            MaterialAlertDialogBuilder(this).setTitle("Delete Entry").setMessage("Delete '${item.title}'?")
-                .setPositiveButton("Delete") { _, _ ->
-                    if (vault.deleteEntry(item.id)) { loadEntries(); Toast.makeText(this, "Entry deleted", Toast.LENGTH_SHORT).show() }
-                }.setNegativeButton("Cancel", null).show()
+        if (vault.canUserEdit(currentGroup)) {
+            actionEdit.visibility = View.VISIBLE
+            actionDelete.visibility = View.VISIBLE
+            
+            actionEdit.setOnClickListener {
+                dialog.dismiss()
+                showCreateEntryDialog(editMode = true, entryId = item.id)
+            }
+
+            actionDelete.setOnClickListener {
+                dialog.dismiss()
+                MaterialAlertDialogBuilder(this).setTitle("Delete Entry").setMessage("Delete '${item.title}'?")
+                    .setPositiveButton("Delete") { _, _ ->
+                        if (vault.deleteEntry(item.id)) { loadEntries(); Toast.makeText(this, "Entry deleted", Toast.LENGTH_SHORT).show() }
+                    }.setNegativeButton("Cancel", null).show()
+            }
+        } else {
+            actionEdit.visibility = View.GONE
+            actionDelete.visibility = View.GONE
         }
+        
         dialog.show()
     }
 

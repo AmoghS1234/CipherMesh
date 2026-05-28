@@ -25,8 +25,18 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("/run/media/amoghs1234/Amogh/Key Stores/ciphermesh.jks")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "ciphermesh"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "ciphermesh"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: "ciphermesh"
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

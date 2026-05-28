@@ -23,7 +23,7 @@ std::string VaultService::getDefaultVaultPath() {
         home = "/tmp";
     }
     
-    std::string standardPath = "/home/amogh/.local/share/CipherMesh-Desktop/ciphermesh.db";
+    std::string standardPath = std::string(home) + "/.local/share/CipherMesh-Desktop/ciphermesh.db";
     std::ifstream standardFile(standardPath);
     if (standardFile.good()) {
         return standardPath;
@@ -162,7 +162,12 @@ json VaultService::handleGetCredentials(const json& request) {
             return response;
         }
         
-        std::string url = request["url"];
+        std::string url = request.value("url", "");
+        if (url.empty()) {
+            response["status"] = "error";
+            response["error"] = "URL is required";
+            return response;
+        }
         std::string username = request.value("username", "");
 
         std::vector<VaultEntry> entries = m_vault->findEntriesByLocation(url);
@@ -236,20 +241,39 @@ json VaultService::handleGetCredentialById(const json& request) {
         
         std::string password = m_vault->getDecryptedPassword(entryId);
 
-        std::vector<VaultEntry> allEntries = m_vault->getEntries();
-        auto it = std::find_if(allEntries.begin(), allEntries.end(),
-            [entryId](const VaultEntry& e) { return e.id == entryId; });
+        std::vector<std::string> groupNames = m_vault->getGroupNames();
+        bool found = false;
+        std::string username, title;
         
-        if (it == allEntries.end()) {
+        for (const auto& gName : groupNames) {
+            int gid = m_vault->getGroupId(gName);
+            if (gid == -1) continue;
+            
+            // Need a way to bypass checkGroupActive() internally or we just set it
+            if (m_vault->setActiveGroup(gName)) {
+                std::vector<VaultEntry> groupEntries = m_vault->getEntries();
+                auto it = std::find_if(groupEntries.begin(), groupEntries.end(),
+                    [entryId](const VaultEntry& e) { return e.id == entryId; });
+                
+                if (it != groupEntries.end()) {
+                    found = true;
+                    username = it->username;
+                    title = it->title;
+                    break;
+                }
+            }
+        }
+        
+        if (!found) {
             response["status"] = "error";
             response["error"] = "Entry not found";
             return response;
         }
         
         response["status"] = "success";
-        response["username"] = it->username;
+        response["username"] = username;
         response["password"] = password;
-        response["title"] = it->title;
+        response["title"] = title;
         return response;
         
     } catch (const std::exception& e) {

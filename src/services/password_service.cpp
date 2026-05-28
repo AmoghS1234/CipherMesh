@@ -10,13 +10,13 @@ std::string PasswordService::generatePassword(const GeneratorOptions& options) {
         return ""; // Invalid options
     }
     
-    return CipherMesh::Core::Crypto::generatePassword(
-        options.length,
-        options.useUppercase,
-        options.useLowercase,
-        options.useNumbers,
-        options.symbols
-    );
+    CipherMesh::Core::Crypto::PasswordOptions cryptoOpts;
+    cryptoOpts.length = options.length;
+    cryptoOpts.useUppercase = options.useUppercase;
+    cryptoOpts.useLowercase = options.useLowercase;
+    cryptoOpts.useNumbers = options.useNumbers;
+    cryptoOpts.symbols = options.symbols;
+    return CipherMesh::Core::Crypto::generatePassword(cryptoOpts);
 }
 
 std::string PasswordService::generatePassword(int length, bool upper, bool lower, 
